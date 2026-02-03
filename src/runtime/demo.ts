@@ -20,7 +20,13 @@ function buildEnvelope(params: {
   message: AIMTPMessage;
   task?: AIMTPTaskRequest | AIMTPTaskResponse;
 }): AIMTPEnvelope {
-  const metadata = params.thread_id ? { thread_id: params.thread_id } : undefined;
+  const metadata = params.thread_id
+    ? {
+        aimtp: {
+          thread_id: params.thread_id
+        }
+      }
+    : undefined;
   return {
     spec: PROTOCOL_VERSION,
     id: `env-${params.message.id}`,
@@ -66,9 +72,10 @@ export async function runInMemoryTaskDemo(
     }
     logger.log(`Agent B received task request ${context.task.id}`);
 
+    const responseTaskId = `${context.task.id}-resp-001`;
     const responseTask: AIMTPTaskResponse = {
       kind: "response",
-      id: `${context.task.id}-response`,
+      id: responseTaskId,
       in_response_to: context.task.id,
       status: "succeeded",
       output: { result: "done" }

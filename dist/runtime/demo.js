@@ -6,7 +6,13 @@ const router_1 = require("./router");
 const PROTOCOL_VERSION = "aimtp/0.1";
 const NOOP_LOGGER = { log: (_message) => { } };
 function buildEnvelope(params) {
-    const metadata = params.thread_id ? { thread_id: params.thread_id } : undefined;
+    const metadata = params.thread_id
+        ? {
+            aimtp: {
+                thread_id: params.thread_id
+            }
+        }
+        : undefined;
     return {
         spec: PROTOCOL_VERSION,
         id: `env-${params.message.id}`,
@@ -44,9 +50,10 @@ async function runInMemoryTaskDemo(logger = NOOP_LOGGER) {
             return;
         }
         logger.log(`Agent B received task request ${context.task.id}`);
+        const responseTaskId = `${context.task.id}-resp-001`;
         const responseTask = {
             kind: "response",
-            id: `${context.task.id}-response`,
+            id: responseTaskId,
             in_response_to: context.task.id,
             status: "succeeded",
             output: { result: "done" }

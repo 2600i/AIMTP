@@ -71,6 +71,7 @@ async function main() {
       return;
     }
 
+    const responseTaskId = `${context.task.id}-resp-001`;
     const responseEnvelope = createEnvelope({
       sender: "agent-b",
       recipient: context.sender,
@@ -80,7 +81,7 @@ async function main() {
         content: `Task ${context.task.id} done.`
       }),
       task: createTaskResponse({
-        id: `${context.task.id}-response`,
+        id: responseTaskId,
         in_response_to: context.task.id,
         status: "succeeded",
         output: { ok: true }
