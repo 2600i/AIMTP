@@ -120,3 +120,9 @@ const requestEnvelope = createEnvelope({
   task: createTaskRequest({ id: "task-001", expects_response: true })
 });
 ```
+
+## Relay HTTP Configuration
+Environment variables supported by the webhook relay server:
+- `AIMTP_RELAY_PATH` (default `/aimtp`): POST endpoint for AIMTP envelopes.
+- `AIMTP_HEALTH_PATH` (default `/healthz`): GET health endpoint (no auth or schema validation).
+- `AIMTP_READY_PATH` (default `/readyz`): GET readiness endpoint (200 when listening, 503 otherwise).

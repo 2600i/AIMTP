@@ -47,6 +47,37 @@ function postJson(port, path, payload) {
   });
 }
 
+function getJson(port, path) {
+  const options = {
+    hostname: "127.0.0.1",
+    port,
+    path,
+    method: "GET"
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf-8");
+        if (!raw) {
+          resolve({ status: res.statusCode, body: null });
+          return;
+        }
+        try {
+          resolve({ status: res.statusCode, body: JSON.parse(raw) });
+        } catch (err) {
+          reject(err);
+        }
+      });
+    });
+
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 function startServer(server) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
@@ -174,9 +205,21 @@ async function withServer(relay, options, fn) {
 
 async function main() {
   const ranDefault = await withEnv(
-    { AIMTP_RELAY_PATH: undefined },
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined
+    },
     async () =>
       withServer(createResponderRelay(), {}, async (port) => {
+        const health = await getJson(port, "/healthz");
+        assert.strictEqual(health.status, 200);
+        assert.strictEqual(health.body.status, "ok");
+        assert.strictEqual(health.body.service, "aimtp-relay");
+
+        const ready = await getJson(port, "/readyz");
+        assert.strictEqual(ready.status, 200);
+
         const requestEnvelope = buildRequestEnvelope("agent-b");
         const ok = await postJson(port, "/aimtp", requestEnvelope);
         assert.strictEqual(ok.status, 200);
@@ -201,16 +244,27 @@ async function main() {
     return;
   }
 
-  await withEnv({ AIMTP_RELAY_PATH: "/custom" }, async () =>
-    withServer(createResponderRelay(), {}, async (port) => {
-      const requestEnvelope = buildRequestEnvelope("agent-b");
-      const ok = await postJson(port, "/custom", requestEnvelope);
-      assert.strictEqual(ok.status, 200);
-    })
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: "/custom",
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined
+    },
+    async () =>
+      withServer(createResponderRelay(), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-b");
+        const ok = await postJson(port, "/custom", requestEnvelope);
+        assert.strictEqual(ok.status, 200);
+      })
   );
 
   await withEnv(
-    { AIMTP_RELAY_PATH: undefined, AIMTP_MAX_BODY_BYTES: "64" },
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_MAX_BODY_BYTES: "64",
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined
+    },
     async () =>
       withServer(createResponderRelay(), {}, async (port) => {
         const tooLarge = { data: "x".repeat(1024) };
@@ -220,13 +274,19 @@ async function main() {
       })
   );
 
-  await withEnv({ AIMTP_RELAY_PATH: undefined }, async () =>
-    withServer(createErrorRelay(), {}, async (port) => {
-      const requestEnvelope = buildRequestEnvelope("agent-error");
-      const res = await postJson(port, "/aimtp", requestEnvelope);
-      assert.strictEqual(res.status, 500);
-      assert.strictEqual(res.body.code, "handler_error");
-    })
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined
+    },
+    async () =>
+      withServer(createErrorRelay(), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-error");
+        const res = await postJson(port, "/aimtp", requestEnvelope);
+        assert.strictEqual(res.status, 500);
+        assert.strictEqual(res.body.code, "handler_error");
+      })
   );
 
   console.log("OK: runtime relay test");

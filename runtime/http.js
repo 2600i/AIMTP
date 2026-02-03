@@ -2,9 +2,59 @@
 
 const http = require("http");
 const { RelayError } = require("./relay");
+const packageJson = require("../package.json");
 
 const DEFAULT_PATH = "/aimtp";
+const DEFAULT_HEALTH_PATH = "/healthz";
+const DEFAULT_READY_PATH = "/readyz";
 const DEFAULT_MAX_BYTES = 1024 * 1024;
+
+const trackedServers = new Set();
+let shutdownHandlersRegistered = false;
+let shutdownInProgress = false;
+
+function registerShutdownHandlers() {
+  if (shutdownHandlersRegistered) {
+    return;
+  }
+  shutdownHandlersRegistered = true;
+  ["SIGINT", "SIGTERM"].forEach((signal) => {
+    process.on(signal, () => {
+      shutdown(signal);
+    });
+  });
+}
+
+function shutdown(reason) {
+  if (shutdownInProgress) {
+    return;
+  }
+  shutdownInProgress = true;
+  console.log(JSON.stringify({ event: "shutdown", reason }));
+
+  const closePromises = Array.from(trackedServers).map(
+    (server) =>
+      new Promise((resolve) => {
+        if (!server.listening) {
+          resolve();
+          return;
+        }
+        try {
+          server.close(() => resolve());
+        } catch (_err) {
+          resolve();
+        }
+      })
+  );
+
+  Promise.all(closePromises)
+    .then(() => {
+      process.exit(0);
+    })
+    .catch(() => {
+      process.exit(1);
+    });
+}
 
 function parseEnvInt(value, fallback) {
   if (!value) {
@@ -94,13 +144,48 @@ function createWebhookRelayServer(relay, options = {}) {
     options.path ||
     (process.env.AIMTP_RELAY_PATH && process.env.AIMTP_RELAY_PATH.trim()) ||
     DEFAULT_PATH;
+  const healthPath =
+    options.healthPath ||
+    (process.env.AIMTP_HEALTH_PATH && process.env.AIMTP_HEALTH_PATH.trim()) ||
+    DEFAULT_HEALTH_PATH;
+  const readyPath =
+    options.readyPath ||
+    (process.env.AIMTP_READY_PATH && process.env.AIMTP_READY_PATH.trim()) ||
+    DEFAULT_READY_PATH;
   const maxBytes =
     typeof options.maxBytes === "number"
       ? options.maxBytes
       : parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
+    if (url.pathname === healthPath) {
+      if (req.method !== "GET") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        return;
+      }
+      sendJson(res, 200, {
+        status: "ok",
+        service: "aimtp-relay",
+        version: packageJson.version,
+        uptime_sec: Math.floor(process.uptime()),
+        timestamp: new Date().toISOString()
+      });
+      return;
+    }
+    if (url.pathname === readyPath) {
+      if (req.method !== "GET") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        return;
+      }
+      if (server.listening) {
+        sendJson(res, 200, { status: "ready" });
+      } else {
+        sendJson(res, 503, { status: "not_ready" });
+      }
+      return;
+    }
+
     const pathMatches = url.pathname === path;
     let logEnvelope = null;
     const logRequest = (status) => {
@@ -186,6 +271,13 @@ function createWebhookRelayServer(relay, options = {}) {
       logRequest(500);
     }
   });
+
+  trackedServers.add(server);
+  server.on("close", () => {
+    trackedServers.delete(server);
+  });
+  registerShutdownHandlers();
+  return server;
 }
 
 module.exports = {
