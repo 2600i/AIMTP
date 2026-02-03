@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aimtp.dev/schemas/envelope.schema.json",
+  "title": "AIMTP Envelope",
+  "type": "object",
+  "required": ["spec", "id", "timestamp", "message"],
+  "additionalProperties": true,
+  "properties": {
+    "spec": {"type": "string", "const": "aimtp/0.1"},
+    "id": {"type": "string", "minLength": 1},
+    "timestamp": {"type": "string", "format": "date-time"},
+    "sender": {"type": "string"},
+    "recipient": {"type": "string"},
+    "message": {"$ref": "message.schema.json"},
+    "signature": {
+      "type": "object",
+      "required": ["key_id", "signature"],
+      "additionalProperties": true,
+      "properties": {
+        "key_id": {"type": "string", "minLength": 1},
+        "signature": {"type": "string", "minLength": 1},
+        "alg": {"type": "string"}
+      }
+    },
+    "metadata": {"type": "object"}
+  }
+}

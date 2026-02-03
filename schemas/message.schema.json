@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aimtp.dev/schemas/message.schema.json",
+  "title": "AIMTP Message",
+  "type": "object",
+  "required": ["id", "role", "content"],
+  "additionalProperties": true,
+  "properties": {
+    "id": {"type": "string", "minLength": 1},
+    "role": {"type": "string", "enum": ["system", "user", "assistant", "tool"]},
+    "content": {"type": "string"},
+    "content_type": {"type": "string", "default": "text/plain"},
+    "attachments": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "content_type", "size"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string", "minLength": 1},
+          "content_type": {"type": "string"},
+          "size": {"type": "integer", "minimum": 0},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "url": {"type": "string", "format": "uri"}
+        }
+      }
+    },
+    "metadata": {"type": "object"}
+  }
+}

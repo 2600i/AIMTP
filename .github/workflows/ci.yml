@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  validate-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate JSON
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          root = Path('schemas')
+          files = list(root.glob('*.json'))
+          if not files:
+            raise SystemExit('No schema files found')
+
+          for path in files:
+            with path.open('r', encoding='utf-8') as f:
+              json.load(f)
+            print(f'OK: {path}')
+          PY
