@@ -6,16 +6,17 @@ const router_1 = require("./router");
 const PROTOCOL_VERSION = "aimtp/0.1";
 const NOOP_LOGGER = { log: (_message) => { } };
 function buildEnvelope(params) {
+    const metadata = params.thread_id ? { thread_id: params.thread_id } : undefined;
     return {
-        version: PROTOCOL_VERSION,
+        spec: PROTOCOL_VERSION,
         id: `env-${params.message.id}`,
         timestamp: new Date().toISOString(),
         sender: params.sender,
-        recipients: params.recipients,
-        thread_id: params.thread_id,
+        recipient: params.recipient,
         intent: params.intent,
-        payload: params.message,
-        metadata: params.task ? { task: params.task } : undefined
+        message: params.message,
+        task: params.task,
+        metadata
     };
 }
 async function runInMemoryTaskDemo(logger = NOOP_LOGGER) {
@@ -31,7 +32,7 @@ async function runInMemoryTaskDemo(logger = NOOP_LOGGER) {
         logger.log(`Agent A received task response ${context.task.id}`);
         responseEnvelope = buildEnvelope({
             sender: context.sender,
-            recipients: [agentA.id],
+            recipient: agentA.id,
             thread_id: `task-${context.task.in_response_to}`,
             intent: "task.response",
             message,
@@ -45,7 +46,7 @@ async function runInMemoryTaskDemo(logger = NOOP_LOGGER) {
         logger.log(`Agent B received task request ${context.task.id}`);
         const responseTask = {
             kind: "response",
-            id: context.task.id,
+            id: `${context.task.id}-response`,
             in_response_to: context.task.id,
             status: "succeeded",
             output: { result: "done" }
@@ -79,7 +80,7 @@ async function runInMemoryTaskDemo(logger = NOOP_LOGGER) {
     };
     const requestEnvelope = buildEnvelope({
         sender: agentA.id,
-        recipients: [agentB.id],
+        recipient: agentB.id,
         thread_id: requestTask.id,
         intent: "task.request",
         message: requestMessage,

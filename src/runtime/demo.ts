@@ -9,27 +9,28 @@ export interface TaskExchangeResult {
   responseEnvelope: AIMTPEnvelope;
 }
 
-const PROTOCOL_VERSION = "aimtp/0.1";
+const PROTOCOL_VERSION: AIMTPEnvelope["spec"] = "aimtp/0.1";
 const NOOP_LOGGER = { log: (_message: string) => {} };
 
 function buildEnvelope(params: {
   sender?: string;
-  recipients?: string[];
+  recipient?: string;
   thread_id?: string;
   intent: string;
   message: AIMTPMessage;
   task?: AIMTPTaskRequest | AIMTPTaskResponse;
 }): AIMTPEnvelope {
+  const metadata = params.thread_id ? { thread_id: params.thread_id } : undefined;
   return {
-    version: PROTOCOL_VERSION,
+    spec: PROTOCOL_VERSION,
     id: `env-${params.message.id}`,
     timestamp: new Date().toISOString(),
     sender: params.sender,
-    recipients: params.recipients,
-    thread_id: params.thread_id,
+    recipient: params.recipient,
     intent: params.intent,
-    payload: params.message,
-    metadata: params.task ? { task: params.task } : undefined
+    message: params.message,
+    task: params.task,
+    metadata
   };
 }
 
@@ -51,7 +52,7 @@ export async function runInMemoryTaskDemo(
     logger.log(`Agent A received task response ${context.task.id}`);
     responseEnvelope = buildEnvelope({
       sender: context.sender,
-      recipients: [agentA.id],
+      recipient: agentA.id,
       thread_id: `task-${context.task.in_response_to}`,
       intent: "task.response",
       message,
@@ -67,7 +68,7 @@ export async function runInMemoryTaskDemo(
 
     const responseTask: AIMTPTaskResponse = {
       kind: "response",
-      id: context.task.id,
+      id: `${context.task.id}-response`,
       in_response_to: context.task.id,
       status: "succeeded",
       output: { result: "done" }
@@ -107,7 +108,7 @@ export async function runInMemoryTaskDemo(
 
   const requestEnvelope = buildEnvelope({
     sender: agentA.id,
-    recipients: [agentB.id],
+    recipient: agentB.id,
     thread_id: requestTask.id,
     intent: "task.request",
     message: requestMessage,

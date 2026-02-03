@@ -1,3 +1,4 @@
+import { AIMTPTask } from "./task";
 export type Role = "system" | "user" | "assistant" | "tool";
 export interface AIMTPAttachment {
     name: string;
@@ -9,28 +10,27 @@ export interface AIMTPAttachment {
 export interface AIMTPMessage {
     id: string;
     role: Role;
-    content: string;
+    content: AIMTPContent;
     content_type?: string;
     attachments?: AIMTPAttachment[];
     metadata?: Record<string, unknown>;
 }
-export interface AIMTPSecurity {
-    key_id?: string;
-    signature?: string;
+export type AIMTPContent = string | number | boolean | null | Record<string, unknown> | Array<unknown>;
+export interface AIMTPSignature {
+    key_id: string;
+    signature: string;
     alg?: string;
-    metadata?: Record<string, unknown>;
 }
-export interface AIMTPEnvelope<TPayload = AIMTPMessage> {
-    version: string;
+export interface AIMTPEnvelope<TMessage = AIMTPMessage> {
+    spec: "aimtp/0.1";
     id: string;
-    thread_id?: string;
     timestamp: string;
     sender?: string;
-    recipients?: string[];
+    recipient?: string;
     intent?: string;
-    payload: TPayload;
-    ai_policy?: Record<string, unknown>;
-    security?: AIMTPSecurity;
+    message: TMessage;
+    task?: AIMTPTask;
+    signature?: AIMTPSignature;
     metadata?: Record<string, unknown>;
 }
 export type Attachment = AIMTPAttachment;

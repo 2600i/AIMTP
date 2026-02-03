@@ -84,9 +84,14 @@ function createTaskResponse(options = {}) {
     throw new Error("createTaskResponse requires status");
   }
 
+  const responseId = withDefaultsId(id);
+  if (responseId === in_response_to) {
+    throw new Error("createTaskResponse requires id distinct from in_response_to");
+  }
+
   const task = {
     kind: "response",
-    id: withDefaultsId(id),
+    id: responseId,
     in_response_to,
     status
   };
