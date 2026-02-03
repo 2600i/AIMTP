@@ -2,6 +2,7 @@
 
 const assert = require("assert");
 const http = require("http");
+const packageJson = require("../package.json");
 const { WebhookRelay, createWebhookRelayServer } = require("../runtime");
 const {
   createEnvelope,
@@ -216,6 +217,7 @@ async function main() {
         assert.strictEqual(health.status, 200);
         assert.strictEqual(health.body.status, "ok");
         assert.strictEqual(health.body.service, "aimtp-relay");
+        assert.strictEqual(health.body.version, packageJson.version);
 
         const ready = await getJson(port, "/readyz");
         assert.strictEqual(ready.status, 200);
