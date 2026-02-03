@@ -3,6 +3,8 @@ from pathlib import Path
 
 try:
     from jsonschema import Draft202012Validator
+    from referencing import Registry, Resource
+    from referencing.jsonschema import DRAFT202012
 except Exception as exc:  # pragma: no cover
     raise SystemExit("Install jsonschema to run conformance tests: pip install jsonschema") from exc
 
@@ -16,8 +18,15 @@ with (SCHEMAS / "message.schema.json").open("r", encoding="utf-8") as f:
 with (SCHEMAS / "envelope.schema.json").open("r", encoding="utf-8") as f:
     ENVELOPE_SCHEMA = json.load(f)
 
-MESSAGE_VALIDATOR = Draft202012Validator(MESSAGE_SCHEMA)
-ENVELOPE_VALIDATOR = Draft202012Validator(ENVELOPE_SCHEMA)
+REGISTRY = Registry().with_resources(
+    [
+        (MESSAGE_SCHEMA.get("$id", "message.schema.json"), Resource.from_contents(MESSAGE_SCHEMA, default_specification=DRAFT202012)),
+        (ENVELOPE_SCHEMA.get("$id", "envelope.schema.json"), Resource.from_contents(ENVELOPE_SCHEMA, default_specification=DRAFT202012)),
+    ]
+)
+
+MESSAGE_VALIDATOR = Draft202012Validator(MESSAGE_SCHEMA, registry=REGISTRY)
+ENVELOPE_VALIDATOR = Draft202012Validator(ENVELOPE_SCHEMA, registry=REGISTRY)
 
 
 def _load(path: Path) -> dict:

@@ -1,19 +1,71 @@
-# AIMTP
+# AIMTP — Agentic Intelligent Message Transfer Protocol
+
+**Status:** v0.1 candidate — protocol surface frozen except for errata
+
+AIMTP is a spec-first, transport-agnostic protocol for structured
+agent-to-agent message and task exchange.
+
+It defines **what is sent and why**, not **how it is transported**.
+
+---
 
 ## What is AIMTP?
-AIMTP (AI Message Transfer Protocol) is a minimal, transport-agnostic envelope and type system for exchanging AI messages and tasks between agents. It specifies structure and intent, not transport mechanics.
 
-## Why it exists
-- A shared, boring core that multiple teams can implement independently.
-- Clear separation of transport from message and task semantics.
-- A small surface area that can be validated and extended without lock-in.
+AIMTP (Agentic Intelligent Message Transfer Protocol) specifies a minimal
+JSON envelope, message model, and task semantics for exchanging intent,
+content, and results between autonomous agents.
 
-## Core concepts
-- Agents: `AIMTPAgent` describes the identity and capabilities of a sender/recipient.
-- Messages: `AIMTPMessage` carries the human- or tool-facing content.
-- Tasks: `AIMTPTask` and `AIMTPResponse` define request/response intent and status.
+It is designed to be:
+- implementation-neutral
+- interoperable across teams and runtimes
+- easy to validate
+- extensible without lock-in
 
-## Minimal example
+AIMTP intentionally avoids assumptions about networks, frameworks,
+or hosting environments.
+
+---
+
+## Why AIMTP exists
+
+Most agent systems fail to interoperate because they couple:
+- transport with semantics
+- execution with intent
+- implementation details with protocol meaning
+
+AIMTP exists to provide a **shared, boring core** that different systems
+can implement independently while still understanding each other.
+
+Specifically, AIMTP provides:
+- a clear separation of transport from message and task semantics
+- a small, auditable protocol surface
+- machine-verifiable schemas with human-readable intent
+- forward compatibility through permissive extension points
+
+---
+
+## Core Concepts
+
+### Agents
+An *agent* is any autonomous system capable of sending or receiving AIMTP
+envelopes. Agent identity is implementation-defined and transport-agnostic.
+
+### Messages
+An **AIMTP Message** carries human- or tool-facing content.
+Messages may contain plain text or structured JSON and may include
+attachments referenced by metadata.
+
+### Tasks
+An **AIMTP Task** encodes request/response intent and execution status.
+Tasks support synchronous and asynchronous workflows through explicit
+status signaling (`running`, `succeeded`, `failed`).
+
+Tasks are optional and carried alongside messages in the envelope.
+
+---
+
+## Minimal Example (Reference Runtime)
+
 ```ts
 import { AgentRegistry, MessageRouter } from "./dist";
 import { AIMTPMessage, AIMTPTaskRequest } from "./dist";
@@ -43,34 +95,7 @@ const message: AIMTPMessage = {
 
 await router.deliver({
   sender: "agent-a",
-  recipients: ["agent-b"],
+  recipient: "agent-b",
   message,
   task
 });
-```
-
-## What AIMTP is NOT (yet)
-- A transport or networking protocol (no sockets, HTTP, or RPC).
-- A full conversation or memory model.
-- A security or authentication standard.
-
-## Status
-- Version: 0.1 (draft)
-- Stability: Experimental
-
-## Repo Layout
-- `spec/aimtp-v0.1.md` — protocol specification
-- `schemas/` — JSON Schemas
-- `src/` — TypeScript reference implementation
-- `docs/` — diagrams and whitepaper assets
-- `examples/`
-- `tests/`
-
-## Build
-```
-npm ci
-npm run build
-```
-
-## License
-- TBD
