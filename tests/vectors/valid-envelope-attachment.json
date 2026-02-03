@@ -1,0 +1,19 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "33333333-4444-5555-6666-777777777777",
+  "timestamp": "2026-02-03T16:00:00Z",
+  "message": {
+    "id": "bbbbbbbb-cccc-dddd-eeee-ffffffffffff",
+    "role": "assistant",
+    "content": "Attachment included.",
+    "attachments": [
+      {
+        "name": "report.pdf",
+        "content_type": "application/pdf",
+        "size": 102400,
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "url": "https://example.com/report.pdf"
+      }
+    ]
+  }
+}
