@@ -1,0 +1,10 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "2d7f5b1a-1e5e-4a2d-9f2e-7a9c7e0a3c1b",
+  "timestamp": "2025-01-01T00:00:00Z",
+  "message": {
+    "id": "6c1f9a3d-2b6a-4a2f-9b2c-4c1a9f2d8a6b",
+    "role": "user",
+    "content": "Hello from AIMTP"
+  }
+}

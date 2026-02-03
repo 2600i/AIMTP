@@ -22,6 +22,9 @@
         "alg": {"type": "string"}
       }
     },
-    "metadata": {"type": "object"}
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
   }
 }

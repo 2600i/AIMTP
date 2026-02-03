@@ -25,6 +25,9 @@
         }
       }
     },
-    "metadata": {"type": "object"}
+    "metadata": {
+      "type": "object",
+      "additionalProperties": true
+    }
   }
 }

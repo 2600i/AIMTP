@@ -1,0 +1,28 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "6a0d5d3e-3a2a-4d5b-8b8b-3b9b4a2f7f1c",
+  "timestamp": "2025-01-01T00:00:00Z",
+  "sender": "client-123",
+  "recipient": "agent-456",
+  "message": {
+    "id": "9b7a0e3f-8b1d-4f2a-9d2c-8e2f7a0b1c2d",
+    "role": "assistant",
+    "content": "See the attached file.",
+    "content_type": "text/plain",
+    "attachments": [
+      {
+        "name": "report.pdf",
+        "content_type": "application/pdf",
+        "size": 102400,
+        "sha256": "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+        "url": "https://example.com/report.pdf"
+      }
+    ],
+    "metadata": {
+      "topic": "finance"
+    }
+  },
+  "metadata": {
+    "trace_id": "trace-abc-123"
+  }
+}
