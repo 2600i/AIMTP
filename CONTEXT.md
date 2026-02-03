@@ -65,3 +65,12 @@ It is NOT:
 - Do not introduce UI
 - Do not over-engineer abstractions
 - Ask before making breaking changes
+
+## Phase 2 — Runtime & SDK
+
+- Protocol v0.1 is frozen.
+- spec/ and schemas/ MUST NOT change.
+- All work is limited to runtime, sdk, examples, and docs.
+- Field names must exactly match v0.1.
+- Goal: SDK helpers + HTTP webhook relay + interop demo.
+

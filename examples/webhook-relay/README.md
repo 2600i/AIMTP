@@ -1,8 +1,12 @@
-# Webhook Relay (Concept)
+# Webhook Relay (Minimal)
 
-This example documents a simple HTTP relay that accepts AIMTP envelopes and forwards them to a downstream consumer.
+This example runs a local HTTP relay that accepts AIMTP envelopes and routes them to a registered agent handler.
 
-## Flow
-- POST an AIMTP envelope to `/inbox`.
-- Validate against `schemas/envelope.schema.json`.
-- Forward the envelope to a configured downstream URL.
+## Run
+- `node examples/webhook-relay/demo.js`
+
+## What It Does
+- Starts a relay at `/inbox`.
+- Registers `agent-b`.
+- Sends a task request from `agent-a`.
+- `agent-b` emits `running` and `succeeded` task responses; the relay returns them in the HTTP response.

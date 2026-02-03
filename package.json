@@ -1,20 +1,31 @@
 {
   "name": "aimtp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/sdk.test.js",
+    "test": "node tests/sdk.test.js && node tests/runtime-relay.test.js",
     "build": "tsc -p tsconfig.json",
     "demo": "npm run build && node dist/runtime/demo-run.js"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    },
+    "./sdk": {
+      "require": "./dist/sdk/index.js",
+      "types": "./dist/sdk/index.d.ts"
+    },
+    "./runtime": {
+      "require": "./dist/runtime/index.js",
+      "types": "./dist/runtime/index.d.ts"
+    }
+  },
   "devDependencies": {
     "@types/node": "^20.11.0",
     "typescript": "^5.4.0"
-  },
-  "dependencies": {
-    "tree": "^0.1.3"
   }
 }

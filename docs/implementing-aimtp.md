@@ -81,3 +81,42 @@ Run `tests/conformance/validate_schemas.py` to validate vectors. Extend vectors 
 
 ## 10) Reference Implementation (TypeScript)
 See `src/` for type definitions and a minimal in-memory demo. It demonstrates registration, routing, and task request/response exchange without networking.
+
+## SDK + Relay (Minimal)
+```js
+const { createEnvelope, createMessage, createTaskRequest, createTaskResponse } = require("aimtp/sdk");
+const { WebhookRelay, createWebhookRelayServer } = require("aimtp/runtime");
+
+const relay = new WebhookRelay({ emitResponses: true });
+relay.registerAgent("agent-b", (_envelope, context) => {
+  if (!context.task || context.task.kind !== "request") {
+    return;
+  }
+
+  context.emit(
+    createEnvelope({
+      sender: "agent-b",
+      recipient: context.sender,
+      intent: "task.response",
+      message: createMessage({ role: "assistant", content: "Done." }),
+      task: createTaskResponse({
+        id: `${context.task.id}-response`,
+        in_response_to: context.task.id,
+        status: "succeeded",
+        output: { ok: true }
+      })
+    })
+  );
+});
+
+const server = createWebhookRelayServer(relay, { path: "/inbox" });
+server.listen(8080);
+
+const requestEnvelope = createEnvelope({
+  sender: "agent-a",
+  recipient: "agent-b",
+  intent: "task.request",
+  message: createMessage({ role: "user", content: "Run a task." }),
+  task: createTaskRequest({ id: "task-001", expects_response: true })
+});
+```
