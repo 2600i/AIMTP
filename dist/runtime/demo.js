@@ -3,19 +3,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.runInMemoryTaskDemo = runInMemoryTaskDemo;
 const registry_1 = require("./registry");
 const router_1 = require("./router");
-const SPEC_VERSION = "aimtp/0.1";
+const PROTOCOL_VERSION = "aimtp/0.1";
 const NOOP_LOGGER = { log: (_message) => { } };
 function buildEnvelope(params) {
     return {
-        spec: SPEC_VERSION,
+        version: PROTOCOL_VERSION,
         id: `env-${params.message.id}`,
         timestamp: new Date().toISOString(),
         sender: params.sender,
         recipients: params.recipients,
         thread_id: params.thread_id,
         intent: params.intent,
-        message: params.message,
-        task: params.task
+        payload: params.message,
+        metadata: params.task ? { task: params.task } : undefined
     };
 }
 async function runInMemoryTaskDemo(logger = NOOP_LOGGER) {
