@@ -101,5 +101,9 @@ await router.deliver({
 });
 ```
 
+## Runtime & Relay
+See `docs/runtime.md` for runtime configuration and relay behavior details. The
+webhook relay supports optional API key authentication for internal deployments.
+
 ## Examples
 - `examples/python-client/` — Python interop demo (validates schemas + calls relay)
