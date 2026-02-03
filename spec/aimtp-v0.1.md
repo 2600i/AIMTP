@@ -32,6 +32,8 @@ The envelope wraps a single message and optional routing/security metadata.
 ### Optional Fields
 - `sender`: String identifier for the sender.
 - `recipient`: String identifier for the recipient.
+- `intent`: High-level intent for routing or interpretation (e.g., `task.request`, `task.response`).
+- `task`: Optional task request/response object (see Task).
 - `signature`: Object containing signature metadata (see Security).
 - `metadata`: Free-form object for extensions.
 
@@ -47,6 +49,39 @@ The message represents a single AI message.
 - `content_type`: MIME type for content. Default `text/plain`.
 - `attachments`: Array of attachment descriptors.
 - `metadata`: Free-form object for extensions.
+
+## Task
+Tasks encode request/response intent and status. They are optional and carried on the envelope.
+
+### Task Request
+- `kind`: Must be `request`.
+- `id`: Unique task identifier.
+- `type`: Optional task type identifier (implementation-defined).
+- `input`: Optional JSON object containing task inputs.
+- `expects_response`: Optional boolean hint. If `true`, the sender expects a response; receivers MAY acknowledge with a `running` response before a final status.
+- `metadata`: Optional extensions.
+
+### Task Response
+- `kind`: Must be `response`.
+- `id`: Unique identifier for this Task Response (distinct from the request `id`).
+- `in_response_to`: MUST reference the originating Task Request `id`.
+- `status`: One of `running`, `succeeded`, `failed`.
+- `output`: Optional JSON object containing results. MUST be absent if `status` is `failed`.
+- `error`: Optional structured error (see Error Model). MUST be present if `status` is `failed` and MUST be absent if `status` is `succeeded`.
+- `metadata`: Optional extensions.
+
+### Response Expectations
+- `expects_response` is a best-effort hint indicating the sender would like a response.
+- Receivers SHOULD honor `expects_response=true` when feasible, but MAY omit a response in constrained or fire-and-forget contexts.
+
+### Task Semantics
+- `intent` is an envelope-level hint for routing/interpretation (e.g., `task.request`), while `task.type` is a task-specific semantic identifier (e.g., `summarize.v1`). They are related but not interchangeable.
+- `input` and `output` MUST be JSON objects when present.
+- `running` responses MAY be used as acknowledgements for long-running tasks. A later response referencing the same request MAY deliver a terminal status.
+- If `status` is `succeeded`, `error` MUST be absent.
+- If `status` is `failed`, `error` MUST be present and `output` MUST be absent.
+- If `status` is `running`, `output` and `error` SHOULD be absent.
+
 
 ## Attachments
 An attachment is a metadata reference to binary content.

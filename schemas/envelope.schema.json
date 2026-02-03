@@ -11,7 +11,80 @@
     "timestamp": {"type": "string", "format": "date-time"},
     "sender": {"type": "string"},
     "recipient": {"type": "string"},
+    "intent": {"type": "string"},
     "message": {"$ref": "message.schema.json"},
+    "task": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "id"],
+          "additionalProperties": true,
+          "properties": {
+            "kind": {"type": "string", "const": "request"},
+            "id": {"type": "string", "minLength": 1},
+            "type": {"type": "string"},
+            "input": {"type": "object", "additionalProperties": true},
+            "expects_response": {"type": "boolean"},
+            "metadata": {"type": "object", "additionalProperties": true}
+          },
+          "not": {
+            "anyOf": [
+              {"required": ["in_response_to"]},
+              {"required": ["status"]},
+              {"required": ["output"]},
+              {"required": ["error"]}
+            ]
+          }
+        },
+        {
+          "type": "object",
+          "required": ["kind", "id", "in_response_to", "status"],
+          "additionalProperties": true,
+          "properties": {
+            "kind": {"type": "string", "const": "response"},
+            "id": {"type": "string", "minLength": 1},
+            "type": {"type": "string"},
+            "in_response_to": {"type": "string", "minLength": 1},
+            "status": {"type": "string", "enum": ["pending", "running", "succeeded", "failed"]},
+            "output": {"type": "object", "additionalProperties": true},
+            "error": {
+              "type": "object",
+              "required": ["code", "message"],
+              "additionalProperties": true,
+              "properties": {
+                "code": {"type": "string", "minLength": 1},
+                "message": {"type": "string", "minLength": 1},
+                "details": {"type": "object", "additionalProperties": true}
+              }
+            },
+            "metadata": {"type": "object", "additionalProperties": true}
+          },
+          "allOf": [
+            {
+              "if": {"properties": {"status": {"const": "failed"}}},
+              "then": {
+                "required": ["error"],
+                "not": {"required": ["output"]}
+              }
+            },
+            {
+              "if": {"properties": {"status": {"const": "succeeded"}}},
+              "then": {
+                "not": {"required": ["error"]}
+              }
+            },
+            {
+              "if": {"properties": {"status": {"enum": ["pending", "running"]}}},
+              "then": {
+                "not": {
+                  "anyOf": [{"required": ["output"]}, {"required": ["error"]}]
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
     "signature": {
       "type": "object",
       "required": ["key_id", "signature"],
