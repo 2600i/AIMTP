@@ -5,6 +5,16 @@ This example runs a local HTTP relay that accepts AIMTP envelopes and routes the
 ## Run
 - `node examples/webhook-relay/demo.js`
 
+## Configuration (Env)
+- `PORT` (default: `8787`)
+- `AIMTP_RELAY_PATH` (default: `/aimtp`)
+- `AIMTP_MAX_BODY_BYTES` (default: `1048576`)
+
+## Error Responses
+- `400` `invalid_schema`
+- `413` `payload_too_large`
+- `500` `handler_error`
+
 ## What It Does
 - Starts a relay at `/inbox`.
 - Registers `agent-b`.

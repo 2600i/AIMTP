@@ -99,3 +99,7 @@ await router.deliver({
   message,
   task
 });
+```
+
+## Examples
+- `examples/python-client/` — Python interop demo (validates schemas + calls relay)

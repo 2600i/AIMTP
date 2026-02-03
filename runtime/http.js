@@ -3,6 +3,20 @@
 const http = require("http");
 const { RelayError } = require("./relay");
 
+const DEFAULT_PATH = "/aimtp";
+const DEFAULT_MAX_BYTES = 1024 * 1024;
+
+function parseEnvInt(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.statusCode = status;
@@ -11,40 +25,105 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+function sendError(res, status, code, message, details) {
+  const payload = { code, message };
+  if (details !== undefined) {
+    payload.details = details;
+  }
+  sendJson(res, status, payload);
+}
+
 function readRequestBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     let size = 0;
     const chunks = [];
+    let finished = false;
 
-    req.on("data", (chunk) => {
+    const cleanup = () => {
+      req.removeListener("data", onData);
+      req.removeListener("end", onEnd);
+      req.removeListener("error", onError);
+    };
+
+    const drainRequest = () => {
+      req.on("error", () => {});
+      req.resume();
+    };
+
+    const onData = (chunk) => {
+      if (finished) {
+        return;
+      }
       size += chunk.length;
       if (size > maxBytes) {
+        finished = true;
+        cleanup();
         reject(new RelayError("payload_too_large", "Request body too large"));
-        req.destroy();
+        drainRequest();
         return;
       }
       chunks.push(chunk);
-    });
+    };
 
-    req.on("end", () => {
+    const onEnd = () => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      cleanup();
       resolve(Buffer.concat(chunks).toString("utf-8"));
-    });
+    };
 
-    req.on("error", (err) => {
+    const onError = (err) => {
+      if (finished) {
+        return;
+      }
+      finished = true;
+      cleanup();
       reject(err);
-    });
+    };
+
+    req.on("data", onData);
+    req.on("end", onEnd);
+    req.on("error", onError);
   });
 }
 
 function createWebhookRelayServer(relay, options = {}) {
-  const path = options.path || "/inbox";
-  const maxBytes = options.maxBytes || 1024 * 1024;
+  const path =
+    options.path ||
+    (process.env.AIMTP_RELAY_PATH && process.env.AIMTP_RELAY_PATH.trim()) ||
+    DEFAULT_PATH;
+  const maxBytes =
+    typeof options.maxBytes === "number"
+      ? options.maxBytes
+      : parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
 
   return http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
-    if (req.method !== "POST" || url.pathname !== path) {
-      res.statusCode = 404;
-      res.end("Not Found");
+    const pathMatches = url.pathname === path;
+    let logEnvelope = null;
+    const logRequest = (status) => {
+      const envelope = logEnvelope || {};
+      const record = {
+        id: envelope.id || "-",
+        intent: envelope.intent || "-",
+        sender: envelope.sender || "-",
+        recipient: envelope.recipient || "-",
+        status
+      };
+      console.log(JSON.stringify(record));
+    };
+
+    if (!pathMatches) {
+      sendError(res, 404, "not_found", "Not Found");
+      logRequest(404);
+      return;
+    }
+
+    if (req.method !== "POST") {
+      sendError(res, 405, "method_not_allowed", "Method not allowed");
+      logRequest(405);
       return;
     }
 
@@ -52,14 +131,17 @@ function createWebhookRelayServer(relay, options = {}) {
     try {
       const raw = await readRequestBody(req, maxBytes);
       payload = JSON.parse(raw);
+      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+        logEnvelope = payload;
+      }
     } catch (err) {
       if (err instanceof RelayError && err.code === "payload_too_large") {
-        sendJson(res, 413, { error: { code: err.code, message: err.message } });
+        sendError(res, 413, "payload_too_large", err.message);
+        logRequest(413);
         return;
       }
-      sendJson(res, 400, {
-        error: { code: "invalid_json", message: "Invalid JSON payload" }
-      });
+      sendError(res, 400, "invalid_json", "Invalid JSON payload");
+      logRequest(400);
       return;
     }
 
@@ -67,35 +149,41 @@ function createWebhookRelayServer(relay, options = {}) {
       const responses = await relay.receive(payload);
       if (relay.emitResponses) {
         sendJson(res, 200, responses);
+        logRequest(200);
       } else {
         res.statusCode = 204;
         res.end();
+        logRequest(204);
       }
     } catch (err) {
       if (err instanceof RelayError) {
-        let status = 500;
-        if (
-          err.code === "invalid_envelope" ||
-          err.code === "missing_recipient" ||
-          err.code === "invalid_response"
-        ) {
-          status = 400;
-        } else if (err.code === "unknown_recipient") {
-          status = 404;
+        if (err.code === "invalid_envelope" || err.code === "invalid_response") {
+          sendError(res, 400, "invalid_schema", err.message, err.details);
+          logRequest(400);
+          return;
         }
-        sendJson(res, status, {
-          error: {
-            code: err.code,
-            message: err.message,
-            details: err.details
-          }
-        });
+        if (err.code === "missing_recipient") {
+          sendError(res, 400, err.code, err.message, err.details);
+          logRequest(400);
+          return;
+        }
+        if (err.code === "unknown_recipient") {
+          sendError(res, 404, err.code, err.message, err.details);
+          logRequest(404);
+          return;
+        }
+        if (err.code === "handler_error") {
+          sendError(res, 500, "handler_error", err.message);
+          logRequest(500);
+          return;
+        }
+        sendError(res, 500, err.code || "internal_error", err.message || "Internal error");
+        logRequest(500);
         return;
       }
 
-      sendJson(res, 500, {
-        error: { code: "internal_error", message: "Internal server error" }
-      });
+      sendError(res, 500, "internal_error", "Internal server error");
+      logRequest(500);
     }
   });
 }

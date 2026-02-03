@@ -3,18 +3,35 @@
 const { WebhookRelay, createWebhookRelayServer } = require("../../runtime");
 const { createEnvelope, createMessage, createTaskResponse } = require("../../sdk/js");
 
+const DEFAULT_PORT = 8787;
+const DEFAULT_PATH = "/aimtp";
+
+function parseEnvInt(value, fallback) {
+  if (!value) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
 function parseUrl(raw) {
   try {
     return new URL(raw);
   } catch (err) {
-    return new URL("http://127.0.0.1:8787/aimtp");
+    return null;
   }
 }
 
-const relayUrl = parseUrl(process.env.AIMTP_RELAY_URL || "http://127.0.0.1:8787/aimtp");
-const host = relayUrl.hostname || "127.0.0.1";
-const port = relayUrl.port ? Number(relayUrl.port) : relayUrl.protocol === "https:" ? 443 : 80;
-const path = relayUrl.pathname || "/aimtp";
+const parsedUrl = parseUrl(process.env.AIMTP_RELAY_URL || "");
+const host = (parsedUrl && parsedUrl.hostname) || "127.0.0.1";
+const port = parseEnvInt(process.env.PORT, parsedUrl ? Number(parsedUrl.port) : DEFAULT_PORT);
+const path =
+  (process.env.AIMTP_RELAY_PATH && process.env.AIMTP_RELAY_PATH.trim()) ||
+  (parsedUrl && parsedUrl.pathname) ||
+  DEFAULT_PATH;
 
 const relay = new WebhookRelay({ emitResponses: true });
 
@@ -45,7 +62,7 @@ relay.registerAgent("aimtp-relay", async (_envelope, context) => {
 const server = createWebhookRelayServer(relay, { path });
 
 server.listen(port, host, () => {
-  console.log(`AIMTP relay listening on ${relayUrl.origin}${path}`);
+  console.log(`AIMTP relay listening on http://${host}:${port}${path}`);
 });
 
 function shutdown() {

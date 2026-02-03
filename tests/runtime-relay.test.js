@@ -63,7 +63,32 @@ function startServer(server) {
   });
 }
 
-async function main() {
+async function withEnv(values, fn) {
+  const previous = {};
+  Object.keys(values).forEach((key) => {
+    previous[key] = Object.prototype.hasOwnProperty.call(process.env, key)
+      ? process.env[key]
+      : undefined;
+    if (values[key] === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = String(values[key]);
+    }
+  });
+  try {
+    return await fn();
+  } finally {
+    Object.keys(values).forEach((key) => {
+      if (previous[key] === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = previous[key];
+      }
+    });
+  }
+}
+
+function createResponderRelay() {
   const relay = new WebhookRelay({ emitResponses: true });
 
   relay.registerAgent("agent-b", async (_envelope, context) => {
@@ -91,14 +116,46 @@ async function main() {
     context.emit(responseEnvelope);
   });
 
-  const server = createWebhookRelayServer(relay, { path: "/inbox" });
+  return relay;
+}
+
+function createErrorRelay() {
+  const relay = new WebhookRelay({ emitResponses: true });
+  relay.registerAgent("agent-error", async () => {
+    throw new Error("boom");
+  });
+  return relay;
+}
+
+function buildRequestEnvelope(recipient) {
+  const task = createTaskRequest({
+    id: "task-001",
+    type: "demo",
+    input: { payload: "ping" },
+    expects_response: true
+  });
+
+  return createEnvelope({
+    sender: "agent-a",
+    recipient,
+    intent: "task.request",
+    message: createMessage({
+      role: "user",
+      content: "Run the demo task."
+    }),
+    task
+  });
+}
+
+async function withServer(relay, options, fn) {
+  const server = createWebhookRelayServer(relay, options);
 
   try {
     await startServer(server);
   } catch (err) {
     if (err && err.code === "EPERM") {
       console.log("SKIP: runtime relay test (listen not permitted)");
-      return;
+      return false;
     }
     throw err;
   }
@@ -107,42 +164,70 @@ async function main() {
   const port = address.port;
 
   try {
-    const requestTask = createTaskRequest({
-      id: "task-001",
-      type: "demo",
-      input: { payload: "ping" },
-      expects_response: true
-    });
-
-    const requestEnvelope = createEnvelope({
-      sender: "agent-a",
-      recipient: "agent-b",
-      intent: "task.request",
-      message: createMessage({
-        role: "user",
-        content: "Run the demo task."
-      }),
-      task: requestTask
-    });
-
-    const ok = await postJson(port, "/inbox", requestEnvelope);
-    assert.strictEqual(ok.status, 200);
-    assert.ok(Array.isArray(ok.body), "expected response array");
-
-    if (ok.body.length > 0) {
-      ok.body.forEach((response) => {
-        if (response.task && response.task.kind === "response") {
-          assert.strictEqual(response.task.in_response_to, requestTask.id);
-        }
-      });
-    }
-
-    const badEnvelope = { ...requestEnvelope, spec: "aimtp/0.0" };
-    const bad = await postJson(port, "/inbox", badEnvelope);
-    assert.strictEqual(bad.status, 400);
+    await fn(port);
   } finally {
     server.close();
   }
+
+  return true;
+}
+
+async function main() {
+  const ranDefault = await withEnv(
+    { AIMTP_RELAY_PATH: undefined },
+    async () =>
+      withServer(createResponderRelay(), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-b");
+        const ok = await postJson(port, "/aimtp", requestEnvelope);
+        assert.strictEqual(ok.status, 200);
+        assert.ok(Array.isArray(ok.body), "expected response array");
+
+        if (ok.body.length > 0) {
+          ok.body.forEach((response) => {
+            if (response.task && response.task.kind === "response") {
+              assert.strictEqual(response.task.in_response_to, requestEnvelope.task.id);
+            }
+          });
+        }
+
+        const badEnvelope = { ...requestEnvelope, spec: "aimtp/0.0" };
+        const bad = await postJson(port, "/aimtp", badEnvelope);
+        assert.strictEqual(bad.status, 400);
+        assert.strictEqual(bad.body.code, "invalid_schema");
+      })
+  );
+
+  if (!ranDefault) {
+    return;
+  }
+
+  await withEnv({ AIMTP_RELAY_PATH: "/custom" }, async () =>
+    withServer(createResponderRelay(), {}, async (port) => {
+      const requestEnvelope = buildRequestEnvelope("agent-b");
+      const ok = await postJson(port, "/custom", requestEnvelope);
+      assert.strictEqual(ok.status, 200);
+    })
+  );
+
+  await withEnv(
+    { AIMTP_RELAY_PATH: undefined, AIMTP_MAX_BODY_BYTES: "64" },
+    async () =>
+      withServer(createResponderRelay(), {}, async (port) => {
+        const tooLarge = { data: "x".repeat(1024) };
+        const res = await postJson(port, "/aimtp", tooLarge);
+        assert.strictEqual(res.status, 413);
+        assert.strictEqual(res.body.code, "payload_too_large");
+      })
+  );
+
+  await withEnv({ AIMTP_RELAY_PATH: undefined }, async () =>
+    withServer(createErrorRelay(), {}, async (port) => {
+      const requestEnvelope = buildRequestEnvelope("agent-error");
+      const res = await postJson(port, "/aimtp", requestEnvelope);
+      assert.strictEqual(res.status, 500);
+      assert.strictEqual(res.body.code, "handler_error");
+    })
+  );
 
   console.log("OK: runtime relay test");
 }
