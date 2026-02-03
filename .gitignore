@@ -2,3 +2,6 @@
 __MACOSX/
 *.zip
 docs/AIMTP_Whitepaper_Final.pdf
+
+node_modules/
+node_modules/* 2
