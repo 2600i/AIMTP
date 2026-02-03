@@ -1,0 +1,34 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "env-interop-resp-001",
+  "timestamp": "2026-02-03T12:00:01Z",
+  "sender": "aimtp-relay",
+  "recipient": "python-client",
+  "intent": "task.response",
+  "message": {
+    "id": "msg-interop-resp-001",
+    "role": "assistant",
+    "content": "Task task-interop-001 succeeded.",
+    "content_type": "text/plain"
+  },
+  "task": {
+    "kind": "response",
+    "id": "task-interop-001-resp",
+    "in_response_to": "task-interop-001",
+    "status": "succeeded",
+    "output": {
+      "ok": true
+    },
+    "metadata": {
+      "source": "examples/interop-response.json"
+    }
+  },
+  "signature": {
+    "key_id": "demo-key",
+    "signature": "not-signed",
+    "alg": "none"
+  },
+  "metadata": {
+    "demo": true
+  }
+}

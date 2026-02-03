@@ -1,0 +1,34 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "env-interop-req-001",
+  "timestamp": "2026-02-03T12:00:00Z",
+  "sender": "python-client",
+  "recipient": "aimtp-relay",
+  "intent": "task.request",
+  "message": {
+    "id": "msg-interop-req-001",
+    "role": "user",
+    "content": "Run the interop demo task.",
+    "content_type": "text/plain"
+  },
+  "task": {
+    "kind": "request",
+    "id": "task-interop-001",
+    "type": "demo",
+    "input": {
+      "payload": "ping"
+    },
+    "expects_response": true,
+    "metadata": {
+      "source": "examples/interop-request.json"
+    }
+  },
+  "signature": {
+    "key_id": "demo-key",
+    "signature": "not-signed",
+    "alg": "none"
+  },
+  "metadata": {
+    "demo": true
+  }
+}
