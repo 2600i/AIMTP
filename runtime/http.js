@@ -83,6 +83,44 @@ function sendError(res, status, code, message, details) {
   sendJson(res, status, payload);
 }
 
+function firstHeaderValue(value) {
+  if (Array.isArray(value)) {
+    return value[0];
+  }
+  return value;
+}
+
+function extractAuthKey(req) {
+  const direct = firstHeaderValue(req.headers["x-aimtp-key"]);
+  if (typeof direct === "string" && direct.trim()) {
+    return direct.trim();
+  }
+  const authorization = firstHeaderValue(req.headers.authorization);
+  if (typeof authorization !== "string") {
+    return "";
+  }
+  const match = authorization.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return "";
+  }
+  const token = match[1].trim();
+  return token ? token : "";
+}
+
+function evaluateAuth(req, apiKey) {
+  if (!apiKey) {
+    return { enabled: false, status: "disabled", ok: true };
+  }
+  const provided = extractAuthKey(req);
+  if (!provided) {
+    return { enabled: true, status: "missing", ok: false };
+  }
+  if (provided !== apiKey) {
+    return { enabled: true, status: "invalid", ok: false };
+  }
+  return { enabled: true, status: "ok", ok: true };
+}
+
 function readRequestBody(req, maxBytes) {
   return new Promise((resolve, reject) => {
     let size = 0;
@@ -156,9 +194,12 @@ function createWebhookRelayServer(relay, options = {}) {
     typeof options.maxBytes === "number"
       ? options.maxBytes
       : parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
+  const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
+    const authResult = evaluateAuth(req, apiKey);
+    const authStatus = authResult.status;
     if (url.pathname === healthPath) {
       if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
@@ -195,7 +236,8 @@ function createWebhookRelayServer(relay, options = {}) {
         intent: envelope.intent || "-",
         sender: envelope.sender || "-",
         recipient: envelope.recipient || "-",
-        status
+        status,
+        auth: authStatus
       };
       console.log(JSON.stringify(record));
     };
@@ -203,6 +245,17 @@ function createWebhookRelayServer(relay, options = {}) {
     if (!pathMatches) {
       sendError(res, 404, "not_found", "Not Found");
       logRequest(404);
+      return;
+    }
+
+    if (authResult.enabled && !authResult.ok) {
+      if (authStatus === "missing") {
+        sendError(res, 401, "unauthorized", "Missing API key");
+        logRequest(401);
+        return;
+      }
+      sendError(res, 403, "forbidden", "Invalid API key");
+      logRequest(403);
       return;
     }
 

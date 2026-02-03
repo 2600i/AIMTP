@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.6]
+### Added
+- Optional shared API key auth for the webhook relay.
+### Changed
+- Health/readiness endpoints remain unauthenticated when auth is enabled.
+- Structured relay logs include auth status (`disabled`, `ok`, `missing`, `invalid`).
+
 ## [v0.1.5]
 ### Added
 - Health endpoint (`/healthz`) and optional readiness endpoint (`/readyz`).

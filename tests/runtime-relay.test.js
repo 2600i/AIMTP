@@ -11,7 +11,7 @@ const {
   createTaskResponse
 } = require("../sdk/js");
 
-function postJson(port, path, payload) {
+function postJson(port, path, payload, headers = {}) {
   const body = JSON.stringify(payload);
   const options = {
     hostname: "127.0.0.1",
@@ -20,7 +20,8 @@ function postJson(port, path, payload) {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(body)
+      "Content-Length": Buffer.byteLength(body),
+      ...headers
     }
   };
 
@@ -209,7 +210,8 @@ async function main() {
     {
       AIMTP_RELAY_PATH: undefined,
       AIMTP_HEALTH_PATH: undefined,
-      AIMTP_READY_PATH: undefined
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: undefined
     },
     async () =>
       withServer(createResponderRelay(), {}, async (port) => {
@@ -250,7 +252,8 @@ async function main() {
     {
       AIMTP_RELAY_PATH: "/custom",
       AIMTP_HEALTH_PATH: undefined,
-      AIMTP_READY_PATH: undefined
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: undefined
     },
     async () =>
       withServer(createResponderRelay(), {}, async (port) => {
@@ -265,7 +268,8 @@ async function main() {
       AIMTP_RELAY_PATH: undefined,
       AIMTP_MAX_BODY_BYTES: "64",
       AIMTP_HEALTH_PATH: undefined,
-      AIMTP_READY_PATH: undefined
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: undefined
     },
     async () =>
       withServer(createResponderRelay(), {}, async (port) => {
@@ -280,7 +284,8 @@ async function main() {
     {
       AIMTP_RELAY_PATH: undefined,
       AIMTP_HEALTH_PATH: undefined,
-      AIMTP_READY_PATH: undefined
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: undefined
     },
     async () =>
       withServer(createErrorRelay(), {}, async (port) => {
@@ -288,6 +293,40 @@ async function main() {
         const res = await postJson(port, "/aimtp", requestEnvelope);
         assert.strictEqual(res.status, 500);
         assert.strictEqual(res.body.code, "handler_error");
+      })
+  );
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: "super-secret"
+    },
+    async () =>
+      withServer(createResponderRelay(), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-b");
+
+        const missing = await postJson(port, "/aimtp", requestEnvelope);
+        assert.strictEqual(missing.status, 401);
+        assert.strictEqual(missing.body.code, "unauthorized");
+        assert.strictEqual(missing.body.message, "Missing API key");
+
+        const invalid = await postJson(port, "/aimtp", requestEnvelope, {
+          Authorization: "Bearer wrong-key"
+        });
+        assert.strictEqual(invalid.status, 403);
+        assert.strictEqual(invalid.body.code, "forbidden");
+        assert.strictEqual(invalid.body.message, "Invalid API key");
+
+        const ok = await postJson(port, "/aimtp", requestEnvelope, {
+          "X-AIMTP-KEY": "super-secret"
+        });
+        assert.strictEqual(ok.status, 200);
+        assert.ok(Array.isArray(ok.body), "expected response array");
+
+        const health = await getJson(port, "/healthz");
+        assert.strictEqual(health.status, 200);
       })
   );
 

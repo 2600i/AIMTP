@@ -27,3 +27,5 @@ If `jsonschema` is missing, the client exits with install instructions.
 - Schemas are loaded from `../../schemas/envelope.schema.json` and `../../schemas/message.schema.json`.
 - Remote schema resolution is disabled; only local schemas are used.
 - If you see `Connection refused`, the relay is not running. Start the relay manually or point `AIMTP_RELAY_URL` at a reachable endpoint.
+- If your relay sets `AIMTP_API_KEY`, add `Authorization: Bearer <key>` or `X-AIMTP-KEY: <key>` to the
+  request headers in `examples/python-client/client.py` (`_post_json`).

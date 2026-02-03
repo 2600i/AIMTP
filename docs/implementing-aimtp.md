@@ -126,3 +126,6 @@ Environment variables supported by the webhook relay server:
 - `AIMTP_RELAY_PATH` (default `/aimtp`): POST endpoint for AIMTP envelopes.
 - `AIMTP_HEALTH_PATH` (default `/healthz`): GET health endpoint (no auth or schema validation).
 - `AIMTP_READY_PATH` (default `/readyz`): GET readiness endpoint (200 when listening, 503 otherwise).
+- `AIMTP_API_KEY` (default unset): when set, relay requests require a shared API key.
+  Use `Authorization: Bearer <key>` or `X-AIMTP-KEY: <key>` headers. `GET /healthz` and `GET /readyz`
+  remain unauthenticated.
