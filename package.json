@@ -4,6 +4,14 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/sdk.test.js"
+    "test": "node tests/sdk.test.js",
+    "build": "tsc -p tsconfig.json",
+    "demo": "npm run build && node dist/runtime/demo-run.js"
+  },
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "@types/node": "^20.11.0"
   }
 }
