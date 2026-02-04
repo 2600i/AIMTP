@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.8]
+### Added
+- Env-based recipient/sender allowlists for the relay.
+### Changed
+- Removed in-memory admin recipient endpoints (deferred).
+
 ## [v0.1.7]
 ### Added
 - Recipient allowlist via `AIMTP_ALLOWED_RECIPIENTS` with in-memory admin endpoints.
