@@ -5,6 +5,13 @@ The webhook relay is a minimal HTTP server that accepts AIMTP envelopes over POS
 and routes them to registered agent handlers. It is transport-only and does not
 change the AIMTP envelope format or validation rules.
 
+## Run
+Build first, then run:
+```sh
+npm run build
+node dist/runtime/relay.js
+```
+
 ## Configuration
 - `PORT` (default `8787`)
 - `AIMTP_RELAY_PATH` (default `/aimtp`)
