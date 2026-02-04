@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.7]
+### Added
+- Recipient allowlist via `AIMTP_ALLOWED_RECIPIENTS` with in-memory admin endpoints.
+- Optional sender allowlist via `AIMTP_ALLOWED_SENDERS`.
+### Changed
+- Relay returns `unknown_recipient`/`unknown_sender` when allowlists reject a request.
+
 ## [v0.1.6]
 ### Added
 - Optional shared API key auth for the webhook relay.
