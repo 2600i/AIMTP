@@ -46,6 +46,10 @@ When `AIMTP_ALLOWED_SENDERS` is set to a non-empty list, incoming envelopes
 must include `sender` and it must appear in the allowlist or the relay returns
 `403` with `code: unknown_sender`.
 
+Allowlisted recipients without explicit handlers are accepted by a default
+handler that responds with `202` and a body like:
+`{ "status": "accepted", "id": "<envelope.id>", "recipient": "<recipient>" }`.
+
 Example:
 ```sh
 export AIMTP_ALLOWED_RECIPIENTS="agent-a,agent-b"

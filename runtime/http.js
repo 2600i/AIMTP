@@ -208,6 +208,27 @@ function createWebhookRelayServer(relay, options = {}) {
   const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
   const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
   const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
+  const defaultHandler = (envelope, context) => ({
+    __aimtpAccepted: true,
+    status: "accepted",
+    id: envelope.id,
+    recipient: context.recipient
+  });
+  defaultHandler.__aimtpDefault = true;
+
+  if (recipientAllowlist.enabled) {
+    recipientAllowlist.set.forEach((recipient) => {
+      if (!relay.registry.get(recipient)) {
+        relay.registerAgent(recipient, defaultHandler);
+      }
+    });
+    console.log(
+      JSON.stringify({
+        event: "allowlist_recipients",
+        count: recipientAllowlist.set.size
+      })
+    );
+  }
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
@@ -337,9 +358,19 @@ function createWebhookRelayServer(relay, options = {}) {
     }
 
     try {
-      const responses = await relay.receive(payload);
+      const result = await relay.receive(payload);
+      if (result && result.__aimtpAccepted) {
+        sendJson(res, 202, {
+          status: result.status,
+          id: result.id,
+          recipient: result.recipient
+        });
+        logRequest(202);
+        return;
+      }
+
       if (relay.emitResponses) {
-        sendJson(res, 200, responses);
+        sendJson(res, 200, result);
         logRequest(200);
       } else {
         res.statusCode = 204;

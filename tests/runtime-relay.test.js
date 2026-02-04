@@ -261,10 +261,13 @@ async function main() {
       AIMTP_ALLOWED_SENDERS: undefined
     },
     async () =>
-      withServer(createResponderRelay(), {}, async (port) => {
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
         const allowed = buildRequestEnvelope("agent-b");
         const ok = await postJson(port, "/aimtp", allowed);
-        assert.strictEqual(ok.status, 200);
+        assert.strictEqual(ok.status, 202);
+        assert.strictEqual(ok.body.status, "accepted");
+        assert.strictEqual(ok.body.id, allowed.id);
+        assert.strictEqual(ok.body.recipient, "agent-b");
 
         const blocked = buildRequestEnvelope("agent-x");
         const res = await postJson(port, "/aimtp", blocked);

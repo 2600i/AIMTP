@@ -56,8 +56,9 @@ class WebhookRelay {
       }
     };
 
+    let handlerResult;
     try {
-      await handler(envelope, context);
+      handlerResult = await handler(envelope, context);
     } catch (err) {
       if (this.logger && typeof this.logger.log === "function") {
         this.logger.log(`handler error: ${err.message || err}`);
@@ -68,15 +69,31 @@ class WebhookRelay {
       });
     }
 
-    for (const response of responses) {
-      const responseErrors = validateEnvelope(response);
-      if (responseErrors.length > 0) {
-        throw new RelayError(
-          "invalid_response",
-          "Handler emitted an invalid envelope",
-          { errors: responseErrors }
-        );
+    const isDefaultHandler = handler && handler.__aimtpDefault === true;
+    if (!isDefaultHandler) {
+      for (const response of responses) {
+        const responseErrors = validateEnvelope(response);
+        if (responseErrors.length > 0) {
+          throw new RelayError(
+            "invalid_response",
+            "Handler emitted an invalid envelope",
+            { errors: responseErrors }
+          );
+        }
       }
+    }
+
+    if (isDefaultHandler) {
+      return {
+        __aimtpAccepted: true,
+        status: "accepted",
+        id: envelope.id,
+        recipient
+      };
+    }
+
+    if (handlerResult && handlerResult.__aimtpAccepted) {
+      return handlerResult;
     }
 
     return responses;
