@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
-import Ajv from 'ajv';
+import Ajv2020 from 'ajv/dist/2020.js';
 import addFormats from 'ajv-formats';
 
 const HELP = `AIMTP CLI sender (v0.1)
@@ -168,7 +168,7 @@ async function loadSchemas() {
 }
 
 async function validateEnvelope(envelope) {
-  const ajv = new Ajv({ allErrors: true, strict: false });
+  const ajv = new Ajv2020({ allErrors: true, strict: false });
   addFormats(ajv);
   const schemas = await loadSchemas();
   ajv.addSchema(schemas.message);
@@ -203,6 +203,41 @@ function printErrorHint(status) {
   }
 }
 
+async function handleHealthCheck(url) {
+  let res;
+  try {
+    res = await fetch(url, { method: 'GET' });
+  } catch (err) {
+    console.error('Network error while sending request.');
+    console.error(err.message || String(err));
+    process.exitCode = 1;
+    return;
+  }
+
+  printStatus(res);
+  const bodyText = await res.text();
+  const contentType = res.headers.get('content-type') || '';
+  const isJson = contentType.includes('application/json') || contentType.includes('+json');
+
+  if (isJson && bodyText) {
+    try {
+      const parsed = JSON.parse(bodyText);
+      console.log(JSON.stringify(parsed, null, 2));
+    } catch {
+      console.log(bodyText);
+    }
+  } else if (bodyText) {
+    console.log(bodyText);
+  } else {
+    console.log('<empty response body>');
+  }
+
+  if (res.status >= 400) {
+    printErrorHint(res.status);
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   let args;
   try {
@@ -226,6 +261,18 @@ async function main() {
   }
 
   const url = args.url || 'https://relay.aimtp.net/aimtp';
+  let isHealthCheck = false;
+  try {
+    const parsedUrl = new URL(url);
+    isHealthCheck = parsedUrl.pathname.endsWith('/healthz');
+  } catch {
+    isHealthCheck = false;
+  }
+
+  if (isHealthCheck) {
+    await handleHealthCheck(url);
+    return;
+  }
 
   let envelope;
   if (args.file) {
