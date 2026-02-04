@@ -8,6 +8,7 @@ const DEFAULT_PATH = "/aimtp";
 const DEFAULT_HEALTH_PATH = "/healthz";
 const DEFAULT_READY_PATH = "/readyz";
 const DEFAULT_MAX_BYTES = 1024 * 1024;
+const ADMIN_RECIPIENTS_PATH = "/admin/recipients";
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -65,6 +66,21 @@ function parseEnvInt(value, fallback) {
     return fallback;
   }
   return parsed;
+}
+
+function parseAllowlist(value) {
+  if (typeof value !== "string") {
+    return { enabled: false, set: new Set() };
+  }
+  const entries = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  return { enabled: entries.length > 0, set: new Set(entries) };
+}
+
+function listAllowlistEntries(allowlist) {
+  return Array.from(allowlist).sort();
 }
 
 function sendJson(res, status, payload) {
@@ -195,6 +211,8 @@ function createWebhookRelayServer(relay, options = {}) {
       ? options.maxBytes
       : parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
   const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
+  const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
+  const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
@@ -228,6 +246,7 @@ function createWebhookRelayServer(relay, options = {}) {
     }
 
     const pathMatches = url.pathname === path;
+    const isAdminRecipients = url.pathname === ADMIN_RECIPIENTS_PATH;
     let logEnvelope = null;
     const logRequest = (status) => {
       const envelope = logEnvelope || {};
@@ -241,6 +260,73 @@ function createWebhookRelayServer(relay, options = {}) {
       };
       console.log(JSON.stringify(record));
     };
+
+    if (isAdminRecipients) {
+      if (authResult.enabled && !authResult.ok) {
+        if (authStatus === "missing") {
+          sendError(res, 401, "unauthorized", "Missing API key");
+          logRequest(401);
+          return;
+        }
+        sendError(res, 403, "forbidden", "Invalid API key");
+        logRequest(403);
+        return;
+      }
+
+      if (req.method === "GET") {
+        sendJson(res, 200, { recipients: listAllowlistEntries(recipientAllowlist.set) });
+        logRequest(200);
+        return;
+      }
+
+      if (req.method === "POST") {
+        let payload;
+        try {
+          const raw = await readRequestBody(req, maxBytes);
+          payload = JSON.parse(raw);
+        } catch (_err) {
+          sendError(res, 400, "invalid_json", "Invalid JSON payload");
+          logRequest(400);
+          return;
+        }
+
+        const recipient =
+          payload && typeof payload.recipient === "string" ? payload.recipient.trim() : "";
+        if (!recipient) {
+          sendError(res, 400, "invalid_request", "Recipient is required");
+          logRequest(400);
+          return;
+        }
+
+        recipientAllowlist.set.add(recipient);
+        sendJson(res, 200, {
+          ok: true,
+          recipients: listAllowlistEntries(recipientAllowlist.set)
+        });
+        logRequest(200);
+        return;
+      }
+
+      if (req.method === "DELETE") {
+        const recipient = (url.searchParams.get("recipient") || "").trim();
+        if (!recipient) {
+          sendError(res, 400, "invalid_request", "Recipient is required");
+          logRequest(400);
+          return;
+        }
+        recipientAllowlist.set.delete(recipient);
+        sendJson(res, 200, {
+          ok: true,
+          recipients: listAllowlistEntries(recipientAllowlist.set)
+        });
+        logRequest(200);
+        return;
+      }
+
+      sendError(res, 405, "method_not_allowed", "Method not allowed");
+      logRequest(405);
+      return;
+    }
 
     if (!pathMatches) {
       sendError(res, 404, "not_found", "Not Found");
@@ -269,7 +355,9 @@ function createWebhookRelayServer(relay, options = {}) {
     try {
       const raw = await readRequestBody(req, maxBytes);
       payload = JSON.parse(raw);
-      if (payload && typeof payload === "object" && !Array.isArray(payload)) {
+      const isEnvelopeObject =
+        payload && typeof payload === "object" && !Array.isArray(payload);
+      if (isEnvelopeObject) {
         logEnvelope = payload;
       }
     } catch (err) {
@@ -281,6 +369,34 @@ function createWebhookRelayServer(relay, options = {}) {
       sendError(res, 400, "invalid_json", "Invalid JSON payload");
       logRequest(400);
       return;
+    }
+
+    const isEnvelopeObject =
+      payload && typeof payload === "object" && !Array.isArray(payload);
+
+    if (senderAllowlist.enabled && isEnvelopeObject) {
+      const sender = typeof payload.sender === "string" ? payload.sender.trim() : "";
+      if (!senderAllowlist.set.has(sender)) {
+        sendError(res, 403, "unknown_sender", `Unknown sender: ${sender || "-"}`, {
+          sender: sender || null
+        });
+        logRequest(403);
+        return;
+      }
+    }
+
+    if (recipientAllowlist.enabled && isEnvelopeObject) {
+      const recipient =
+        (typeof payload.recipient === "string" && payload.recipient.trim()) ||
+        relay.defaultRecipient ||
+        "";
+      if (recipient && !recipientAllowlist.set.has(recipient)) {
+        sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+          recipient
+        });
+        logRequest(404);
+        return;
+      }
     }
 
     try {
