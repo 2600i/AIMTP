@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.9]
+### Fixed
+- Allowlisted recipients are treated as known recipients via a default handler.
+
 ## [v0.1.8]
 ### Added
 - Env-based recipient/sender allowlists for the relay.
