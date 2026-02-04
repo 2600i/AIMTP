@@ -61,6 +61,16 @@ function envPath(name, fallback) {
     const trimmed = raw.trim();
     return trimmed;
 }
+function parseAllowlist(value) {
+    if (!value) {
+        return { enabled: false, set: new Set() };
+    }
+    const entries = value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    return { enabled: entries.length > 0, set: new Set(entries) };
+}
 function sendJson(res, status, payload) {
     const body = JSON.stringify(payload);
     res.statusCode = status;
@@ -196,6 +206,14 @@ const readyPath = envPath("AIMTP_READY_PATH", DEFAULT_READY_PATH);
 const readyEnabled = readyPath !== "";
 const maxBytes = parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
 const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
+const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
+const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
+if (recipientAllowlist.enabled) {
+    console.log(JSON.stringify({
+        event: "allowlist_recipients",
+        count: recipientAllowlist.set.size
+    }));
+}
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
     const method = req.method || "GET";
@@ -284,6 +302,41 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 400, "invalid_schema", "Schema validation failed", validationErrors);
         logRequest(400);
         return;
+    }
+    if (recipientAllowlist.enabled) {
+        const recipient = payload && typeof payload.recipient === "string"
+            ? payload.recipient.trim()
+            : "";
+        if (!recipient) {
+            sendError(res, 400, "invalid_request", "Recipient is required", { recipient: null });
+            logRequest(400);
+            return;
+        }
+        if (!recipientAllowlist.set.has(recipient)) {
+            sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+                recipient
+            });
+            logRequest(404);
+            return;
+        }
+        sendJson(res, 202, { status: "accepted", id: payload.id, recipient });
+        logRequest(202);
+        return;
+    }
+    if (senderAllowlist.enabled) {
+        const sender = payload && typeof payload.sender === "string"
+            ? payload.sender.trim()
+            : "";
+        if (!sender) {
+            sendError(res, 403, "unknown_sender", "Sender is required", { sender: null });
+            logRequest(403);
+            return;
+        }
+        if (!senderAllowlist.set.has(sender)) {
+            sendError(res, 403, "unknown_sender", `Unknown sender: ${sender}`, { sender });
+            logRequest(403);
+            return;
+        }
     }
     try {
         const responses = await relay.receive(payload);

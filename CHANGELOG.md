@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.10]
+### Fixed
+- Enforced allowlist handling in the relay entrypoint build (dist/runtime/relay.js).
+
 ## [v0.1.9]
 ### Fixed
 - Allowlisted recipients are treated as known recipients via a default handler.
