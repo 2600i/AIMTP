@@ -36,34 +36,30 @@ Exempt endpoints:
 - `/healthz` is always unauthenticated.
 - `/readyz` is always unauthenticated when implemented.
 
-## Recipient Allowlist & Admin Endpoints
+## Recipient & Sender Allowlists
 When `AIMTP_ALLOWED_RECIPIENTS` is set to a non-empty list, incoming envelopes
-must target a recipient in the allowlist or the relay returns `404` with
-`code: unknown_recipient`. Sender allowlisting works the same way with
-`AIMTP_ALLOWED_SENDERS` and returns `403` `unknown_sender`.
+must include `recipient` and it must appear in the allowlist or the relay
+returns `404` with `code: unknown_recipient`. Missing recipients return `400`
+with `code: invalid_request`.
 
-Admin endpoints (in-memory only) allow updating recipients at runtime:
-- `GET /admin/recipients` → `{ recipients: [...] }`
-- `POST /admin/recipients` with JSON `{ "recipient": "agent-b" }`
-- `DELETE /admin/recipients?recipient=agent-b`
-When `AIMTP_API_KEY` is set, these endpoints require the same auth header
-as the relay path.
+When `AIMTP_ALLOWED_SENDERS` is set to a non-empty list, incoming envelopes
+must include `sender` and it must appear in the allowlist or the relay returns
+`403` with `code: unknown_sender`.
 
-Example (with API key auth enabled):
+Example:
 ```sh
-curl -H "Authorization: Bearer $AIMTP_API_KEY" http://localhost:8787/admin/recipients
+export AIMTP_ALLOWED_RECIPIENTS="agent-a,agent-b"
+export AIMTP_ALLOWED_SENDERS="agent-a"
+node dist/runtime/relay.js
 
-curl -X POST http://localhost:8787/admin/recipients \\
-  -H "Authorization: Bearer $AIMTP_API_KEY" \\
+curl -X POST http://localhost:8787/aimtp \\
   -H "Content-Type: application/json" \\
-  -d '{\"recipient\":\"agent-b\"}'
-
-curl -X DELETE \"http://localhost:8787/admin/recipients?recipient=agent-b\" \\
-  -H \"Authorization: Bearer $AIMTP_API_KEY\"
+  -d '{\"spec\":\"aimtp/0.1\",\"id\":\"env-1\",\"timestamp\":\"2026-02-04T00:00:00Z\",\"sender\":\"agent-a\",\"recipient\":\"agent-b\",\"message\":{\"id\":\"msg-1\",\"role\":\"user\",\"content\":\"ping\"}}'
 ```
 
 ## Error Responses
 - `400` `invalid_schema`
+- `400` `invalid_request`
 - `401` `unauthorized`
 - `403` `forbidden`
 - `403` `unknown_sender`
