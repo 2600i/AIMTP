@@ -6,7 +6,8 @@
   "scripts": {
     "test": "node tests/sdk.test.js && node tests/runtime-relay.test.js",
     "build": "tsc -p tsconfig.json",
-    "demo": "npm run build && node dist/runtime/demo-run.js"
+    "demo": "npm run build && node dist/runtime/demo-run.js",
+    "cli:send": "node cli/aimtp-send.mjs"
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -23,6 +24,10 @@
       "require": "./dist/runtime/index.js",
       "types": "./dist/runtime/index.d.ts"
     }
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^2.1.1"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",
