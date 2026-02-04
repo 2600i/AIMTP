@@ -1,0 +1,24 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "env-task-001",
+  "timestamp": "2026-02-04T00:00:00Z",
+  "sender": "agent-a",
+  "recipient": "agent-b",
+  "intent": "task.request",
+  "message": {
+    "id": "msg-001",
+    "role": "user",
+    "content": "Run demo task."
+  },
+  "task": {
+    "kind": "request",
+    "id": "task-001",
+    "type": "demo",
+    "input": { "payload": "ping" },
+    "expects_response": true
+  },
+  "metadata": {
+    "thread_id": "task-001"
+  }
+}
+
