@@ -2,12 +2,16 @@
 
 const http = require("http");
 const { RelayError } = require("./relay");
+const { Mailbox } = require("./mailbox");
+const { validateEnvelope } = require("./validation");
 const packageJson = require("../package.json");
 
 const DEFAULT_PATH = "/aimtp";
 const DEFAULT_HEALTH_PATH = "/healthz";
 const DEFAULT_READY_PATH = "/readyz";
 const DEFAULT_MAX_BYTES = 1024 * 1024;
+const DEFAULT_POLL_MAX = 1;
+const MAX_POLL_LIMIT = 50;
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -78,6 +82,33 @@ function parseAllowlist(value) {
   return { enabled: entries.length > 0, set: new Set(entries) };
 }
 
+function parseRecipientKeys(value) {
+  if (typeof value !== "string") {
+    return { enabled: false, keyToRecipients: new Map() };
+  }
+  const keyToRecipients = new Map();
+  const entries = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  entries.forEach((entry) => {
+    const separator = entry.indexOf(":");
+    if (separator <= 0 || separator === entry.length - 1) {
+      return;
+    }
+    const recipient = entry.slice(0, separator).trim();
+    const key = entry.slice(separator + 1).trim();
+    if (!recipient || !key) {
+      return;
+    }
+    if (!keyToRecipients.has(key)) {
+      keyToRecipients.set(key, new Set());
+    }
+    keyToRecipients.get(key).add(recipient);
+  });
+  return { enabled: keyToRecipients.size > 0, keyToRecipients };
+}
+
 function sendJson(res, status, payload) {
   const body = JSON.stringify(payload);
   res.statusCode = status;
@@ -118,18 +149,56 @@ function extractAuthKey(req) {
   return token ? token : "";
 }
 
-function evaluateAuth(req, apiKey) {
-  if (!apiKey) {
-    return { enabled: false, status: "disabled", ok: true };
-  }
+function evaluateAuth(req, authConfig) {
   const provided = extractAuthKey(req);
+  if (!authConfig.enabled) {
+    return {
+      enabled: true,
+      status: provided ? "invalid" : "missing",
+      ok: false,
+      allowedRecipients: null
+    };
+  }
   if (!provided) {
-    return { enabled: true, status: "missing", ok: false };
+    return { enabled: true, status: "missing", ok: false, allowedRecipients: null };
   }
-  if (provided !== apiKey) {
-    return { enabled: true, status: "invalid", ok: false };
+  if (authConfig.adminKey && provided === authConfig.adminKey) {
+    return { enabled: true, status: "ok", ok: true, allowedRecipients: null };
   }
-  return { enabled: true, status: "ok", ok: true };
+  const recipients = authConfig.keyToRecipients.get(provided);
+  if (recipients) {
+    return { enabled: true, status: "ok", ok: true, allowedRecipients: recipients };
+  }
+  return { enabled: true, status: "invalid", ok: false, allowedRecipients: null };
+}
+
+function isRecipientAuthorized(authResult, recipient) {
+  if (!authResult.ok) {
+    return false;
+  }
+  if (!authResult.allowedRecipients) {
+    return true;
+  }
+  return authResult.allowedRecipients.has(recipient);
+}
+
+function parseMaxParam(value) {
+  if (!value) {
+    return DEFAULT_POLL_MAX;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_POLL_MAX;
+  }
+  return Math.min(parsed, MAX_POLL_LIMIT);
+}
+
+function buildAuthConfig(apiKey, recipientKeys) {
+  return {
+    enabled: Boolean(apiKey) || recipientKeys.enabled,
+    adminKey: apiKey || "",
+    keyToRecipients: recipientKeys.keyToRecipients
+  };
 }
 
 function readRequestBody(req, maxBytes) {
@@ -193,6 +262,10 @@ function createWebhookRelayServer(relay, options = {}) {
     options.path ||
     (process.env.AIMTP_RELAY_PATH && process.env.AIMTP_RELAY_PATH.trim()) ||
     DEFAULT_PATH;
+  const relayPath =
+    path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+  const peekPath = `${relayPath}/peek`;
+  const pollPath = `${relayPath}/poll`;
   const healthPath =
     options.healthPath ||
     (process.env.AIMTP_HEALTH_PATH && process.env.AIMTP_HEALTH_PATH.trim()) ||
@@ -206,8 +279,12 @@ function createWebhookRelayServer(relay, options = {}) {
       ? options.maxBytes
       : parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
   const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
+  const recipientKeys = parseRecipientKeys(process.env.AIMTP_RECIPIENT_KEYS);
+  const authConfig = buildAuthConfig(apiKey, recipientKeys);
   const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
   const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
+  const mailbox =
+    options.mailbox || new Mailbox({ now: options.now, logger: options.logger || console });
   const defaultHandler = (envelope, context) => ({
     __aimtpAccepted: true,
     status: "accepted",
@@ -232,8 +309,7 @@ function createWebhookRelayServer(relay, options = {}) {
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
-    const authResult = evaluateAuth(req, apiKey);
-    const authStatus = authResult.status;
+
     if (url.pathname === healthPath) {
       if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
@@ -261,7 +337,8 @@ function createWebhookRelayServer(relay, options = {}) {
       return;
     }
 
-    const pathMatches = url.pathname === path;
+    const authResult = evaluateAuth(req, authConfig);
+    const authStatus = authResult.status;
     let logEnvelope = null;
     const logRequest = (status) => {
       const envelope = logEnvelope || {};
@@ -275,8 +352,21 @@ function createWebhookRelayServer(relay, options = {}) {
       };
       console.log(JSON.stringify(record));
     };
+    const logMailbox = (status, recipient, count) => {
+      const record = {
+        recipient: recipient || "-",
+        count: typeof count === "number" ? count : "-",
+        status,
+        auth: authStatus
+      };
+      console.log(JSON.stringify(record));
+    };
 
-    if (!pathMatches) {
+    const isPeek = url.pathname === peekPath;
+    const isPoll = url.pathname === pollPath;
+    const isRelayPath = url.pathname === relayPath;
+
+    if (!isPeek && !isPoll && !isRelayPath) {
       sendError(res, 404, "not_found", "Not Found");
       logRequest(404);
       return;
@@ -285,11 +375,76 @@ function createWebhookRelayServer(relay, options = {}) {
     if (authResult.enabled && !authResult.ok) {
       if (authStatus === "missing") {
         sendError(res, 401, "unauthorized", "Missing API key");
-        logRequest(401);
+        if (isPeek || isPoll) {
+          logMailbox(401);
+        } else {
+          logRequest(401);
+        }
         return;
       }
       sendError(res, 403, "forbidden", "Invalid API key");
-      logRequest(403);
+      if (isPeek || isPoll) {
+        logMailbox(403);
+      } else {
+        logRequest(403);
+      }
+      return;
+    }
+
+    if (isPeek || isPoll) {
+      if (req.method !== "GET") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        logMailbox(405);
+        return;
+      }
+
+      const recipientParam = url.searchParams.get("recipient");
+      const recipient = recipientParam ? recipientParam.trim() : "";
+      if (!recipient) {
+        sendError(res, 400, "invalid_request", "Recipient is required", {
+          recipient: null
+        });
+        logMailbox(400);
+        return;
+      }
+      if (recipientAllowlist.enabled) {
+        if (!recipientAllowlist.set.has(recipient)) {
+          sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+            recipient
+          });
+          logMailbox(404, recipient);
+          return;
+        }
+      } else {
+        const handler =
+          relay && relay.registry && typeof relay.registry.get === "function"
+            ? relay.registry.get(recipient)
+            : null;
+        if (!handler) {
+          sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+            recipient
+          });
+          logMailbox(404, recipient);
+          return;
+        }
+      }
+      if (!isRecipientAuthorized(authResult, recipient)) {
+        sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
+        logMailbox(403, recipient);
+        return;
+      }
+
+      if (isPeek) {
+        const result = mailbox.peek(recipient);
+        sendJson(res, 200, { recipient, count: result.count });
+        logMailbox(200, recipient, result.count);
+        return;
+      }
+
+      const maxItems = parseMaxParam(url.searchParams.get("max"));
+      const items = mailbox.poll(recipient, maxItems);
+      sendJson(res, 200, items);
+      logMailbox(200, recipient, items.length);
       return;
     }
 
@@ -319,10 +474,30 @@ function createWebhookRelayServer(relay, options = {}) {
       return;
     }
 
-    const isEnvelopeObject =
-      payload && typeof payload === "object" && !Array.isArray(payload);
+    const validationErrors = validateEnvelope(payload);
+    if (validationErrors.length > 0) {
+      sendError(
+        res,
+        400,
+        "invalid_schema",
+        "Envelope failed schema validation",
+        { errors: validationErrors }
+      );
+      logRequest(400);
+      return;
+    }
 
-    if (senderAllowlist.enabled && isEnvelopeObject) {
+    const recipient =
+      payload && typeof payload.recipient === "string" ? payload.recipient.trim() : "";
+    if (!recipient) {
+      sendError(res, 400, "missing_recipient", "Recipient is required", {
+        recipient: null
+      });
+      logRequest(400);
+      return;
+    }
+
+    if (senderAllowlist.enabled) {
       const sender = typeof payload.sender === "string" ? payload.sender.trim() : "";
       if (!sender) {
         sendError(res, 403, "unknown_sender", "Sender is required", { sender: null });
@@ -338,17 +513,20 @@ function createWebhookRelayServer(relay, options = {}) {
       }
     }
 
-    if (recipientAllowlist.enabled && isEnvelopeObject) {
-      const recipient =
-        typeof payload.recipient === "string" ? payload.recipient.trim() : "";
-      if (!recipient) {
-        sendError(res, 400, "invalid_request", "Recipient is required", {
-          recipient: null
+    if (recipientAllowlist.enabled) {
+      if (!recipientAllowlist.set.has(recipient)) {
+        sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+          recipient
         });
-        logRequest(400);
+        logRequest(404);
         return;
       }
-      if (!recipientAllowlist.set.has(recipient)) {
+    } else {
+      const handler =
+        relay && relay.registry && typeof relay.registry.get === "function"
+          ? relay.registry.get(recipient)
+          : null;
+      if (!handler) {
         sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
           recipient
         });
@@ -357,56 +535,21 @@ function createWebhookRelayServer(relay, options = {}) {
       }
     }
 
-    try {
-      const result = await relay.receive(payload);
-      if (result && result.__aimtpAccepted) {
-        sendJson(res, 202, {
-          status: result.status,
-          id: result.id,
-          recipient: result.recipient
-        });
-        logRequest(202);
-        return;
-      }
-
-      if (relay.emitResponses) {
-        sendJson(res, 200, result);
-        logRequest(200);
-      } else {
-        res.statusCode = 204;
-        res.end();
-        logRequest(204);
-      }
-    } catch (err) {
-      if (err instanceof RelayError) {
-        if (err.code === "invalid_envelope" || err.code === "invalid_response") {
-          sendError(res, 400, "invalid_schema", err.message, err.details);
-          logRequest(400);
-          return;
-        }
-        if (err.code === "missing_recipient") {
-          sendError(res, 400, err.code, err.message, err.details);
-          logRequest(400);
-          return;
-        }
-        if (err.code === "unknown_recipient") {
-          sendError(res, 404, err.code, err.message, err.details);
-          logRequest(404);
-          return;
-        }
-        if (err.code === "handler_error") {
-          sendError(res, 500, "handler_error", err.message);
-          logRequest(500);
-          return;
-        }
-        sendError(res, 500, err.code || "internal_error", err.message || "Internal error");
-        logRequest(500);
-        return;
-      }
-
-      sendError(res, 500, "internal_error", "Internal server error");
-      logRequest(500);
+    if (!isRecipientAuthorized(authResult, recipient)) {
+      sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
+      logRequest(403);
+      return;
     }
+
+    const enqueueResult = mailbox.enqueue(recipient, payload);
+    sendJson(res, 202, {
+      status: "accepted",
+      id: payload.id,
+      recipient,
+      queued: true,
+      queue_depth: enqueueResult.queueDepth
+    });
+    logRequest(202);
   });
 
   trackedServers.add(server);

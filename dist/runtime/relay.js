@@ -34,6 +34,7 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const http = __importStar(require("http"));
+const mailbox_1 = require("./mailbox");
 const { WebhookRelay, RelayError } = require("../../runtime/relay");
 const { validateEnvelope } = require("../../runtime/validation");
 const { createEnvelope, createMessage, createTaskResponse } = require("../../sdk/js");
@@ -43,6 +44,8 @@ const DEFAULT_PATH = "/aimtp";
 const DEFAULT_HEALTH_PATH = "/healthz";
 const DEFAULT_READY_PATH = "/readyz";
 const DEFAULT_MAX_BYTES = 1024 * 1024;
+const DEFAULT_POLL_MAX = 1;
+const MAX_POLL_LIMIT = 50;
 function parseEnvInt(value, fallback) {
     if (!value) {
         return fallback;
@@ -70,6 +73,32 @@ function parseAllowlist(value) {
         .map((entry) => entry.trim())
         .filter((entry) => entry.length > 0);
     return { enabled: entries.length > 0, set: new Set(entries) };
+}
+function parseRecipientKeys(value) {
+    if (!value) {
+        return { enabled: false, keyToRecipients: new Map() };
+    }
+    const keyToRecipients = new Map();
+    const entries = value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    entries.forEach((entry) => {
+        const separator = entry.indexOf(":");
+        if (separator <= 0 || separator === entry.length - 1) {
+            return;
+        }
+        const recipient = entry.slice(0, separator).trim();
+        const key = entry.slice(separator + 1).trim();
+        if (!recipient || !key) {
+            return;
+        }
+        if (!keyToRecipients.has(key)) {
+            keyToRecipients.set(key, new Set());
+        }
+        keyToRecipients.get(key)?.add(recipient);
+    });
+    return { enabled: keyToRecipients.size > 0, keyToRecipients };
 }
 function sendJson(res, status, payload) {
     const body = JSON.stringify(payload);
@@ -107,18 +136,53 @@ function extractAuthKey(req) {
     const token = match[1].trim();
     return token ? token : "";
 }
-function evaluateAuth(req, apiKey) {
-    if (!apiKey) {
-        return { enabled: false, ok: true, status: "disabled" };
-    }
+function evaluateAuth(req, authConfig) {
     const provided = extractAuthKey(req);
+    if (!authConfig.enabled) {
+        return {
+            enabled: true,
+            ok: false,
+            status: provided ? "invalid" : "missing",
+            allowedRecipients: null
+        };
+    }
     if (!provided) {
-        return { enabled: true, ok: false, status: "missing" };
+        return { enabled: true, ok: false, status: "missing", allowedRecipients: null };
     }
-    if (provided !== apiKey) {
-        return { enabled: true, ok: false, status: "invalid" };
+    if (authConfig.adminKey && provided === authConfig.adminKey) {
+        return { enabled: true, ok: true, status: "ok", allowedRecipients: null };
     }
-    return { enabled: true, ok: true, status: "ok" };
+    const recipients = authConfig.keyToRecipients.get(provided);
+    if (recipients) {
+        return { enabled: true, ok: true, status: "ok", allowedRecipients: recipients };
+    }
+    return { enabled: true, ok: false, status: "invalid", allowedRecipients: null };
+}
+function isRecipientAuthorized(authResult, recipient) {
+    if (!authResult.ok) {
+        return false;
+    }
+    if (!authResult.allowedRecipients) {
+        return true;
+    }
+    return authResult.allowedRecipients.has(recipient);
+}
+function parseMaxParam(value) {
+    if (!value) {
+        return DEFAULT_POLL_MAX;
+    }
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return DEFAULT_POLL_MAX;
+    }
+    return Math.min(parsed, MAX_POLL_LIMIT);
+}
+function buildAuthConfig(apiKey, recipientKeys) {
+    return {
+        enabled: Boolean(apiKey) || recipientKeys.enabled,
+        adminKey: apiKey,
+        keyToRecipients: recipientKeys.keyToRecipients
+    };
 }
 function readRequestBody(req, maxBytes) {
     return new Promise((resolve, reject) => {
@@ -200,14 +264,22 @@ relay.registerAgent("aimtp-relay", async (_envelope, context) => {
     context.emit(responseEnvelope);
 });
 const port = parseEnvInt(process.env.PORT, DEFAULT_PORT);
-const relayPath = envPath("AIMTP_RELAY_PATH", DEFAULT_PATH) || DEFAULT_PATH;
+const relayPathInput = envPath("AIMTP_RELAY_PATH", DEFAULT_PATH) || DEFAULT_PATH;
+const relayPath = relayPathInput.length > 1 && relayPathInput.endsWith("/")
+    ? relayPathInput.slice(0, -1)
+    : relayPathInput;
+const peekPath = `${relayPath}/peek`;
+const pollPath = `${relayPath}/poll`;
 const healthPath = envPath("AIMTP_HEALTH_PATH", DEFAULT_HEALTH_PATH) || DEFAULT_HEALTH_PATH;
 const readyPath = envPath("AIMTP_READY_PATH", DEFAULT_READY_PATH);
 const readyEnabled = readyPath !== "";
 const maxBytes = parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
 const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
+const recipientKeys = parseRecipientKeys(process.env.AIMTP_RECIPIENT_KEYS);
+const authConfig = buildAuthConfig(apiKey, recipientKeys);
 const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
 const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
+const mailbox = new mailbox_1.Mailbox({ logger: console });
 if (recipientAllowlist.enabled) {
     console.log(JSON.stringify({
         event: "allowlist_recipients",
@@ -244,7 +316,7 @@ const server = http.createServer(async (req, res) => {
         }
         return;
     }
-    const authResult = evaluateAuth(req, apiKey);
+    const authResult = evaluateAuth(req, authConfig);
     const authStatus = authResult.status;
     let logEnvelope = null;
     const logRequest = (status) => {
@@ -259,7 +331,19 @@ const server = http.createServer(async (req, res) => {
         };
         console.log(JSON.stringify(record));
     };
-    if (url.pathname !== relayPath) {
+    const logMailbox = (status, recipient, count) => {
+        const record = {
+            recipient: recipient || "-",
+            count: typeof count === "number" ? count : "-",
+            status,
+            auth: authStatus
+        };
+        console.log(JSON.stringify(record));
+    };
+    const isPeek = url.pathname === peekPath;
+    const isPoll = url.pathname === pollPath;
+    const isRelayPath = url.pathname === relayPath;
+    if (!isPeek && !isPoll && !isRelayPath) {
         sendError(res, 404, "not_found", "Not Found");
         logRequest(404);
         return;
@@ -267,11 +351,72 @@ const server = http.createServer(async (req, res) => {
     if (authResult.enabled && !authResult.ok) {
         if (authStatus === "missing") {
             sendError(res, 401, "unauthorized", "Missing API key");
-            logRequest(401);
+            if (isPeek || isPoll) {
+                logMailbox(401);
+            }
+            else {
+                logRequest(401);
+            }
             return;
         }
         sendError(res, 403, "forbidden", "Invalid API key");
-        logRequest(403);
+        if (isPeek || isPoll) {
+            logMailbox(403);
+        }
+        else {
+            logRequest(403);
+        }
+        return;
+    }
+    if (isPeek || isPoll) {
+        if (method !== "GET") {
+            sendError(res, 405, "method_not_allowed", "Method not allowed");
+            logMailbox(405);
+            return;
+        }
+        const recipientParam = url.searchParams.get("recipient");
+        const recipient = recipientParam ? recipientParam.trim() : "";
+        if (!recipient) {
+            sendError(res, 400, "invalid_request", "Recipient is required", {
+                recipient: null
+            });
+            logMailbox(400);
+            return;
+        }
+        if (recipientAllowlist.enabled) {
+            if (!recipientAllowlist.set.has(recipient)) {
+                sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+                    recipient
+                });
+                logMailbox(404, recipient);
+                return;
+            }
+        }
+        else {
+            const handler = relay.registry.get(recipient);
+            if (!handler) {
+                sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+                    recipient
+                });
+                logMailbox(404, recipient);
+                return;
+            }
+        }
+        if (!isRecipientAuthorized(authResult, recipient)) {
+            sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
+            logMailbox(403, recipient);
+            return;
+        }
+        if (isPeek) {
+            const result = mailbox.peek(recipient);
+            sendJson(res, 200, { recipient, count: result.count });
+            logMailbox(200, recipient, result.count);
+            return;
+        }
+        const maxItems = parseMaxParam(url.searchParams.get("max"));
+        const items = mailbox.poll(recipient, maxItems);
+        sendJson(res, 200, items);
+        logMailbox(200, recipient, items.length);
         return;
     }
     if (method !== "POST") {
@@ -299,28 +444,18 @@ const server = http.createServer(async (req, res) => {
     }
     const validationErrors = validateEnvelope(payload);
     if (validationErrors.length > 0) {
-        sendError(res, 400, "invalid_schema", "Schema validation failed", validationErrors);
+        sendError(res, 400, "invalid_schema", "Envelope failed schema validation", {
+            errors: validationErrors
+        });
         logRequest(400);
         return;
     }
-    if (recipientAllowlist.enabled) {
-        const recipient = payload && typeof payload.recipient === "string"
-            ? payload.recipient.trim()
-            : "";
-        if (!recipient) {
-            sendError(res, 400, "invalid_request", "Recipient is required", { recipient: null });
-            logRequest(400);
-            return;
-        }
-        if (!recipientAllowlist.set.has(recipient)) {
-            sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
-                recipient
-            });
-            logRequest(404);
-            return;
-        }
-        sendJson(res, 202, { status: "accepted", id: payload.id, recipient });
-        logRequest(202);
+    const recipient = payload && typeof payload.recipient === "string"
+        ? payload.recipient.trim()
+        : "";
+    if (!recipient) {
+        sendError(res, 400, "missing_recipient", "Recipient is required", { recipient: null });
+        logRequest(400);
         return;
     }
     if (senderAllowlist.enabled) {
@@ -338,55 +473,39 @@ const server = http.createServer(async (req, res) => {
             return;
         }
     }
-    try {
-        const responses = await relay.receive(payload);
-        if (relay.emitResponses) {
-            sendJson(res, 200, responses);
-            logRequest(200);
-        }
-        else {
-            res.statusCode = 204;
-            res.end();
-            logRequest(204);
-        }
-    }
-    catch (err) {
-        if (isRelayError(err)) {
-            const code = err.code || "internal_error";
-            if (code === "invalid_envelope" || code === "invalid_response") {
-                const details = (err.details &&
-                    typeof err.details === "object" &&
-                    Array.isArray(err.details.errors)
-                    ? err.details.errors
-                    : Array.isArray(err.details)
-                        ? err.details
-                        : undefined);
-                sendError(res, 400, "invalid_schema", "Schema validation failed", details);
-                logRequest(400);
-                return;
-            }
-            if (code === "missing_recipient") {
-                sendError(res, 400, code, err.message || "Recipient is required");
-                logRequest(400);
-                return;
-            }
-            if (code === "unknown_recipient") {
-                sendError(res, 404, code, err.message || "Unknown recipient");
-                logRequest(404);
-                return;
-            }
-            if (code === "handler_error") {
-                sendError(res, 500, code, err.message || "Handler raised an error");
-                logRequest(500);
-                return;
-            }
-            sendError(res, 500, code, err.message || "Internal server error");
-            logRequest(500);
+    if (recipientAllowlist.enabled) {
+        if (!recipientAllowlist.set.has(recipient)) {
+            sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+                recipient
+            });
+            logRequest(404);
             return;
         }
-        sendError(res, 500, "internal_error", "Internal server error");
-        logRequest(500);
     }
+    else {
+        const handler = relay.registry.get(recipient);
+        if (!handler) {
+            sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+                recipient
+            });
+            logRequest(404);
+            return;
+        }
+    }
+    if (!isRecipientAuthorized(authResult, recipient)) {
+        sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
+        logRequest(403);
+        return;
+    }
+    const enqueueResult = mailbox.enqueue(recipient, payload);
+    sendJson(res, 202, {
+        status: "accepted",
+        id: payload.id,
+        recipient,
+        queued: true,
+        queue_depth: enqueueResult.queueDepth
+    });
+    logRequest(202);
 });
 server.listen(port, () => {
     console.log(`AIMTP relay listening on port ${port}${relayPath}`);

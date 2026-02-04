@@ -3,13 +3,14 @@
 const assert = require("assert");
 const http = require("http");
 const packageJson = require("../package.json");
-const { WebhookRelay, createWebhookRelayServer } = require("../runtime");
-const {
-  createEnvelope,
-  createMessage,
-  createTaskRequest,
-  createTaskResponse
-} = require("../sdk/js");
+const { WebhookRelay, createWebhookRelayServer, Mailbox } = require("../runtime");
+const { createEnvelope, createMessage, createTaskRequest } = require("../sdk/js");
+
+const ADMIN_KEY = "super-secret";
+
+function authHeaders(key) {
+  return { "X-AIMTP-KEY": key };
+}
 
 function postJson(port, path, payload, headers = {}) {
   const body = JSON.stringify(payload);
@@ -122,60 +123,23 @@ async function withEnv(values, fn) {
   }
 }
 
-function createResponderRelay() {
-  const relay = new WebhookRelay({ emitResponses: true });
-
-  relay.registerAgent("agent-b", async (_envelope, context) => {
-    if (!context.task || context.task.kind !== "request") {
-      return;
-    }
-
-    const responseTaskId = `${context.task.id}-resp-001`;
-    const responseEnvelope = createEnvelope({
-      sender: "agent-b",
-      recipient: context.sender,
-      intent: "task.response",
-      message: createMessage({
-        role: "assistant",
-        content: `Task ${context.task.id} done.`
-      }),
-      task: createTaskResponse({
-        id: responseTaskId,
-        in_response_to: context.task.id,
-        status: "succeeded",
-        output: { ok: true }
-      })
-    });
-
-    context.emit(responseEnvelope);
-  });
-
-  return relay;
-}
-
-function createErrorRelay() {
-  const relay = new WebhookRelay({ emitResponses: true });
-  relay.registerAgent("agent-error", async () => {
-    throw new Error("boom");
-  });
-  return relay;
-}
-
-function buildRequestEnvelope(recipient) {
+function buildRequestEnvelope(recipient, idSuffix = "001") {
+  const taskId = `task-${idSuffix}`;
   const task = createTaskRequest({
-    id: "task-001",
+    id: taskId,
     type: "demo",
     input: { payload: "ping" },
     expects_response: true
   });
 
   return createEnvelope({
+    id: `env-${idSuffix}`,
     sender: "agent-a",
     recipient,
     intent: "task.request",
     message: createMessage({
       role: "user",
-      content: "Run the demo task."
+      content: `Run the demo task ${idSuffix}.`
     }),
     task
   });
@@ -212,12 +176,13 @@ async function main() {
       AIMTP_RELAY_PATH: undefined,
       AIMTP_HEALTH_PATH: undefined,
       AIMTP_READY_PATH: undefined,
-      AIMTP_API_KEY: undefined,
-      AIMTP_ALLOWED_RECIPIENTS: undefined,
-      AIMTP_ALLOWED_SENDERS: undefined
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a"
     },
     async () =>
-      withServer(createResponderRelay(), {}, async (port) => {
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
         const health = await getJson(port, "/healthz");
         assert.strictEqual(health.status, 200);
         assert.strictEqual(health.body.status, "ok");
@@ -227,23 +192,101 @@ async function main() {
         const ready = await getJson(port, "/readyz");
         assert.strictEqual(ready.status, 200);
 
-        const requestEnvelope = buildRequestEnvelope("agent-b");
-        const ok = await postJson(port, "/aimtp", requestEnvelope);
-        assert.strictEqual(ok.status, 200);
-        assert.ok(Array.isArray(ok.body), "expected response array");
+        const requestEnvelope = buildRequestEnvelope("agent-b", "001");
 
-        if (ok.body.length > 0) {
-          ok.body.forEach((response) => {
-            if (response.task && response.task.kind === "response") {
-              assert.strictEqual(response.task.in_response_to, requestEnvelope.task.id);
-            }
-          });
-        }
+        const missingAuth = await postJson(port, "/aimtp", requestEnvelope);
+        assert.strictEqual(missingAuth.status, 401);
+
+        const invalidAuth = await postJson(port, "/aimtp", requestEnvelope, authHeaders("bad"));
+        assert.strictEqual(invalidAuth.status, 403);
+
+        const ok = await postJson(port, "/aimtp", requestEnvelope, authHeaders(ADMIN_KEY));
+        assert.strictEqual(ok.status, 202);
+        assert.strictEqual(ok.body.status, "accepted");
+        assert.strictEqual(ok.body.id, requestEnvelope.id);
+        assert.strictEqual(ok.body.recipient, "agent-b");
+        assert.strictEqual(ok.body.queued, true);
+        assert.strictEqual(ok.body.queue_depth, 1);
+
+        const secondEnvelope = buildRequestEnvelope("agent-b", "002");
+        const ok2 = await postJson(port, "/aimtp", secondEnvelope, authHeaders(ADMIN_KEY));
+        assert.strictEqual(ok2.status, 202);
+        assert.strictEqual(ok2.body.queue_depth, 2);
 
         const badEnvelope = { ...requestEnvelope, spec: "aimtp/0.0" };
-        const bad = await postJson(port, "/aimtp", badEnvelope);
+        const bad = await postJson(port, "/aimtp", badEnvelope, authHeaders(ADMIN_KEY));
         assert.strictEqual(bad.status, 400);
         assert.strictEqual(bad.body.code, "invalid_schema");
+
+        const missingPeek = await getJson(port, "/aimtp/peek?recipient=agent-b");
+        assert.strictEqual(missingPeek.status, 401);
+
+        const invalidPeek = await getJson(
+          port,
+          "/aimtp/peek?recipient=agent-b",
+          authHeaders("bad")
+        );
+        assert.strictEqual(invalidPeek.status, 403);
+
+        const peek = await getJson(
+          port,
+          "/aimtp/peek?recipient=agent-b",
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(peek.status, 200);
+        assert.strictEqual(peek.body.count, 2);
+
+        const poll = await getJson(
+          port,
+          "/aimtp/poll?recipient=agent-b&max=1",
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(poll.status, 200);
+        assert.ok(Array.isArray(poll.body), "expected poll response array");
+        assert.strictEqual(poll.body.length, 1);
+        assert.strictEqual(poll.body[0].id, requestEnvelope.id);
+
+        const poll2 = await getJson(
+          port,
+          "/aimtp/poll?recipient=agent-b&max=10",
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(poll2.status, 200);
+        assert.strictEqual(poll2.body.length, 1);
+        assert.strictEqual(poll2.body[0].id, secondEnvelope.id);
+
+        const emptyPoll = await getJson(
+          port,
+          "/aimtp/poll?recipient=agent-b&max=1",
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(emptyPoll.status, 200);
+        assert.deepStrictEqual(emptyPoll.body, []);
+
+        const peekEmpty = await getJson(
+          port,
+          "/aimtp/peek?recipient=agent-b",
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(peekEmpty.status, 200);
+        assert.strictEqual(peekEmpty.body.count, 0);
+
+        const unknownPeek = await getJson(
+          port,
+          "/aimtp/peek?recipient=agent-x",
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(unknownPeek.status, 404);
+        assert.strictEqual(unknownPeek.body.code, "unknown_recipient");
+
+        const unknownPost = await postJson(
+          port,
+          "/aimtp",
+          buildRequestEnvelope("agent-x", "unknown"),
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(unknownPost.status, 404);
+        assert.strictEqual(unknownPost.body.code, "unknown_recipient");
       })
   );
 
@@ -253,43 +296,19 @@ async function main() {
 
   await withEnv(
     {
-      AIMTP_RELAY_PATH: undefined,
-      AIMTP_HEALTH_PATH: undefined,
-      AIMTP_READY_PATH: undefined,
-      AIMTP_API_KEY: undefined,
-      AIMTP_ALLOWED_RECIPIENTS: "agent-a,agent-b",
-      AIMTP_ALLOWED_SENDERS: undefined
-    },
-    async () =>
-      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
-        const allowed = buildRequestEnvelope("agent-b");
-        const ok = await postJson(port, "/aimtp", allowed);
-        assert.strictEqual(ok.status, 202);
-        assert.strictEqual(ok.body.status, "accepted");
-        assert.strictEqual(ok.body.id, allowed.id);
-        assert.strictEqual(ok.body.recipient, "agent-b");
-
-        const blocked = buildRequestEnvelope("agent-x");
-        const res = await postJson(port, "/aimtp", blocked);
-        assert.strictEqual(res.status, 404);
-        assert.strictEqual(res.body.code, "unknown_recipient");
-      })
-  );
-
-  await withEnv(
-    {
       AIMTP_RELAY_PATH: "/custom",
       AIMTP_HEALTH_PATH: undefined,
       AIMTP_READY_PATH: undefined,
-      AIMTP_API_KEY: undefined,
-      AIMTP_ALLOWED_RECIPIENTS: undefined,
-      AIMTP_ALLOWED_SENDERS: undefined
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a"
     },
     async () =>
-      withServer(createResponderRelay(), {}, async (port) => {
-        const requestEnvelope = buildRequestEnvelope("agent-b");
-        const ok = await postJson(port, "/custom", requestEnvelope);
-        assert.strictEqual(ok.status, 200);
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-b", "custom");
+        const ok = await postJson(port, "/custom", requestEnvelope, authHeaders(ADMIN_KEY));
+        assert.strictEqual(ok.status, 202);
       })
   );
 
@@ -299,14 +318,15 @@ async function main() {
       AIMTP_MAX_BODY_BYTES: "64",
       AIMTP_HEALTH_PATH: undefined,
       AIMTP_READY_PATH: undefined,
-      AIMTP_API_KEY: undefined,
-      AIMTP_ALLOWED_RECIPIENTS: undefined,
-      AIMTP_ALLOWED_SENDERS: undefined
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a"
     },
     async () =>
-      withServer(createResponderRelay(), {}, async (port) => {
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
         const tooLarge = { data: "x".repeat(1024) };
-        const res = await postJson(port, "/aimtp", tooLarge);
+        const res = await postJson(port, "/aimtp", tooLarge, authHeaders(ADMIN_KEY));
         assert.strictEqual(res.status, 413);
         assert.strictEqual(res.body.code, "payload_too_large");
       })
@@ -317,16 +337,70 @@ async function main() {
       AIMTP_RELAY_PATH: undefined,
       AIMTP_HEALTH_PATH: undefined,
       AIMTP_READY_PATH: undefined,
-      AIMTP_API_KEY: undefined,
-      AIMTP_ALLOWED_RECIPIENTS: undefined,
-      AIMTP_ALLOWED_SENDERS: undefined
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a"
+    },
+    async () => {
+      let now = Date.now();
+      const mailbox = new Mailbox({ now: () => now });
+      return withServer(
+        new WebhookRelay({ emitResponses: true }),
+        { mailbox },
+        async (port) => {
+          const requestEnvelope = buildRequestEnvelope("agent-b", "ttl");
+          const ok = await postJson(port, "/aimtp", requestEnvelope, authHeaders(ADMIN_KEY));
+          assert.strictEqual(ok.status, 202);
+          now += 10 * 60 * 1000 + 1;
+          const peek = await getJson(
+            port,
+            "/aimtp/peek?recipient=agent-b",
+            authHeaders(ADMIN_KEY)
+          );
+          assert.strictEqual(peek.status, 200);
+          assert.strictEqual(peek.body.count, 0);
+          const poll = await getJson(
+            port,
+            "/aimtp/poll?recipient=agent-b&max=1",
+            authHeaders(ADMIN_KEY)
+          );
+          assert.strictEqual(poll.status, 200);
+          assert.deepStrictEqual(poll.body, []);
+        }
+      );
+    }
+  );
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a"
     },
     async () =>
-      withServer(createErrorRelay(), {}, async (port) => {
-        const requestEnvelope = buildRequestEnvelope("agent-error");
-        const res = await postJson(port, "/aimtp", requestEnvelope);
-        assert.strictEqual(res.status, 500);
-        assert.strictEqual(res.body.code, "handler_error");
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        for (let i = 0; i < 101; i += 1) {
+          const envelope = buildRequestEnvelope("agent-b", String(i).padStart(3, "0"));
+          const res = await postJson(port, "/aimtp", envelope, authHeaders(ADMIN_KEY));
+          assert.strictEqual(res.status, 202);
+          if (i === 100) {
+            assert.strictEqual(res.body.queue_depth, 100);
+          }
+        }
+
+        const poll = await getJson(
+          port,
+          "/aimtp/poll?recipient=agent-b&max=1",
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(poll.status, 200);
+        assert.strictEqual(poll.body.length, 1);
+        assert.strictEqual(poll.body[0].id, "env-001");
       })
   );
 
@@ -335,34 +409,40 @@ async function main() {
       AIMTP_RELAY_PATH: undefined,
       AIMTP_HEALTH_PATH: undefined,
       AIMTP_READY_PATH: undefined,
-      AIMTP_API_KEY: "super-secret",
-      AIMTP_ALLOWED_RECIPIENTS: undefined,
-      AIMTP_ALLOWED_SENDERS: undefined
+      AIMTP_API_KEY: undefined,
+      AIMTP_RECIPIENT_KEYS: "agent-a:key-a,agent-b:key-b",
+      AIMTP_ALLOWED_RECIPIENTS: "agent-a,agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a"
     },
     async () =>
-      withServer(createResponderRelay(), {}, async (port) => {
-        const requestEnvelope = buildRequestEnvelope("agent-b");
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const envelopeA = buildRequestEnvelope("agent-a", "iso");
+        const ok = await postJson(port, "/aimtp", envelopeA, authHeaders("key-a"));
+        assert.strictEqual(ok.status, 202);
 
-        const missing = await postJson(port, "/aimtp", requestEnvelope);
-        assert.strictEqual(missing.status, 401);
-        assert.strictEqual(missing.body.code, "unauthorized");
-        assert.strictEqual(missing.body.message, "Missing API key");
+        const blockedPost = await postJson(
+          port,
+          "/aimtp",
+          buildRequestEnvelope("agent-b", "iso-block"),
+          authHeaders("key-a")
+        );
+        assert.strictEqual(blockedPost.status, 403);
 
-        const invalid = await postJson(port, "/aimtp", requestEnvelope, {
-          Authorization: "Bearer wrong-key"
-        });
-        assert.strictEqual(invalid.status, 403);
-        assert.strictEqual(invalid.body.code, "forbidden");
-        assert.strictEqual(invalid.body.message, "Invalid API key");
+        const blockedPoll = await getJson(
+          port,
+          "/aimtp/poll?recipient=agent-b&max=1",
+          authHeaders("key-a")
+        );
+        assert.strictEqual(blockedPoll.status, 403);
 
-        const ok = await postJson(port, "/aimtp", requestEnvelope, {
-          "X-AIMTP-KEY": "super-secret"
-        });
-        assert.strictEqual(ok.status, 200);
-        assert.ok(Array.isArray(ok.body), "expected response array");
-
-        const health = await getJson(port, "/healthz");
-        assert.strictEqual(health.status, 200);
+        const allowedPoll = await getJson(
+          port,
+          "/aimtp/poll?recipient=agent-a&max=1",
+          authHeaders("key-a")
+        );
+        assert.strictEqual(allowedPoll.status, 200);
+        assert.strictEqual(allowedPoll.body.length, 1);
+        assert.strictEqual(allowedPoll.body[0].id, envelopeA.id);
       })
   );
 

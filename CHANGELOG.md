@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.11]
+### Added
+- In-memory mailbox relay with polling endpoints (`/aimtp/peek`, `/aimtp/poll`) plus TTL and queue limits.
+- Recipient isolation via per-recipient keys, with admin key support for full access.
+### Changed
+- `POST /aimtp` now enqueues envelopes and returns `202` with queue depth.
+- Auth is required for `/aimtp`, `/aimtp/peek`, and `/aimtp/poll`.
+
 ## [v0.1.10]
 ### Fixed
 - Enforced allowlist handling in the relay entrypoint build (dist/runtime/relay.js).
