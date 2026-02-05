@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.12]
+### Added
+- Browser demo at `examples/web-inbox/index.html` for send + peek + poll flows.
+- Optional `npm run demo:web` static server for local demo hosting on `http://localhost:8080`.
+### Changed
+- README now includes Web Demo usage and zsh-safe quoted curl examples for peek/poll.
+
 ## [v0.1.11]
 ### Added
 - In-memory mailbox relay with polling endpoints (`/aimtp/peek`, `/aimtp/poll`) plus TTL and queue limits.

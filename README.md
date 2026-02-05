@@ -106,5 +106,38 @@ See `docs/runtime.md` for runtime configuration and relay behavior details. The
 relay now supports mailbox polling endpoints and requires authentication for
 `/aimtp`, `/aimtp/peek`, and `/aimtp/poll` (admin key or per-recipient keys).
 
+## Web Demo
+Use `examples/web-inbox/index.html` for a browser demo that can send envelopes,
+peek queue depth, and poll mailbox messages.
+
+Open it either directly:
+- `file:///.../AIMTP/examples/web-inbox/index.html`
+
+Or serve locally (recommended for browser fetch/CORS consistency):
+```sh
+npm run demo:web
+```
+Then open `http://localhost:8080`.
+
+Usage:
+1. Enter relay URL (default `https://relay.aimtp.net`) and API key.
+2. Keep sender `agent-a` / recipient `agent-b` or change as needed.
+3. Click `Send`, then `Peek`, then `Poll`.
+
+Notes:
+- API key stays in memory only (not persisted).
+- Mailbox is in-memory on the relay; messages expire by TTL and per-recipient
+  queue size is capped.
+
+zsh-safe curl examples (`?` query is quoted):
+```sh
+curl "https://relay.aimtp.net/aimtp/peek?recipient=agent-b" \
+  -H "X-AIMTP-KEY: $AIMTP_API_KEY"
+
+curl "https://relay.aimtp.net/aimtp/poll?recipient=agent-b&max=10" \
+  -H "X-AIMTP-KEY: $AIMTP_API_KEY"
+```
+
 ## Examples
 - `examples/python-client/` — Python interop demo (validates schemas + calls relay)
+- `examples/web-inbox/` — Browser demo (send + mailbox peek/poll)
