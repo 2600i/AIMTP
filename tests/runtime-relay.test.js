@@ -312,6 +312,17 @@ async function main() {
         assert.strictEqual(ok2.status, 202);
         assert.strictEqual(ok2.body.queue_depth, 2);
 
+        const mailboxPayload = { recipient: "agent-b", message: { text: "ping" } };
+        const mailbox = await postJson(
+          port,
+          "/aimtp/mailbox",
+          mailboxPayload,
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(mailbox.status, 200);
+        assert.strictEqual(mailbox.body.ok, true);
+        assert.strictEqual(mailbox.body.recipient, "agent-b");
+
         const badEnvelope = { ...requestEnvelope, spec: "aimtp/0.0" };
         const bad = await postJson(port, "/aimtp", badEnvelope, authHeaders(ADMIN_KEY));
         assert.strictEqual(bad.status, 400);
@@ -335,7 +346,7 @@ async function main() {
           })
         );
         assert.strictEqual(peek.status, 200);
-        assert.strictEqual(peek.body.count, 2);
+        assert.strictEqual(peek.body.count, 3);
         assert.strictEqual(peek.headers["access-control-allow-origin"], "http://localhost:8080");
 
         const peekDisallowedOrigin = await getJson(
@@ -367,8 +378,9 @@ async function main() {
           authHeaders(ADMIN_KEY)
         );
         assert.strictEqual(poll2.status, 200);
-        assert.strictEqual(poll2.body.length, 1);
+        assert.strictEqual(poll2.body.length, 2);
         assert.strictEqual(poll2.body[0].id, secondEnvelope.id);
+        assert.deepStrictEqual(poll2.body[1], mailboxPayload.message);
 
         const emptyPoll = await getJson(
           port,

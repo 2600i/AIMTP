@@ -455,6 +455,7 @@ function createWebhookRelayServer(relay, options = {}) {
     path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
   const peekPath = `${relayPath}/peek`;
   const pollPath = `${relayPath}/poll`;
+  const mailboxPath = `${relayPath}/mailbox`;
   const healthPath =
     options.healthPath ||
     (process.env.AIMTP_HEALTH_PATH && process.env.AIMTP_HEALTH_PATH.trim()) ||
@@ -589,9 +590,10 @@ function createWebhookRelayServer(relay, options = {}) {
 
     const isPeek = url.pathname === peekPath;
     const isPoll = url.pathname === pollPath;
+    const isMailboxPath = url.pathname === mailboxPath;
     const isRelayPath = url.pathname === relayPath;
 
-    if (!isPeek && !isPoll && !isRelayPath) {
+    if (!isPeek && !isPoll && !isMailboxPath && !isRelayPath) {
       sendError(res, 404, "not_found", "Not Found");
       logRequest(404);
       return;
@@ -698,6 +700,79 @@ function createWebhookRelayServer(relay, options = {}) {
       const items = mailbox.poll(recipient, maxItems);
       sendJson(res, 200, items);
       logMailbox(200, recipient, items.length);
+      return;
+    }
+
+    if (isMailboxPath) {
+      if (req.method !== "POST") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        logRequest(405);
+        return;
+      }
+
+      let payload;
+      try {
+        const raw = await readRequestBody(req, maxBytes);
+        payload = JSON.parse(raw);
+      } catch (err) {
+        if (err instanceof RelayError && err.code === "payload_too_large") {
+          sendError(res, 413, "payload_too_large", err.message);
+          logRequest(413);
+          return;
+        }
+        sendError(res, 400, "invalid_json", "Invalid JSON payload");
+        logRequest(400);
+        return;
+      }
+
+      const recipient =
+        payload && typeof payload.recipient === "string" ? payload.recipient.trim() : "";
+      if (!recipient) {
+        sendError(res, 400, "invalid_request", "Recipient is required", {
+          recipient: null
+        });
+        logRequest(400);
+        return;
+      }
+      if (!RECIPIENT_PATTERN.test(recipient)) {
+        sendError(res, 400, "invalid_request", "Recipient format is invalid", {
+          recipient
+        });
+        logRequest(400);
+        return;
+      }
+      if (recipientAllowlist.enabled && !recipientAllowlist.set.has(recipient)) {
+        sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+          recipient
+        });
+        logRequest(404);
+        return;
+      }
+      if (!isRecipientAuthorized(authResult, recipient)) {
+        sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
+        logRequest(403);
+        return;
+      }
+
+      const message = payload ? payload.message ?? payload.payload : undefined;
+      if (message === undefined) {
+        sendError(res, 400, "invalid_request", "Message payload is required");
+        logRequest(400);
+        return;
+      }
+
+      mailbox.enqueue(recipient, message);
+      const id =
+        message && typeof message === "object" && Object.prototype.hasOwnProperty.call(message, "id")
+          ? message.id
+          : undefined;
+
+      sendJson(res, 200, {
+        ok: true,
+        recipient,
+        id
+      });
+      logRequest(200);
       return;
     }
 

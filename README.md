@@ -124,6 +124,22 @@ Usage:
 2. Keep sender `agent-a` / recipient `agent-b` or change as needed.
 3. Click `Send`, then `Peek`, then `Poll`.
 
+Local relay example (mailbox endpoints):
+```sh
+AIMTP_API_KEY=dev-key AIMTP_STORE=redis AIMTP_ALLOWLIST_RECIPIENTS=0 PORT=8788 node dist/runtime/relay.js
+
+curl -X POST "http://127.0.0.1:8788/aimtp/mailbox" \
+  -H "Content-Type: application/json" \
+  -H "X-AIMTP-KEY: dev-key" \
+  -d '{"recipient":"agent-b","message":{"text":"ping"}}'
+
+curl "http://127.0.0.1:8788/aimtp/peek?recipient=agent-b" \
+  -H "X-AIMTP-KEY: dev-key"
+
+curl "http://127.0.0.1:8788/aimtp/poll?recipient=agent-b&max=10" \
+  -H "X-AIMTP-KEY: dev-key"
+```
+
 Notes:
 - API key stays in memory only (not persisted).
 - CORS is enabled by default for `http://localhost:8080` and

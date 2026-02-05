@@ -444,6 +444,7 @@ const relayPath =
     : relayPathInput;
 const peekPath = `${relayPath}/peek`;
 const pollPath = `${relayPath}/poll`;
+const mailboxPath = `${relayPath}/mailbox`;
 const healthPath = envPath("AIMTP_HEALTH_PATH", DEFAULT_HEALTH_PATH) || DEFAULT_HEALTH_PATH;
 const readyPath = envPath("AIMTP_READY_PATH", DEFAULT_READY_PATH);
 const readyEnabled = readyPath !== "";
@@ -587,9 +588,10 @@ const server = http.createServer(async (req, res) => {
 
   const isPeek = url.pathname === peekPath;
   const isPoll = url.pathname === pollPath;
+  const isMailboxPath = url.pathname === mailboxPath;
   const isRelayPath = url.pathname === relayPath;
 
-  if (!isPeek && !isPoll && !isRelayPath) {
+  if (!isPeek && !isPoll && !isMailboxPath && !isRelayPath) {
     sendError(res, 404, "not_found", "Not Found");
     logRequest(404);
     return;
@@ -615,13 +617,13 @@ const server = http.createServer(async (req, res) => {
     res.setHeader("Access-Control-Max-Age", "600");
     res.statusCode = 204;
     res.end();
-    if (isPeek || isPoll) {
-      logMailbox(204);
-    } else {
-      logRequest(204);
+      if (isPeek || isPoll) {
+        logMailbox(204);
+      } else {
+        logRequest(204);
+      }
+      return;
     }
-    return;
-  }
 
   if (allowedOrigin) {
     setCorsHeaders(res, allowedOrigin);
@@ -630,21 +632,21 @@ const server = http.createServer(async (req, res) => {
   if (authResult.enabled && !authResult.ok) {
     if (authStatus === "missing") {
       sendError(res, 401, "unauthorized", "Missing API key");
-      if (isPeek || isPoll) {
-        logMailbox(401);
-      } else {
-        logRequest(401);
-      }
-      return;
-    }
-    sendError(res, 403, "forbidden", "Invalid API key");
     if (isPeek || isPoll) {
-      logMailbox(403);
+      logMailbox(401);
     } else {
-      logRequest(403);
+      logRequest(401);
     }
     return;
   }
+  sendError(res, 403, "forbidden", "Invalid API key");
+  if (isPeek || isPoll) {
+    logMailbox(403);
+  } else {
+    logRequest(403);
+  }
+  return;
+}
 
   if (isPeek || isPoll) {
     if (method !== "GET") {
@@ -691,6 +693,78 @@ const server = http.createServer(async (req, res) => {
     const items = mailbox.poll(recipient, maxItems);
     sendJson(res, 200, items);
     logMailbox(200, recipient, items.length);
+    return;
+  }
+
+  if (isMailboxPath) {
+    if (method !== "POST") {
+      sendError(res, 405, "method_not_allowed", "Method not allowed");
+      logRequest(405);
+      return;
+    }
+
+    let payload: unknown;
+    try {
+      const raw = await readRequestBody(req, maxBytes);
+      payload = JSON.parse(raw);
+    } catch (err) {
+      if (isRelayError(err) && err.code === "payload_too_large") {
+        sendError(res, 413, "payload_too_large", "Request body exceeds maximum size");
+        logRequest(413);
+        return;
+      }
+      sendError(res, 400, "invalid_json", "Invalid JSON payload");
+      logRequest(400);
+      return;
+    }
+
+    const recipient =
+      payload && typeof (payload as { recipient?: unknown }).recipient === "string"
+        ? (payload as { recipient: string }).recipient.trim()
+        : "";
+    if (!recipient) {
+      sendError(res, 400, "invalid_request", "Recipient is required", { recipient: null });
+      logRequest(400);
+      return;
+    }
+    if (!RECIPIENT_PATTERN.test(recipient)) {
+      sendError(res, 400, "invalid_request", "Recipient format is invalid", { recipient });
+      logRequest(400);
+      return;
+    }
+    if (recipientAllowlist.enabled && !recipientAllowlist.set.has(recipient)) {
+      sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+        recipient
+      });
+      logRequest(404);
+      return;
+    }
+    if (!isRecipientAuthorized(authResult, recipient)) {
+      sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
+      logRequest(403);
+      return;
+    }
+
+    const body = payload as { message?: unknown; payload?: unknown };
+    const message = body.message ?? body.payload;
+    if (message === undefined) {
+      sendError(res, 400, "invalid_request", "Message payload is required");
+      logRequest(400);
+      return;
+    }
+
+    mailbox.enqueue(recipient, message);
+    const id =
+      message && typeof message === "object" && "id" in (message as Record<string, unknown>)
+        ? (message as { id?: unknown }).id
+        : undefined;
+
+    sendJson(res, 200, {
+      ok: true,
+      recipient,
+      id
+    });
+    logRequest(200);
     return;
   }
 

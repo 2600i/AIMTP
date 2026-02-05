@@ -302,7 +302,7 @@
           logPanel.prepend(entry);
         }
 
-        function appendInbox(envelope) {
+        function appendInbox(item) {
           if (inboxPanel.firstElementChild && inboxPanel.firstElementChild.classList.contains("empty")) {
             inboxPanel.innerHTML = "";
           }
@@ -310,20 +310,20 @@
           const entry = document.createElement("div");
           entry.className = "entry";
 
+          const payload =
+            item && typeof item === "object" && "message" in item ? item.message : item;
           const heading = document.createElement("h3");
-          heading.textContent = `${envelope.id || "-"} • ${envelope.timestamp || "-"}`;
+          heading.textContent = `${payload && payload.id ? payload.id : "-"} • ${
+            payload && payload.timestamp ? payload.timestamp : "-"
+          }`;
 
           const detail = {
-            sender: envelope.sender || "-",
-            recipient: envelope.recipient || "-",
+            sender: payload && payload.sender ? payload.sender : "-",
+            recipient: payload && payload.recipient ? payload.recipient : "-",
             role:
-              envelope.message && typeof envelope.message === "object"
-                ? envelope.message.role || "-"
-                : "-",
+              payload && typeof payload === "object" && "role" in payload ? payload.role || "-" : "-",
             content:
-              envelope.message && typeof envelope.message === "object"
-                ? envelope.message.content || ""
-                : ""
+              payload && typeof payload === "object" && "content" in payload ? payload.content || "" : ""
           };
 
           const pre = document.createElement("pre");
@@ -363,29 +363,24 @@
             throw new Error("Sender, recipient, and message content are required.");
           }
 
-          const envelope = {
-            spec: "aimtp/0.1",
+          const mailboxMessage = {
             id: uid(),
             timestamp: new Date().toISOString(),
             sender,
             recipient,
-            intent: "task.request",
-            message: {
-              id: uid(),
-              role: "user",
-              content
-            }
+            role: "user",
+            content
           };
 
           const key = getKeyOrThrow();
-          const url = makeEndpoint("/aimtp");
+          const url = makeEndpoint("/aimtp/mailbox");
           await requestJson("SEND", url, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",
               "X-AIMTP-KEY": key
             },
-            body: JSON.stringify(envelope)
+            body: JSON.stringify({ recipient, message: mailboxMessage })
           });
         }
 
