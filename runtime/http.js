@@ -196,6 +196,56 @@ function parseRecipientKeys(value) {
   return { enabled: keyToRecipients.size > 0, keyToRecipients };
 }
 
+function parseKeyRecipients(value) {
+  if (typeof value !== "string") {
+    return { enabled: false, keyToRecipients: new Map() };
+  }
+  const keyToRecipients = new Map();
+  const entries = value
+    .split(";")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  entries.forEach((entry) => {
+    const separator = entry.indexOf("=");
+    if (separator <= 0 || separator === entry.length - 1) {
+      return;
+    }
+    const key = entry.slice(0, separator).trim();
+    const recipientsRaw = entry.slice(separator + 1).trim();
+    if (!key || !recipientsRaw) {
+      return;
+    }
+    const recipients = recipientsRaw
+      .split(",")
+      .map((recipient) => recipient.trim())
+      .filter((recipient) => recipient.length > 0);
+    if (recipients.length === 0) {
+      return;
+    }
+    if (!keyToRecipients.has(key)) {
+      keyToRecipients.set(key, new Set());
+    }
+    const bucket = keyToRecipients.get(key);
+    recipients.forEach((recipient) => bucket.add(recipient));
+  });
+  return { enabled: keyToRecipients.size > 0, keyToRecipients };
+}
+
+function mergeRecipientKeys() {
+  const keyToRecipients = new Map();
+  for (let i = 0; i < arguments.length; i += 1) {
+    const entry = arguments[i];
+    entry.keyToRecipients.forEach((recipients, key) => {
+      if (!keyToRecipients.has(key)) {
+        keyToRecipients.set(key, new Set());
+      }
+      const target = keyToRecipients.get(key);
+      recipients.forEach((recipient) => target.add(recipient));
+    });
+  }
+  return { enabled: keyToRecipients.size > 0, keyToRecipients };
+}
+
 function parseCorsOrigins(value) {
   if (typeof value !== "string") {
     return new Set(DEFAULT_CORS_ORIGINS);
@@ -417,10 +467,16 @@ function createWebhookRelayServer(relay, options = {}) {
       ? options.maxBytes
       : parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
   const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
-  const recipientKeys = parseRecipientKeys(process.env.AIMTP_RECIPIENT_KEYS);
+  const legacyRecipientKeys = parseRecipientKeys(process.env.AIMTP_RECIPIENT_KEYS);
+  const keyedRecipientKeys = parseKeyRecipients(process.env.AIMTP_KEY_RECIPIENTS);
+  const recipientKeys = mergeRecipientKeys(legacyRecipientKeys, keyedRecipientKeys);
   const authConfig = buildAuthConfig(apiKey, recipientKeys);
   const corsOrigins = parseCorsOrigins(process.env.AIMTP_CORS_ORIGINS);
-  const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
+  const allowlistDisabled = process.env.AIMTP_ALLOWLIST_RECIPIENTS === "0";
+  const parsedAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
+  const recipientAllowlist = allowlistDisabled
+    ? { enabled: false, set: new Set() }
+    : parsedAllowlist;
   const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
   const mailboxStoreOptions = parseMailboxStoreOptions(options);
   const mailbox =
@@ -452,6 +508,14 @@ function createWebhookRelayServer(relay, options = {}) {
     recipient: context.recipient
   });
   defaultHandler.__aimtpDefault = true;
+
+  console.log(
+    JSON.stringify({
+      event: "allowlist_state",
+      enabled: recipientAllowlist.enabled,
+      key_count: recipientKeys.keyToRecipients.size
+    })
+  );
 
   if (recipientAllowlist.enabled) {
     recipientAllowlist.set.forEach((recipient) => {

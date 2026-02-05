@@ -19,7 +19,9 @@ node dist/runtime/relay.js
 - `AIMTP_MAX_BODY_BYTES` (default `1048576`)
 - `AIMTP_API_KEY` (required for mailbox endpoints; shared admin key)
 - `AIMTP_RECIPIENT_KEYS` (optional per-recipient keys: `agent-a:key-a,agent-b:key-b`)
+- `AIMTP_KEY_RECIPIENTS` (optional per-recipient keys: `key-a=agent-a,agent-b;key-b=agent-c`)
 - `AIMTP_ALLOWED_RECIPIENTS` (optional, comma-separated allowlist)
+- `AIMTP_ALLOWLIST_RECIPIENTS=0` (disable recipient allowlist even if set)
 - `AIMTP_ALLOWED_SENDERS` (optional, comma-separated allowlist)
 - `AIMTP_STORE` (`sqlite` default, `redis` optional)
 - `AIMTP_MAILBOX_STORE` (legacy alias; still accepted)
@@ -49,6 +51,7 @@ Key modes:
 - `AIMTP_API_KEY` acts as a shared admin key (full access to all recipients).
 - `AIMTP_RECIPIENT_KEYS` enables per-recipient isolation. Keys are only allowed
   to access the recipients they are mapped to.
+- `AIMTP_KEY_RECIPIENTS` uses the format `key=recipient1,recipient2;key2=x,y`.
 - If both are set, the admin key can access all recipients; recipient keys
   remain scoped.
 
