@@ -111,6 +111,21 @@ An attachment is a metadata reference to binary content.
   - `alg`: Optional algorithm identifier.
 - Implementations SHOULD validate signatures when a trust policy exists.
 
+## Runtime Delivery Profile (Non-normative)
+The AIMTP relay runtime provides **at-least-once** delivery when mailbox polling
+is used. Envelopes are leased to the recipient on poll and MUST be explicitly
+acknowledged to be removed from the queue.
+
+Recommended behavior for runtimes:
+- Lease a message on poll and return a `lease_id` plus `lease_expires_at`.
+- If the lease expires without acknowledgement, requeue the message with backoff.
+- Track a retry counter per message. After `max_retries`, move the message to a
+  dead-letter queue for investigation.
+
+Implementations MAY expose mailbox-specific HTTP endpoints to support leasing,
+acknowledgement, failure, retries, and dead-letter inspection. These endpoints
+are outside the core AIMTP envelope schema and may vary by deployment.
+
 ## Examples
 
 ### Minimal Envelope

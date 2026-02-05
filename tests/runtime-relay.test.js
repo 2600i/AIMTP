@@ -370,7 +370,14 @@ async function main() {
         assert.strictEqual(poll.status, 200);
         assert.ok(Array.isArray(poll.body), "expected poll response array");
         assert.strictEqual(poll.body.length, 1);
-        assert.strictEqual(poll.body[0].id, requestEnvelope.id);
+        assert.strictEqual(poll.body[0].envelope.id, requestEnvelope.id);
+        const ack1 = await postJson(
+          port,
+          "/aimtp/ack",
+          { recipient: "agent-b", lease_id: poll.body[0].lease_id },
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(ack1.status, 200);
 
         const poll2 = await getJson(
           port,
@@ -379,8 +386,22 @@ async function main() {
         );
         assert.strictEqual(poll2.status, 200);
         assert.strictEqual(poll2.body.length, 2);
-        assert.strictEqual(poll2.body[0].id, secondEnvelope.id);
-        assert.deepStrictEqual(poll2.body[1], mailboxPayload.message);
+        assert.strictEqual(poll2.body[0].envelope.id, secondEnvelope.id);
+        assert.deepStrictEqual(poll2.body[1].envelope, mailboxPayload.message);
+        const ack2 = await postJson(
+          port,
+          "/aimtp/ack",
+          { recipient: "agent-b", lease_id: poll2.body[0].lease_id },
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(ack2.status, 200);
+        const ack3 = await postJson(
+          port,
+          "/aimtp/ack",
+          { recipient: "agent-b", lease_id: poll2.body[1].lease_id },
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(ack3.status, 200);
 
         const emptyPoll = await getJson(
           port,
@@ -517,6 +538,85 @@ async function main() {
       AIMTP_ALLOWED_SENDERS: "agent-a",
       AIMTP_STORE: "memory"
     },
+    async () => {
+      let now = 0;
+      const mailbox = new Mailbox({
+        now: () => now,
+        leaseMs: 1000,
+        maxRetries: 1,
+        retryBaseMs: 1,
+        retryMaxMs: 1
+      });
+      return withServer(
+        new WebhookRelay({ emitResponses: true }),
+        { mailbox },
+        async (port) => {
+          const requestEnvelope = buildRequestEnvelope("agent-b", "retry");
+          const ok = await postJson(port, "/aimtp", requestEnvelope, authHeaders(ADMIN_KEY));
+          assert.strictEqual(ok.status, 202);
+
+          const poll1 = await getJson(
+            port,
+            "/aimtp/poll?recipient=agent-b&max=1",
+            authHeaders(ADMIN_KEY)
+          );
+          assert.strictEqual(poll1.status, 200);
+          assert.strictEqual(poll1.body.length, 1);
+          assert.strictEqual(poll1.body[0].delivery_attempt, 1);
+
+          const fail1 = await postJson(
+            port,
+            "/aimtp/fail",
+            { recipient: "agent-b", lease_id: poll1.body[0].lease_id, reason: "boom" },
+            authHeaders(ADMIN_KEY)
+          );
+          assert.strictEqual(fail1.status, 200);
+          assert.strictEqual(fail1.body.status, "requeued");
+
+          now += 2;
+          const poll2 = await getJson(
+            port,
+            "/aimtp/poll?recipient=agent-b&max=1",
+            authHeaders(ADMIN_KEY)
+          );
+          assert.strictEqual(poll2.status, 200);
+          assert.strictEqual(poll2.body.length, 1);
+          assert.strictEqual(poll2.body[0].delivery_attempt, 2);
+
+          const fail2 = await postJson(
+            port,
+            "/aimtp/fail",
+            { recipient: "agent-b", lease_id: poll2.body[0].lease_id, reason: "boom" },
+            authHeaders(ADMIN_KEY)
+          );
+          assert.strictEqual(fail2.status, 200);
+          assert.strictEqual(fail2.body.status, "dead_lettered");
+
+          const dead = await getJson(
+            port,
+            "/aimtp/dead?recipient=agent-b&max=1",
+            authHeaders(ADMIN_KEY)
+          );
+          assert.strictEqual(dead.status, 200);
+          assert.strictEqual(dead.body.length, 1);
+          assert.strictEqual(dead.body[0].envelope.id, requestEnvelope.id);
+        }
+      );
+    }
+  );
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory"
+    },
     async () =>
       withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
         for (let i = 0; i < 101; i += 1) {
@@ -535,7 +635,14 @@ async function main() {
         );
         assert.strictEqual(poll.status, 200);
         assert.strictEqual(poll.body.length, 1);
-        assert.strictEqual(poll.body[0].id, "env-001");
+        assert.strictEqual(poll.body[0].envelope.id, "env-001");
+        const ack = await postJson(
+          port,
+          "/aimtp/ack",
+          { recipient: "agent-b", lease_id: poll.body[0].lease_id },
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(ack.status, 200);
       })
   );
 
@@ -579,7 +686,14 @@ async function main() {
         );
         assert.strictEqual(allowedPoll.status, 200);
         assert.strictEqual(allowedPoll.body.length, 1);
-        assert.strictEqual(allowedPoll.body[0].id, envelopeA.id);
+        assert.strictEqual(allowedPoll.body[0].envelope.id, envelopeA.id);
+        const ack = await postJson(
+          port,
+          "/aimtp/ack",
+          { recipient: "agent-a", lease_id: allowedPoll.body[0].lease_id },
+          authHeaders("key-a")
+        );
+        assert.strictEqual(ack.status, 200);
       })
   );
 
@@ -644,7 +758,14 @@ async function main() {
             );
             assert.strictEqual(poll.status, 200);
             assert.strictEqual(poll.body.length, 1);
-            assert.strictEqual(poll.body[0].id, "env-sqlite-persist");
+            assert.strictEqual(poll.body[0].envelope.id, "env-sqlite-persist");
+            const ack = await postJson(
+              port,
+              "/aimtp/ack",
+              { recipient: "agent-b", lease_id: poll.body[0].lease_id },
+              authHeaders(ADMIN_KEY)
+            );
+            assert.strictEqual(ack.status, 200);
           })
       );
     } finally {

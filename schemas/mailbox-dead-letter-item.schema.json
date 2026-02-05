@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aimtp.net/schemas/mailbox-dead-letter-item.schema.json",
+  "type": "object",
+  "required": [
+    "envelope",
+    "enqueued_at",
+    "failed_at",
+    "retry_count",
+    "delivery_attempt"
+  ],
+  "properties": {
+    "envelope": { "$ref": "./envelope.schema.json" },
+    "enqueued_at": { "type": "string", "format": "date-time" },
+    "failed_at": { "type": "string", "format": "date-time" },
+    "retry_count": { "type": "integer", "minimum": 0 },
+    "delivery_attempt": { "type": "integer", "minimum": 1 },
+    "last_error": { "type": "string" }
+  },
+  "additionalProperties": false
+}

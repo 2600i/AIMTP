@@ -104,11 +104,12 @@ await router.deliver({
 ## Runtime & Relay
 See `docs/runtime.md` for runtime configuration and relay behavior details. The
 relay now supports mailbox polling endpoints and requires authentication for
-`/aimtp`, `/aimtp/peek`, and `/aimtp/poll` (admin key or per-recipient keys).
+`/aimtp`, `/aimtp/peek`, `/aimtp/poll`, `/aimtp/ack`, `/aimtp/fail`, and
+`/aimtp/dead` (admin key or per-recipient keys).
 
 ## Web Demo
 Use `examples/web-inbox/index.html` for a browser demo that can send envelopes,
-peek queue depth, and poll mailbox messages.
+peek queue depth, and poll + acknowledge mailbox messages.
 
 Open it either directly:
 - `file:///.../AIMTP/examples/web-inbox/index.html`
@@ -138,6 +139,11 @@ curl "http://127.0.0.1:8788/aimtp/peek?recipient=agent-b" \
 
 curl "http://127.0.0.1:8788/aimtp/poll?recipient=agent-b&max=10" \
   -H "X-AIMTP-KEY: dev-key"
+
+curl -X POST "http://127.0.0.1:8788/aimtp/ack" \
+  -H "Content-Type: application/json" \
+  -H "X-AIMTP-KEY: dev-key" \
+  -d '{"recipient":"agent-b","lease_id":"<lease-id>"}'
 ```
 
 Notes:
@@ -150,6 +156,8 @@ Notes:
   messages survive relay restarts.
 - Set `AIMTP_STORE=redis` to use Redis-backed mailbox lists.
 - If Redis is unavailable, relay falls back to SQLite automatically.
+- Polling leases messages. Use `/aimtp/ack` after successful processing or
+  `/aimtp/fail` to requeue and retry.
 
 zsh-safe curl examples (`?` query is quoted):
 ```sh
@@ -158,6 +166,11 @@ curl "https://relay.aimtp.net/aimtp/peek?recipient=agent-b" \
 
 curl "https://relay.aimtp.net/aimtp/poll?recipient=agent-b&max=10" \
   -H "X-AIMTP-KEY: $AIMTP_API_KEY"
+
+curl -X POST "https://relay.aimtp.net/aimtp/ack" \
+  -H "Content-Type: application/json" \
+  -H "X-AIMTP-KEY: $AIMTP_API_KEY" \
+  -d '{"recipient":"agent-b","lease_id":"<lease-id>"}'
 ```
 
 ## Examples

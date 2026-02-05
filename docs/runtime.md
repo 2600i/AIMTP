@@ -6,6 +6,10 @@ validates them, and enqueues them into a mailbox store per recipient.
 Recipients fetch messages via polling endpoints. The relay does not modify
 AIMTP envelopes or validation rules.
 
+Delivery is **at-least-once**. Messages are leased to a recipient on poll,
+must be explicitly acknowledged, and are retried with backoff until they are
+acknowledged or dead-lettered.
+
 ## Run
 Build first, then run:
 ```sh
@@ -30,6 +34,10 @@ node dist/runtime/relay.js
 - `AIMTP_MAILBOX_MAX_QUEUE_LENGTH` (optional, defaults to `100`)
 - `AIMTP_MAILBOX_MAX_RECIPIENTS` (optional, defaults to `1000`)
 - `AIMTP_MAILBOX_CLEANUP_INTERVAL_MS` (optional periodic TTL cleanup job; disabled when unset)
+- `AIMTP_MAILBOX_LEASE_MS` (optional, defaults to `30000`)
+- `AIMTP_MAILBOX_MAX_RETRIES` (optional, defaults to `5`)
+- `AIMTP_MAILBOX_RETRY_BASE_MS` (optional, defaults to `1000`)
+- `AIMTP_MAILBOX_RETRY_MAX_MS` (optional, defaults to `30000`)
 - `AIMTP_REDIS_URL` (optional Redis URL)
 - `AIMTP_REDIS_HOST` / `AIMTP_REDIS_PORT` / `AIMTP_REDIS_DB` (optional discrete Redis settings)
 - `AIMTP_REDIS_USERNAME` / `AIMTP_REDIS_PASSWORD` (optional Redis auth)
@@ -75,12 +83,78 @@ Returns queue depth without removing messages.
 
 Response `200`:
 ```json
-{ "recipient": "agent-b", "count": 2 }
+{
+  "recipient": "agent-b",
+  "count": 2,
+  "pending": 1,
+  "leased": 1,
+  "dead_letters": 0
+}
 ```
 
 ### `GET /aimtp/poll?recipient=<id>&max=<n>`
-Returns up to `max` envelopes (default `1`, cap `50`) and removes them from the
-queue (FIFO). When empty, returns `200 []`.
+Returns up to `max` leased envelopes (default `1`, cap `50`). The lease must be
+acknowledged or failed. When empty, returns `200 []`.
+
+Response `200`:
+```json
+[
+  {
+    "envelope": { "id": "env-001", "spec": "aimtp/0.1", "timestamp": "2026-02-05T00:00:00Z", "message": { "id": "msg-1", "role": "user", "content": "ping" } },
+    "lease_id": "lease-123",
+    "lease_expires_at": "2026-02-05T00:00:30Z",
+    "retry_count": 0,
+    "delivery_attempt": 1
+  }
+]
+```
+`retry_count` counts prior failed attempts (excludes the current delivery
+attempt). `delivery_attempt` is 1-based.
+
+### `POST /aimtp/ack`
+Acknowledges a leased message and removes it from the queue.
+
+Request:
+```json
+{ "recipient": "agent-b", "lease_id": "lease-123" }
+```
+
+Response `200`:
+```json
+{ "ok": true, "status": "acknowledged" }
+```
+
+### `POST /aimtp/fail`
+Marks a leased message as failed. The relay will requeue it with backoff or
+move it to the dead-letter queue if retries are exhausted.
+
+Request:
+```json
+{ "recipient": "agent-b", "lease_id": "lease-123", "reason": "processing_error" }
+```
+
+Response `200`:
+```json
+{ "ok": true, "status": "requeued", "retry_count": 1 }
+```
+
+### `GET /aimtp/dead?recipient=<id>&max=<n>`
+Returns up to `max` dead-lettered items (default `1`, cap `50`) and removes them
+from the dead-letter queue.
+
+Response `200`:
+```json
+[
+  {
+    "envelope": { "id": "env-001", "spec": "aimtp/0.1", "timestamp": "2026-02-05T00:00:00Z", "message": { "id": "msg-1", "role": "user", "content": "ping" } },
+    "enqueued_at": "2026-02-05T00:00:00Z",
+    "failed_at": "2026-02-05T00:02:00Z",
+    "retry_count": 5,
+    "delivery_attempt": 6,
+    "last_error": "processing_error"
+  }
+]
+```
 
 ## Mailbox Limits
 - TTL: `10 minutes`. Expired messages are dropped on enqueue + peek/poll.
@@ -89,6 +163,10 @@ queue (FIFO). When empty, returns `200 []`.
   `mailbox_drop_oldest recipient=<id> dropped=<k> queue_depth=<n>`
 - Max recipients tracked: `1000`. Least-recently-active recipients are evicted
   if the limit is exceeded.
+- Delivery: at-least-once. Messages are leased for `AIMTP_MAILBOX_LEASE_MS`.
+- Retries: exponential backoff based on `AIMTP_MAILBOX_RETRY_BASE_MS`, capped by
+  `AIMTP_MAILBOX_RETRY_MAX_MS`. Messages exceeding `AIMTP_MAILBOX_MAX_RETRIES`
+  are moved to the dead-letter queue.
 - Default storage is SQLite, so mailbox contents survive process restarts.
 - Set `AIMTP_STORE=redis` to use Redis-backed mailbox lists.
 - If Redis is unavailable, relay gracefully falls back to SQLite and logs:
@@ -124,6 +202,11 @@ curl "http://localhost:8787/aimtp/peek?recipient=agent-b" \
 
 curl "http://localhost:8787/aimtp/poll?recipient=agent-b&max=5" \
   -H "X-AIMTP-KEY: shared-admin-key"
+
+curl -X POST http://localhost:8787/aimtp/ack \
+  -H "Content-Type: application/json" \
+  -H "X-AIMTP-KEY: shared-admin-key" \
+  -d '{"recipient":"agent-b","lease_id":"<lease-id>"}'
 ```
 
 ## Error Responses
@@ -135,8 +218,18 @@ curl "http://localhost:8787/aimtp/poll?recipient=agent-b&max=5" \
 - `403` `unknown_sender`
 - `413` `payload_too_large`
 - `404` `unknown_recipient`
+- `404` `unknown_lease`
+- `409` `lease_expired`
 - `500` `internal_error`
 
 ## Logging
 Structured log lines include an `auth` field with values `ok`, `missing`, or
 `invalid`. Do not log secrets or message content.
+### `POST /aimtp/ack`
+Acknowledges a leased message and removes it from the queue.
+
+### `POST /aimtp/fail`
+Marks a leased message as failed (requeue or dead-letter).
+
+### `GET /aimtp/dead?recipient=<id>&max=<n>`
+Returns dead-letter items for the recipient.

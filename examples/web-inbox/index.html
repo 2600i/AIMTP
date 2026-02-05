@@ -405,13 +405,28 @@
           const key = getKeyOrThrow();
           const max = pollMaxInput.value || "10";
           const url = makeEndpoint("/aimtp/poll", { recipient, max });
+          const ackUrl = makeEndpoint("/aimtp/ack");
           const { response, body } = await requestJson("POLL", url, {
             method: "GET",
             headers: { "X-AIMTP-KEY": key }
           });
 
           if (response.ok && Array.isArray(body)) {
-            body.forEach((envelope) => appendInbox(envelope));
+            for (const item of body) {
+              if (item && item.envelope) {
+                appendInbox(item.envelope);
+              }
+              if (item && item.lease_id) {
+                await requestJson("ACK", ackUrl, {
+                  method: "POST",
+                  headers: {
+                    "Content-Type": "application/json",
+                    "X-AIMTP-KEY": key
+                  },
+                  body: JSON.stringify({ recipient, lease_id: item.lease_id })
+                });
+              }
+            }
           }
         }
 
