@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.13]
+### Added
+- Minimal CORS support for relay browser demo requests, including OPTIONS preflight on `/aimtp`, `/aimtp/peek`, and `/aimtp/poll`.
+### Changed
+- Relay now applies origin allowlisting via `AIMTP_CORS_ORIGINS` (default localhost demo origins) and returns CORS headers for allowed origins.
+- README Web Demo docs updated with CORS defaults and configuration.
+
 ## [v0.1.12]
 ### Added
 - Browser demo at `examples/web-inbox/index.html` for send + peek + poll flows.

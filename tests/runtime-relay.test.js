@@ -33,11 +33,11 @@ function postJson(port, path, payload, headers = {}) {
       res.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf-8");
         if (!raw) {
-          resolve({ status: res.statusCode, body: null });
+          resolve({ status: res.statusCode, body: null, headers: res.headers });
           return;
         }
         try {
-          resolve({ status: res.statusCode, body: JSON.parse(raw) });
+          resolve({ status: res.statusCode, body: JSON.parse(raw), headers: res.headers });
         } catch (err) {
           reject(err);
         }
@@ -66,14 +66,46 @@ function getJson(port, path, headers = {}) {
       res.on("end", () => {
         const raw = Buffer.concat(chunks).toString("utf-8");
         if (!raw) {
-          resolve({ status: res.statusCode, body: null });
+          resolve({ status: res.statusCode, body: null, headers: res.headers });
           return;
         }
         try {
-          resolve({ status: res.statusCode, body: JSON.parse(raw) });
+          resolve({ status: res.statusCode, body: JSON.parse(raw), headers: res.headers });
         } catch (err) {
           reject(err);
         }
+      });
+    });
+
+    req.on("error", reject);
+    req.end();
+  });
+}
+
+function optionsRequest(port, path, headers = {}) {
+  const options = {
+    hostname: "127.0.0.1",
+    port,
+    path,
+    method: "OPTIONS",
+    headers
+  };
+
+  return new Promise((resolve, reject) => {
+    const req = http.request(options, (res) => {
+      const chunks = [];
+      res.on("data", (chunk) => chunks.push(chunk));
+      res.on("end", () => {
+        const raw = Buffer.concat(chunks).toString("utf-8");
+        let body = null;
+        if (raw) {
+          try {
+            body = JSON.parse(raw);
+          } catch (_err) {
+            body = { raw };
+          }
+        }
+        resolve({ status: res.statusCode, body, headers: res.headers });
       });
     });
 
@@ -178,6 +210,7 @@ async function main() {
       AIMTP_READY_PATH: undefined,
       AIMTP_API_KEY: ADMIN_KEY,
       AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
       AIMTP_ALLOWED_SENDERS: "agent-a"
     },
@@ -194,19 +227,59 @@ async function main() {
 
         const requestEnvelope = buildRequestEnvelope("agent-b", "001");
 
+        const preflight = await optionsRequest(port, "/aimtp", {
+          Origin: "http://localhost:8080"
+        });
+        assert.strictEqual(preflight.status, 204);
+        assert.strictEqual(
+          preflight.headers["access-control-allow-origin"],
+          "http://localhost:8080"
+        );
+        assert.strictEqual(
+          preflight.headers["access-control-allow-methods"],
+          "GET,POST,OPTIONS"
+        );
+        assert.strictEqual(
+          preflight.headers["access-control-allow-headers"],
+          "Authorization,Content-Type,X-AIMTP-KEY"
+        );
+
+        const peekPreflight = await optionsRequest(port, "/aimtp/peek?recipient=agent-b", {
+          Origin: "http://localhost:8080"
+        });
+        assert.strictEqual(peekPreflight.status, 204);
+        assert.strictEqual(
+          peekPreflight.headers["access-control-allow-origin"],
+          "http://localhost:8080"
+        );
+
+        const blockedPreflight = await optionsRequest(port, "/aimtp", {
+          Origin: "http://evil.example"
+        });
+        assert.strictEqual(blockedPreflight.status, 403);
+        assert.strictEqual(blockedPreflight.headers["access-control-allow-origin"], undefined);
+
         const missingAuth = await postJson(port, "/aimtp", requestEnvelope);
         assert.strictEqual(missingAuth.status, 401);
 
         const invalidAuth = await postJson(port, "/aimtp", requestEnvelope, authHeaders("bad"));
         assert.strictEqual(invalidAuth.status, 403);
 
-        const ok = await postJson(port, "/aimtp", requestEnvelope, authHeaders(ADMIN_KEY));
+        const ok = await postJson(
+          port,
+          "/aimtp",
+          requestEnvelope,
+          Object.assign({}, authHeaders(ADMIN_KEY), {
+            Origin: "http://localhost:8080"
+          })
+        );
         assert.strictEqual(ok.status, 202);
         assert.strictEqual(ok.body.status, "accepted");
         assert.strictEqual(ok.body.id, requestEnvelope.id);
         assert.strictEqual(ok.body.recipient, "agent-b");
         assert.strictEqual(ok.body.queued, true);
         assert.strictEqual(ok.body.queue_depth, 1);
+        assert.strictEqual(ok.headers["access-control-allow-origin"], "http://localhost:8080");
 
         const secondEnvelope = buildRequestEnvelope("agent-b", "002");
         const ok2 = await postJson(port, "/aimtp", secondEnvelope, authHeaders(ADMIN_KEY));
@@ -231,10 +304,26 @@ async function main() {
         const peek = await getJson(
           port,
           "/aimtp/peek?recipient=agent-b",
-          authHeaders(ADMIN_KEY)
+          Object.assign({}, authHeaders(ADMIN_KEY), {
+            Origin: "http://localhost:8080"
+          })
         );
         assert.strictEqual(peek.status, 200);
         assert.strictEqual(peek.body.count, 2);
+        assert.strictEqual(peek.headers["access-control-allow-origin"], "http://localhost:8080");
+
+        const peekDisallowedOrigin = await getJson(
+          port,
+          "/aimtp/peek?recipient=agent-b",
+          Object.assign({}, authHeaders(ADMIN_KEY), {
+            Origin: "http://evil.example"
+          })
+        );
+        assert.strictEqual(peekDisallowedOrigin.status, 200);
+        assert.strictEqual(
+          peekDisallowedOrigin.headers["access-control-allow-origin"],
+          undefined
+        );
 
         const poll = await getJson(
           port,
@@ -301,6 +390,7 @@ async function main() {
       AIMTP_READY_PATH: undefined,
       AIMTP_API_KEY: ADMIN_KEY,
       AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
       AIMTP_ALLOWED_SENDERS: "agent-a"
     },
@@ -320,6 +410,7 @@ async function main() {
       AIMTP_READY_PATH: undefined,
       AIMTP_API_KEY: ADMIN_KEY,
       AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
       AIMTP_ALLOWED_SENDERS: "agent-a"
     },
@@ -339,6 +430,7 @@ async function main() {
       AIMTP_READY_PATH: undefined,
       AIMTP_API_KEY: ADMIN_KEY,
       AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
       AIMTP_ALLOWED_SENDERS: "agent-a"
     },
@@ -379,6 +471,7 @@ async function main() {
       AIMTP_READY_PATH: undefined,
       AIMTP_API_KEY: ADMIN_KEY,
       AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
       AIMTP_ALLOWED_SENDERS: "agent-a"
     },
@@ -411,6 +504,7 @@ async function main() {
       AIMTP_READY_PATH: undefined,
       AIMTP_API_KEY: undefined,
       AIMTP_RECIPIENT_KEYS: "agent-a:key-a,agent-b:key-b",
+      AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-a,agent-b",
       AIMTP_ALLOWED_SENDERS: "agent-a"
     },

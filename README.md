@@ -126,6 +126,10 @@ Usage:
 
 Notes:
 - API key stays in memory only (not persisted).
+- CORS is enabled by default for `http://localhost:8080` and
+  `http://127.0.0.1:8080`.
+- Set `AIMTP_CORS_ORIGINS` (comma-separated origins) to extend allowed browser
+  origins.
 - Mailbox is in-memory on the relay; messages expire by TTL and per-recipient
   queue size is capped.
 

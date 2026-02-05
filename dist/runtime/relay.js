@@ -46,6 +46,7 @@ const DEFAULT_READY_PATH = "/readyz";
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_POLL_MAX = 1;
 const MAX_POLL_LIMIT = 50;
+const DEFAULT_CORS_ORIGINS = ["http://localhost:8080", "http://127.0.0.1:8080"];
 function parseEnvInt(value, fallback) {
     if (!value) {
         return fallback;
@@ -99,6 +100,53 @@ function parseRecipientKeys(value) {
         keyToRecipients.get(key)?.add(recipient);
     });
     return { enabled: keyToRecipients.size > 0, keyToRecipients };
+}
+function parseCorsOrigins(value) {
+    if (value === undefined) {
+        return new Set(DEFAULT_CORS_ORIGINS);
+    }
+    const entries = value
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter((entry) => entry.length > 0);
+    return new Set(entries);
+}
+function appendVaryHeader(res, value) {
+    const existing = res.getHeader("Vary");
+    if (typeof existing === "string") {
+        const values = existing.split(",").map((part) => part.trim());
+        if (!values.includes(value)) {
+            res.setHeader("Vary", `${existing}, ${value}`);
+        }
+        return;
+    }
+    if (Array.isArray(existing)) {
+        const values = existing.map((part) => String(part).trim());
+        if (!values.includes(value)) {
+            values.push(value);
+            res.setHeader("Vary", values.join(", "));
+        }
+        return;
+    }
+    res.setHeader("Vary", value);
+}
+function resolveAllowedOrigin(req, allowedOrigins) {
+    const headerValue = firstHeaderValue(req.headers.origin);
+    if (typeof headerValue !== "string") {
+        return "";
+    }
+    const origin = headerValue.trim();
+    if (!origin) {
+        return "";
+    }
+    return allowedOrigins.has(origin) ? origin : "";
+}
+function setCorsHeaders(res, origin) {
+    if (!origin) {
+        return;
+    }
+    res.setHeader("Access-Control-Allow-Origin", origin);
+    appendVaryHeader(res, "Origin");
 }
 function sendJson(res, status, payload) {
     const body = JSON.stringify(payload);
@@ -277,6 +325,7 @@ const maxBytes = parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES
 const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
 const recipientKeys = parseRecipientKeys(process.env.AIMTP_RECIPIENT_KEYS);
 const authConfig = buildAuthConfig(apiKey, recipientKeys);
+const corsOrigins = parseCorsOrigins(process.env.AIMTP_CORS_ORIGINS);
 const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
 const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
 const mailbox = new mailbox_1.Mailbox({ logger: console });
@@ -347,6 +396,35 @@ const server = http.createServer(async (req, res) => {
         sendError(res, 404, "not_found", "Not Found");
         logRequest(404);
         return;
+    }
+    const allowedOrigin = resolveAllowedOrigin(req, corsOrigins);
+    if (method === "OPTIONS") {
+        if (!allowedOrigin) {
+            sendError(res, 403, "forbidden", "Origin not allowed");
+            if (isPeek || isPoll) {
+                logMailbox(403);
+            }
+            else {
+                logRequest(403);
+            }
+            return;
+        }
+        setCorsHeaders(res, allowedOrigin);
+        res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+        res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,X-AIMTP-KEY");
+        res.setHeader("Access-Control-Max-Age", "600");
+        res.statusCode = 204;
+        res.end();
+        if (isPeek || isPoll) {
+            logMailbox(204);
+        }
+        else {
+            logRequest(204);
+        }
+        return;
+    }
+    if (allowedOrigin) {
+        setCorsHeaders(res, allowedOrigin);
     }
     if (authResult.enabled && !authResult.ok) {
         if (authStatus === "missing") {
