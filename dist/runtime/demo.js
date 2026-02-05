@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.runInMemoryTaskDemo = runInMemoryTaskDemo;
+exports.runMailboxHttpDemo = runMailboxHttpDemo;
 const registry_1 = require("./registry");
 const router_1 = require("./router");
 const PROTOCOL_VERSION = "aimtp/0.1";
@@ -105,4 +106,42 @@ async function runInMemoryTaskDemo(logger = NOOP_LOGGER) {
     }
     logger.log("Task exchange complete");
     return { requestEnvelope, responseEnvelope };
+}
+async function runMailboxHttpDemo(params) {
+    const base = new URL(params.baseUrl);
+    const mailboxUrl = new URL("/aimtp/mailbox", base);
+    const peekUrl = new URL("/aimtp/peek", base);
+    peekUrl.search = new URLSearchParams({ recipient: params.recipient }).toString();
+    const pollUrl = new URL("/aimtp/poll", base);
+    pollUrl.search = new URLSearchParams({ recipient: params.recipient, max: "10" }).toString();
+    const mailboxPayload = {
+        recipient: params.recipient,
+        message: {
+            id: `msg-${Date.now()}`,
+            timestamp: new Date().toISOString(),
+            sender: params.sender,
+            recipient: params.recipient,
+            role: "user",
+            content: params.content
+        }
+    };
+    await fetch(mailboxUrl, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+            "X-AIMTP-KEY": params.apiKey
+        },
+        body: JSON.stringify(mailboxPayload)
+    });
+    const peekResponse = await fetch(peekUrl, {
+        method: "GET",
+        headers: { "X-AIMTP-KEY": params.apiKey }
+    });
+    const peekBody = (await peekResponse.json());
+    const pollResponse = await fetch(pollUrl, {
+        method: "GET",
+        headers: { "X-AIMTP-KEY": params.apiKey }
+    });
+    const polled = (await pollResponse.json());
+    return { peekCount: peekBody.count ?? 0, polled };
 }

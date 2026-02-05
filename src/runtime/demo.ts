@@ -137,3 +137,53 @@ export async function runInMemoryTaskDemo(
   logger.log("Task exchange complete");
   return { requestEnvelope, responseEnvelope };
 }
+
+export async function runMailboxHttpDemo(params: {
+  baseUrl: string;
+  apiKey: string;
+  sender: string;
+  recipient: string;
+  content: string;
+}): Promise<{ peekCount: number; polled: unknown[] }> {
+  const base = new URL(params.baseUrl);
+  const mailboxUrl = new URL("/aimtp/mailbox", base);
+  const peekUrl = new URL("/aimtp/peek", base);
+  peekUrl.search = new URLSearchParams({ recipient: params.recipient }).toString();
+  const pollUrl = new URL("/aimtp/poll", base);
+  pollUrl.search = new URLSearchParams({ recipient: params.recipient, max: "10" }).toString();
+
+  const mailboxPayload = {
+    recipient: params.recipient,
+    message: {
+      id: `msg-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      sender: params.sender,
+      recipient: params.recipient,
+      role: "user",
+      content: params.content
+    }
+  };
+
+  await fetch(mailboxUrl, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-AIMTP-KEY": params.apiKey
+    },
+    body: JSON.stringify(mailboxPayload)
+  });
+
+  const peekResponse = await fetch(peekUrl, {
+    method: "GET",
+    headers: { "X-AIMTP-KEY": params.apiKey }
+  });
+  const peekBody = (await peekResponse.json()) as { count?: number };
+
+  const pollResponse = await fetch(pollUrl, {
+    method: "GET",
+    headers: { "X-AIMTP-KEY": params.apiKey }
+  });
+  const polled = (await pollResponse.json()) as unknown[];
+
+  return { peekCount: peekBody.count ?? 0, polled };
+}
