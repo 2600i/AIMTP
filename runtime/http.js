@@ -16,6 +16,7 @@ const DEFAULT_CORS_ORIGINS = [
   "http://localhost:8080",
   "http://127.0.0.1:8080"
 ];
+const RECIPIENT_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -672,15 +673,11 @@ function createWebhookRelayServer(relay, options = {}) {
           return;
         }
       } else {
-        const handler =
-          relay && relay.registry && typeof relay.registry.get === "function"
-            ? relay.registry.get(recipient)
-            : null;
-        if (!handler) {
-          sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+        if (!RECIPIENT_PATTERN.test(recipient)) {
+          sendError(res, 400, "invalid_request", "Recipient format is invalid", {
             recipient
           });
-          logMailbox(404, recipient);
+          logMailbox(400, recipient);
           return;
         }
       }

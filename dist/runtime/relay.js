@@ -47,6 +47,7 @@ const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_POLL_MAX = 1;
 const MAX_POLL_LIMIT = 50;
 const DEFAULT_CORS_ORIGINS = ["http://localhost:8080", "http://127.0.0.1:8080"];
+const RECIPIENT_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
 function parseEnvInt(value, fallback) {
     if (!value) {
         return fallback;
@@ -584,12 +585,9 @@ const server = http.createServer(async (req, res) => {
             }
         }
         else {
-            const handler = relay.registry.get(recipient);
-            if (!handler) {
-                sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
-                    recipient
-                });
-                logMailbox(404, recipient);
+            if (!RECIPIENT_PATTERN.test(recipient)) {
+                sendError(res, 400, "invalid_request", "Recipient format is invalid", { recipient });
+                logMailbox(400, recipient);
                 return;
             }
         }
