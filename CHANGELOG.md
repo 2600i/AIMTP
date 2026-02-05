@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [v0.1.14]
+### Added
+- Redis mailbox store implementation (`AIMTP_STORE=redis`) with FIFO enqueue/poll behavior and TTL-aware message handling.
+- Mailbox store conformance test coverage for store selection and Redis-to-SQLite fallback behavior.
+### Changed
+- Store selection now supports `AIMTP_STORE=sqlite|redis` while keeping `AIMTP_MAILBOX_STORE` as a compatible alias.
+- Relay gracefully falls back to SQLite when Redis is unavailable.
+
 ## [v0.1.13]
 ### Added
 - Minimal CORS support for relay browser demo requests, including OPTIONS preflight on `/aimtp`, `/aimtp/peek`, and `/aimtp/poll`.
