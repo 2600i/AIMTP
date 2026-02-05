@@ -259,6 +259,7 @@ function validateEnvelope(envelope) {
     if (!isPlainObject(envelope.signature)) {
       pushError(errors, "signature", "signature must be an object");
     } else {
+      // Signature validation here is structural only; cryptographic verification is out of scope.
       if (typeof envelope.signature.key_id !== "string" || envelope.signature.key_id.trim() === "") {
         pushError(errors, "signature.key_id", "key_id must be a non-empty string");
       }

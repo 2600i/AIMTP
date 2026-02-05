@@ -216,6 +216,7 @@ function generateLeaseId(): string {
 }
 
 function computeBackoffMs(attempts: number, baseMs: number, maxMs: number): number {
+  // Exponential backoff for retry scheduling (attempt 1 => baseMs).
   const exponent = Math.max(0, attempts - 1);
   const raw = baseMs * Math.pow(2, exponent);
   return Math.min(maxMs, Math.max(0, Math.floor(raw)));
@@ -355,6 +356,7 @@ export class InMemoryMailboxStore implements MailboxStore {
       return [];
     }
     const now = this.now();
+    // Requeue leases that expired without acknowledgement.
     this.requeueExpiredLeases(mailbox, now);
     this.purgeExpired(mailbox, now);
 
@@ -370,6 +372,7 @@ export class InMemoryMailboxStore implements MailboxStore {
         i += 1;
         continue;
       }
+      // Move to dead-letter once retry budget is exhausted.
       if (entry.attempts >= this.maxAttempts) {
         this.moveToDeadLetter(mailbox, entry, "max_retries_exceeded");
         mailbox.queue.splice(i, 1);
@@ -420,7 +423,9 @@ export class InMemoryMailboxStore implements MailboxStore {
       mailbox.queue.splice(index, 1);
     }
     if (mailbox.queue.length === 0) {
-      this.mailboxes.delete(recipient);
+      if (mailbox.deadLetters.length === 0) {
+        this.mailboxes.delete(recipient);
+      }
     } else {
       mailbox.lastActivity = now;
     }
@@ -444,6 +449,7 @@ export class InMemoryMailboxStore implements MailboxStore {
     entry.status = "pending";
     entry.leaseId = null;
     entry.leaseUntil = 0;
+    // Requeue with backoff or move to dead-letter when retries are exhausted.
     if (entry.attempts >= this.maxAttempts) {
       this.moveToDeadLetter(mailbox, entry, reason);
       const index = mailbox.queue.indexOf(entry);
@@ -497,6 +503,7 @@ export class InMemoryMailboxStore implements MailboxStore {
   }
 
   private requeueExpiredLeases(mailbox: RecipientMailbox, now: number): void {
+    // Convert expired leases back into pending messages with backoff.
     const kept: MailboxEntry[] = [];
     mailbox.queue.forEach((entry) => {
       if (entry.status !== "leased") {
@@ -985,6 +992,7 @@ export class SQLiteMailboxStore implements MailboxStore {
   }
 
   private requeueExpiredLeasesInternal(now: number): void {
+    // SQLite: move expired leases back to pending or dead-letter them.
     const expired = this.selectExpiredLeasesStatement.all(now);
     expired.forEach((row) => {
       const id = Number(row.id);
@@ -1508,6 +1516,7 @@ export class RedisMailboxStore implements MailboxStore {
   }
 
   private requeueExpiredLeasesForRecipient(recipient: string, now: number): void {
+    // Redis: move expired leases back to pending or dead-letter them.
     const leaseIds = this.readList([
       "ZRANGEBYSCORE",
       this.leaseKey(recipient),
