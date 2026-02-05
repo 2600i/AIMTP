@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/sdk.test.js && node tests/runtime-relay.test.js",
+    "test": "node tests/sdk.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js",
     "build": "tsc -p tsconfig.json",
     "demo": "npm run build && node dist/runtime/demo-run.js",
     "demo:web": "node examples/web-inbox/server.js",
@@ -29,7 +29,8 @@
   },
   "dependencies": {
     "ajv": "^8.17.1",
-    "ajv-formats": "^2.1.1"
+    "ajv-formats": "^2.1.1",
+    "better-sqlite3": "^12.6.2"
   },
   "devDependencies": {
     "@types/node": "^20.11.0",

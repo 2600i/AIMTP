@@ -1,5 +1,5 @@
 import * as http from "http";
-import { Mailbox } from "./mailbox";
+import { createMailboxStore, parseMailboxStoreType, MailboxStore } from "./mailbox";
 
 type AuthStatus = "ok" | "missing" | "invalid";
 
@@ -84,6 +84,17 @@ function parseEnvInt(value: string | undefined, fallback: number): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) {
     return fallback;
+  }
+  return parsed;
+}
+
+function parseOptionalEnvInt(value: string | undefined): number | undefined {
+  if (!value || value.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return undefined;
   }
   return parsed;
 }
@@ -393,7 +404,56 @@ const authConfig = buildAuthConfig(apiKey, recipientKeys);
 const corsOrigins = parseCorsOrigins(process.env.AIMTP_CORS_ORIGINS);
 const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
 const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
-const mailbox = new Mailbox({ logger: console });
+const mailboxStoreType = parseMailboxStoreType(
+  process.env.AIMTP_STORE || process.env.AIMTP_MAILBOX_STORE
+);
+const mailboxSqlitePathRaw = process.env.AIMTP_MAILBOX_SQLITE_PATH?.trim();
+const mailboxSqlitePath =
+  mailboxSqlitePathRaw && mailboxSqlitePathRaw.length > 0 ? mailboxSqlitePathRaw : undefined;
+const mailboxTtlMs = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_TTL_MS);
+const mailboxMaxQueueLength = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_MAX_QUEUE_LENGTH);
+const mailboxMaxRecipients = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_MAX_RECIPIENTS);
+const mailboxCleanupIntervalMs = parseOptionalEnvInt(
+  process.env.AIMTP_MAILBOX_CLEANUP_INTERVAL_MS
+);
+const redisUrl = process.env.AIMTP_REDIS_URL?.trim();
+const redisHost = process.env.AIMTP_REDIS_HOST?.trim();
+const redisPort = parseOptionalEnvInt(process.env.AIMTP_REDIS_PORT);
+const redisDb = parseOptionalEnvInt(process.env.AIMTP_REDIS_DB);
+const redisUsername = process.env.AIMTP_REDIS_USERNAME?.trim();
+const redisPassword = process.env.AIMTP_REDIS_PASSWORD?.trim();
+const redisKeyPrefix = process.env.AIMTP_REDIS_KEY_PREFIX?.trim();
+const redisCliPath = process.env.AIMTP_REDIS_CLI_PATH?.trim();
+const redisCommandTimeoutMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_TIMEOUT_MS);
+const mailbox: MailboxStore = createMailboxStore({
+  type: mailboxStoreType,
+  sqlitePath: mailboxSqlitePath,
+  ttlMs: mailboxTtlMs,
+  maxQueueLength: mailboxMaxQueueLength,
+  maxRecipients: mailboxMaxRecipients,
+  redisUrl,
+  redisHost,
+  redisPort,
+  redisDb,
+  redisUsername,
+  redisPassword,
+  redisKeyPrefix,
+  redisCliPath,
+  redisCommandTimeoutMs,
+  logger: console
+});
+let cleanupTimer: NodeJS.Timeout | null = null;
+if (mailboxCleanupIntervalMs && mailboxCleanupIntervalMs > 0 && mailbox.cleanupExpired) {
+  cleanupTimer = setInterval(() => {
+    try {
+      mailbox.cleanupExpired?.();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.log(`mailbox_cleanup_failed error=${message}`);
+    }
+  }, mailboxCleanupIntervalMs);
+  cleanupTimer.unref();
+}
 
 if (recipientAllowlist.enabled) {
   console.log(
@@ -680,6 +740,13 @@ function shutdown(reason: string) {
   }
   shutdownInProgress = true;
   console.log(JSON.stringify({ event: "shutdown", reason }));
+  if (cleanupTimer) {
+    clearInterval(cleanupTimer);
+    cleanupTimer = null;
+  }
+  if (typeof mailbox.close === "function") {
+    mailbox.close();
+  }
   server.close(() => {
     process.exit(0);
   });

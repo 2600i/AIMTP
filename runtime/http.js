@@ -2,7 +2,7 @@
 
 const http = require("http");
 const { RelayError } = require("./relay");
-const { Mailbox } = require("./mailbox");
+const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
 const { validateEnvelope } = require("./validation");
 const packageJson = require("../package.json");
 
@@ -73,6 +73,89 @@ function parseEnvInt(value, fallback) {
     return fallback;
   }
   return parsed;
+}
+
+function parseOptionalEnvInt(value, fallback) {
+  if (typeof value !== "string" || value.trim() === "") {
+    return fallback;
+  }
+  return parseEnvInt(value, fallback);
+}
+
+function parseMailboxStoreOptions(options) {
+  const storeEnv =
+    process.env.AIMTP_STORE ||
+    process.env.AIMTP_MAILBOX_STORE;
+  const storeType = parseMailboxStoreType(
+    options.mailboxStoreType || storeEnv
+  );
+  const sqlitePath =
+    options.mailboxSqlitePath ||
+    (process.env.AIMTP_MAILBOX_SQLITE_PATH && process.env.AIMTP_MAILBOX_SQLITE_PATH.trim());
+  const ttlMs =
+    typeof options.mailboxTtlMs === "number"
+      ? options.mailboxTtlMs
+      : parseOptionalEnvInt(process.env.AIMTP_MAILBOX_TTL_MS, undefined);
+  const maxQueueLength =
+    typeof options.mailboxMaxQueueLength === "number"
+      ? options.mailboxMaxQueueLength
+      : parseOptionalEnvInt(process.env.AIMTP_MAILBOX_MAX_QUEUE_LENGTH, undefined);
+  const maxRecipients =
+    typeof options.mailboxMaxRecipients === "number"
+      ? options.mailboxMaxRecipients
+      : parseOptionalEnvInt(process.env.AIMTP_MAILBOX_MAX_RECIPIENTS, undefined);
+  const cleanupIntervalMs =
+    typeof options.mailboxCleanupIntervalMs === "number"
+      ? options.mailboxCleanupIntervalMs
+      : parseOptionalEnvInt(process.env.AIMTP_MAILBOX_CLEANUP_INTERVAL_MS, 0);
+  const redisUrl =
+    options.redisUrl ||
+    (process.env.AIMTP_REDIS_URL && process.env.AIMTP_REDIS_URL.trim());
+  const redisHost =
+    options.redisHost ||
+    (process.env.AIMTP_REDIS_HOST && process.env.AIMTP_REDIS_HOST.trim());
+  const redisPort =
+    typeof options.redisPort === "number"
+      ? options.redisPort
+      : parseOptionalEnvInt(process.env.AIMTP_REDIS_PORT, undefined);
+  const redisDb =
+    typeof options.redisDb === "number"
+      ? options.redisDb
+      : parseOptionalEnvInt(process.env.AIMTP_REDIS_DB, undefined);
+  const redisUsername =
+    options.redisUsername ||
+    (process.env.AIMTP_REDIS_USERNAME && process.env.AIMTP_REDIS_USERNAME.trim());
+  const redisPassword =
+    options.redisPassword ||
+    (process.env.AIMTP_REDIS_PASSWORD && process.env.AIMTP_REDIS_PASSWORD.trim());
+  const redisKeyPrefix =
+    options.redisKeyPrefix ||
+    (process.env.AIMTP_REDIS_KEY_PREFIX && process.env.AIMTP_REDIS_KEY_PREFIX.trim());
+  const redisCliPath =
+    options.redisCliPath ||
+    (process.env.AIMTP_REDIS_CLI_PATH && process.env.AIMTP_REDIS_CLI_PATH.trim());
+  const redisCommandTimeoutMs =
+    typeof options.redisCommandTimeoutMs === "number"
+      ? options.redisCommandTimeoutMs
+      : parseOptionalEnvInt(process.env.AIMTP_REDIS_TIMEOUT_MS, undefined);
+
+  return {
+    storeType,
+    sqlitePath,
+    ttlMs,
+    maxQueueLength,
+    maxRecipients,
+    cleanupIntervalMs,
+    redisUrl,
+    redisHost,
+    redisPort,
+    redisDb,
+    redisUsername,
+    redisPassword,
+    redisKeyPrefix,
+    redisCliPath,
+    redisCommandTimeoutMs
+  };
 }
 
 function parseAllowlist(value) {
@@ -339,8 +422,29 @@ function createWebhookRelayServer(relay, options = {}) {
   const corsOrigins = parseCorsOrigins(process.env.AIMTP_CORS_ORIGINS);
   const recipientAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_RECIPIENTS);
   const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
+  const mailboxStoreOptions = parseMailboxStoreOptions(options);
   const mailbox =
-    options.mailbox || new Mailbox({ now: options.now, logger: options.logger || console });
+    options.mailbox ||
+    options.mailboxStore ||
+    createMailboxStore({
+      type: mailboxStoreOptions.storeType,
+      sqlitePath: mailboxStoreOptions.sqlitePath,
+      ttlMs: mailboxStoreOptions.ttlMs,
+      maxQueueLength: mailboxStoreOptions.maxQueueLength,
+      maxRecipients: mailboxStoreOptions.maxRecipients,
+      redisUrl: mailboxStoreOptions.redisUrl,
+      redisHost: mailboxStoreOptions.redisHost,
+      redisPort: mailboxStoreOptions.redisPort,
+      redisDb: mailboxStoreOptions.redisDb,
+      redisUsername: mailboxStoreOptions.redisUsername,
+      redisPassword: mailboxStoreOptions.redisPassword,
+      redisKeyPrefix: mailboxStoreOptions.redisKeyPrefix,
+      redisCliPath: mailboxStoreOptions.redisCliPath,
+      redisCommandTimeoutMs: mailboxStoreOptions.redisCommandTimeoutMs,
+      now: options.now,
+      logger: options.logger || console
+    });
+  let cleanupTimer = null;
   const defaultHandler = (envelope, context) => ({
     __aimtpAccepted: true,
     status: "accepted",
@@ -641,7 +745,32 @@ function createWebhookRelayServer(relay, options = {}) {
   });
 
   trackedServers.add(server);
+  if (
+    mailboxStoreOptions.cleanupIntervalMs > 0 &&
+    mailbox &&
+    typeof mailbox.cleanupExpired === "function"
+  ) {
+    cleanupTimer = setInterval(() => {
+      try {
+        mailbox.cleanupExpired();
+      } catch (err) {
+        if (options.logger && typeof options.logger.log === "function") {
+          options.logger.log(`mailbox_cleanup_failed error=${err && err.message ? err.message : err}`);
+        }
+      }
+    }, mailboxStoreOptions.cleanupIntervalMs);
+    if (typeof cleanupTimer.unref === "function") {
+      cleanupTimer.unref();
+    }
+  }
   server.on("close", () => {
+    if (cleanupTimer) {
+      clearInterval(cleanupTimer);
+      cleanupTimer = null;
+    }
+    if (mailbox && typeof mailbox.close === "function") {
+      mailbox.close();
+    }
     trackedServers.delete(server);
   });
   registerShutdownHandlers();

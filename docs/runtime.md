@@ -2,7 +2,7 @@
 
 ## Mailbox Relay Overview
 The relay is a minimal HTTP server that accepts AIMTP envelopes over POST,
-validates them, and enqueues them into an in-memory mailbox per recipient.
+validates them, and enqueues them into a mailbox store per recipient.
 Recipients fetch messages via polling endpoints. The relay does not modify
 AIMTP envelopes or validation rules.
 
@@ -21,6 +21,19 @@ node dist/runtime/relay.js
 - `AIMTP_RECIPIENT_KEYS` (optional per-recipient keys: `agent-a:key-a,agent-b:key-b`)
 - `AIMTP_ALLOWED_RECIPIENTS` (optional, comma-separated allowlist)
 - `AIMTP_ALLOWED_SENDERS` (optional, comma-separated allowlist)
+- `AIMTP_STORE` (`sqlite` default, `redis` optional)
+- `AIMTP_MAILBOX_STORE` (legacy alias; still accepted)
+- `AIMTP_MAILBOX_SQLITE_PATH` (default `runtime/aimtp-mailbox.sqlite`)
+- `AIMTP_MAILBOX_TTL_MS` (optional, defaults to `600000`)
+- `AIMTP_MAILBOX_MAX_QUEUE_LENGTH` (optional, defaults to `100`)
+- `AIMTP_MAILBOX_MAX_RECIPIENTS` (optional, defaults to `1000`)
+- `AIMTP_MAILBOX_CLEANUP_INTERVAL_MS` (optional periodic TTL cleanup job; disabled when unset)
+- `AIMTP_REDIS_URL` (optional Redis URL)
+- `AIMTP_REDIS_HOST` / `AIMTP_REDIS_PORT` / `AIMTP_REDIS_DB` (optional discrete Redis settings)
+- `AIMTP_REDIS_USERNAME` / `AIMTP_REDIS_PASSWORD` (optional Redis auth)
+- `AIMTP_REDIS_KEY_PREFIX` (optional key prefix; default `aimtp:mailbox:`)
+- `AIMTP_REDIS_CLI_PATH` (optional redis-cli path; default `redis-cli`)
+- `AIMTP_REDIS_TIMEOUT_MS` (optional redis command timeout; default `1000`)
 
 ## Auth & Recipient Isolation
 Auth is required for:
@@ -71,7 +84,16 @@ queue (FIFO). When empty, returns `200 []`.
 - Max queue length per recipient: `100`. If exceeded, oldest messages are
   dropped first and a single-line metric is logged:
   `mailbox_drop_oldest recipient=<id> dropped=<k> queue_depth=<n>`
-- Storage is in-memory only. Persistence is a future enhancement.
+- Max recipients tracked: `1000`. Least-recently-active recipients are evicted
+  if the limit is exceeded.
+- Default storage is SQLite, so mailbox contents survive process restarts.
+- Set `AIMTP_STORE=redis` to use Redis-backed mailbox lists.
+- If Redis is unavailable, relay gracefully falls back to SQLite and logs:
+  `mailbox_store_fallback from=redis to=sqlite reason=<...>`.
+- Optional cleanup job: set `AIMTP_MAILBOX_CLEANUP_INTERVAL_MS` to run periodic
+  expiry cleanup in the background.
+
+SQLite schema is defined in `docs/mailbox-sqlite-schema.sql`.
 
 ## Recipient & Sender Allowlists
 When `AIMTP_ALLOWED_RECIPIENTS` is set to a non-empty list, incoming envelopes

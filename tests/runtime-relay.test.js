@@ -1,12 +1,37 @@
 "use strict";
 
 const assert = require("assert");
+const fs = require("fs");
 const http = require("http");
+const os = require("os");
+const path = require("path");
 const packageJson = require("../package.json");
 const { WebhookRelay, createWebhookRelayServer, Mailbox } = require("../runtime");
 const { createEnvelope, createMessage, createTaskRequest } = require("../sdk/js");
 
 const ADMIN_KEY = "super-secret";
+
+function hasSQLiteSupport() {
+  try {
+    const sqlite = require("node:sqlite");
+    if (typeof sqlite.DatabaseSync === "function") {
+      return true;
+    }
+  } catch (_err) {
+    // continue
+  }
+
+  try {
+    const betterSqlite3 = require("better-sqlite3");
+    if (typeof betterSqlite3 === "function") {
+      return true;
+    }
+  } catch (_err) {
+    // continue
+  }
+
+  return false;
+}
 
 function authHeaders(key) {
   return { "X-AIMTP-KEY": key };
@@ -212,7 +237,8 @@ async function main() {
       AIMTP_RECIPIENT_KEYS: undefined,
       AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
-      AIMTP_ALLOWED_SENDERS: "agent-a"
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory"
     },
     async () =>
       withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
@@ -392,7 +418,8 @@ async function main() {
       AIMTP_RECIPIENT_KEYS: undefined,
       AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
-      AIMTP_ALLOWED_SENDERS: "agent-a"
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory"
     },
     async () =>
       withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
@@ -412,7 +439,8 @@ async function main() {
       AIMTP_RECIPIENT_KEYS: undefined,
       AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
-      AIMTP_ALLOWED_SENDERS: "agent-a"
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory"
     },
     async () =>
       withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
@@ -432,7 +460,8 @@ async function main() {
       AIMTP_RECIPIENT_KEYS: undefined,
       AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
-      AIMTP_ALLOWED_SENDERS: "agent-a"
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory"
     },
     async () => {
       let now = Date.now();
@@ -473,7 +502,8 @@ async function main() {
       AIMTP_RECIPIENT_KEYS: undefined,
       AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-b",
-      AIMTP_ALLOWED_SENDERS: "agent-a"
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory"
     },
     async () =>
       withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
@@ -506,7 +536,8 @@ async function main() {
       AIMTP_RECIPIENT_KEYS: "agent-a:key-a,agent-b:key-b",
       AIMTP_CORS_ORIGINS: undefined,
       AIMTP_ALLOWED_RECIPIENTS: "agent-a,agent-b",
-      AIMTP_ALLOWED_SENDERS: "agent-a"
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory"
     },
     async () =>
       withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
@@ -539,6 +570,75 @@ async function main() {
         assert.strictEqual(allowedPoll.body[0].id, envelopeA.id);
       })
   );
+
+  if (!hasSQLiteSupport()) {
+    console.log("SKIP: sqlite mailbox persistence test (no sqlite backend available)");
+  } else {
+    const sqlitePath = path.join(
+      os.tmpdir(),
+      `aimtp-mailbox-${Date.now()}-${Math.random().toString(16).slice(2)}.sqlite`
+    );
+
+    try {
+      await withEnv(
+        {
+          AIMTP_RELAY_PATH: undefined,
+          AIMTP_HEALTH_PATH: undefined,
+          AIMTP_READY_PATH: undefined,
+          AIMTP_API_KEY: ADMIN_KEY,
+          AIMTP_RECIPIENT_KEYS: undefined,
+          AIMTP_CORS_ORIGINS: undefined,
+          AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+          AIMTP_ALLOWED_SENDERS: "agent-a",
+          AIMTP_STORE: "sqlite",
+          AIMTP_MAILBOX_SQLITE_PATH: sqlitePath
+        },
+        async () =>
+          withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+            const envelope = buildRequestEnvelope("agent-b", "sqlite-persist");
+            const ok = await postJson(port, "/aimtp", envelope, authHeaders(ADMIN_KEY));
+            assert.strictEqual(ok.status, 202);
+            assert.strictEqual(ok.body.queue_depth, 1);
+          })
+      );
+
+      await withEnv(
+        {
+          AIMTP_RELAY_PATH: undefined,
+          AIMTP_HEALTH_PATH: undefined,
+          AIMTP_READY_PATH: undefined,
+          AIMTP_API_KEY: ADMIN_KEY,
+          AIMTP_RECIPIENT_KEYS: undefined,
+          AIMTP_CORS_ORIGINS: undefined,
+          AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+          AIMTP_ALLOWED_SENDERS: "agent-a",
+          AIMTP_STORE: "sqlite",
+          AIMTP_MAILBOX_SQLITE_PATH: sqlitePath
+        },
+        async () =>
+          withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+            const peek = await getJson(
+              port,
+              "/aimtp/peek?recipient=agent-b",
+              authHeaders(ADMIN_KEY)
+            );
+            assert.strictEqual(peek.status, 200);
+            assert.strictEqual(peek.body.count, 1);
+
+            const poll = await getJson(
+              port,
+              "/aimtp/poll?recipient=agent-b&max=1",
+              authHeaders(ADMIN_KEY)
+            );
+            assert.strictEqual(poll.status, 200);
+            assert.strictEqual(poll.body.length, 1);
+            assert.strictEqual(poll.body[0].id, "env-sqlite-persist");
+          })
+      );
+    } finally {
+      fs.rmSync(sqlitePath, { force: true });
+    }
+  }
 
   console.log("OK: runtime relay test");
 }

@@ -130,8 +130,10 @@ Notes:
   `http://127.0.0.1:8080`.
 - Set `AIMTP_CORS_ORIGINS` (comma-separated origins) to extend allowed browser
   origins.
-- Mailbox is in-memory on the relay; messages expire by TTL and per-recipient
-  queue size is capped.
+- Mailbox storage defaults to SQLite (`runtime/aimtp-mailbox.sqlite`) so queued
+  messages survive relay restarts.
+- Set `AIMTP_STORE=redis` to use Redis-backed mailbox lists.
+- If Redis is unavailable, relay falls back to SQLite automatically.
 
 zsh-safe curl examples (`?` query is quoted):
 ```sh
