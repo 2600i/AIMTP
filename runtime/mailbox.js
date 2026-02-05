@@ -46,6 +46,16 @@ function parsePositiveInt(value, fallback) {
   return Math.floor(value);
 }
 
+function buildRedisDisplayUrl(options) {
+  if (options.redisUrl && options.redisUrl.trim()) {
+    return options.redisUrl.trim();
+  }
+  const host = (options.redisHost && options.redisHost.trim()) || DEFAULT_REDIS_HOST;
+  const port = parsePositiveInt(options.redisPort, DEFAULT_REDIS_PORT);
+  const db = parsePositiveInt(options.redisDb, DEFAULT_REDIS_DB);
+  return `redis://${host}:${port}/${db}`;
+}
+
 function loadSQLiteDatabaseConstructor() {
   try {
     const sqlite = require("node:sqlite");
@@ -722,10 +732,13 @@ function createMailboxStore(options = {}) {
     return new InMemoryMailboxStore(options);
   }
   if (options.type === "redis") {
+    const logger = options.logger || null;
+    if (logger && typeof logger.log === "function") {
+      logger.log(`Connecting to Redis at ${buildRedisDisplayUrl(options)}`);
+    }
     try {
       return new RedisMailboxStore(options);
     } catch (err) {
-      const logger = options.logger || null;
       if (logger && typeof logger.log === "function") {
         const message = err instanceof Error ? err.message : String(err);
         logger.log(`mailbox_store_fallback from=redis to=sqlite reason=${message}`);

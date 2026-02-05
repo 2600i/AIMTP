@@ -113,6 +113,16 @@ function parsePositiveInt(value: number | undefined, fallback: number): number {
   return Math.floor(value);
 }
 
+function buildRedisDisplayUrl(options: RedisMailboxStoreOptions): string {
+  if (options.redisUrl && options.redisUrl.trim()) {
+    return options.redisUrl.trim();
+  }
+  const host = options.redisHost?.trim() || DEFAULT_REDIS_HOST;
+  const port = parsePositiveInt(options.redisPort, DEFAULT_REDIS_PORT);
+  const db = parsePositiveInt(options.redisDb, DEFAULT_REDIS_DB);
+  return `redis://${host}:${port}/${db}`;
+}
+
 function loadSQLiteDatabaseConstructor(): SQLiteDatabaseCtor {
   try {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -837,10 +847,13 @@ export function createMailboxStore(options: CreateMailboxStoreOptions = {}): Mai
   }
 
   if (options.type === "redis") {
+    const logger = options.logger ?? null;
+    if (logger && typeof logger.log === "function") {
+      logger.log(`Connecting to Redis at ${buildRedisDisplayUrl(options)}`);
+    }
     try {
       return new RedisMailboxStore(options);
     } catch (err) {
-      const logger = options.logger ?? null;
       if (logger && typeof logger.log === "function") {
         const message = err instanceof Error ? err.message : String(err);
         logger.log(`mailbox_store_fallback from=redis to=sqlite reason=${message}`);
