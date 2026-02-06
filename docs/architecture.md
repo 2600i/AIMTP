@@ -52,9 +52,11 @@ sequenceDiagram
 - Lock acquisition is bounded by timeout to avoid permanent stalls after instance failures.
 
 ## Authentication and Signatures
-AIMTP envelopes may include an optional `signature` object with `key_id`,
-`signature`, and `alg`. The protocol is chain-agnostic and does not mandate a
-specific blockchain. Verification and key ownership checks are runtime-specific.
+AIMTP envelopes may include an optional chain-agnostic `signature` block
+(`alg`, `kid`, `sig`, optional `created_at`, `expires_at`). The reference
+runtime verifies signatures over canonicalized envelope bytes (top-level
+`signature` removed, stable JSON key order, UTF-8) based on policy mode
+(`off`, `warn`, `enforce`).
 
 ## Protocol Surfaces
 - **Spec**: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.1.md`

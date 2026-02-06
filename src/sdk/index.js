@@ -105,15 +105,48 @@ function validateEnvelope(envelope) {
     if (!isPlainObject(envelope.signature)) {
       errors.push({ path: "signature", message: "signature must be an object" });
     } else {
-      // Signature validation here is structural only; cryptographic verification is out of scope.
-      if (typeof envelope.signature.key_id !== "string" || envelope.signature.key_id.trim() === "") {
-        errors.push({ path: "signature.key_id", message: "key_id must be a non-empty string" });
+      // Signature validation here is structural only; cryptographic verification is runtime policy.
+      const hasKid =
+        (typeof envelope.signature.kid === "string" && envelope.signature.kid.trim() !== "") ||
+        (typeof envelope.signature.key_id === "string" && envelope.signature.key_id.trim() !== "");
+      if (!hasKid) {
+        errors.push({
+          path: "signature.kid",
+          message: "kid (or key_id) must be a non-empty string"
+        });
       }
-      if (typeof envelope.signature.signature !== "string" || envelope.signature.signature.trim() === "") {
-        errors.push({ path: "signature.signature", message: "signature must be a non-empty string" });
+      const hasSig =
+        (typeof envelope.signature.sig === "string" && envelope.signature.sig.trim() !== "") ||
+        (typeof envelope.signature.signature === "string" &&
+          envelope.signature.signature.trim() !== "");
+      if (!hasSig) {
+        errors.push({
+          path: "signature.sig",
+          message: "sig (or signature) must be a non-empty string"
+        });
       }
       if (envelope.signature.alg !== undefined && typeof envelope.signature.alg !== "string") {
         errors.push({ path: "signature.alg", message: "alg must be a string" });
+      }
+      if (
+        envelope.signature.created_at !== undefined &&
+        (typeof envelope.signature.created_at !== "string" ||
+          !RFC3339_REGEX.test(envelope.signature.created_at))
+      ) {
+        errors.push({
+          path: "signature.created_at",
+          message: "created_at must be RFC3339 date-time"
+        });
+      }
+      if (
+        envelope.signature.expires_at !== undefined &&
+        (typeof envelope.signature.expires_at !== "string" ||
+          !RFC3339_REGEX.test(envelope.signature.expires_at))
+      ) {
+        errors.push({
+          path: "signature.expires_at",
+          message: "expires_at must be RFC3339 date-time"
+        });
       }
     }
   }

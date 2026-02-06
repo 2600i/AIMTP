@@ -19,6 +19,20 @@ type EnvelopeLog = {
 
 type ValidationError = { path: string; message: string };
 
+type SignatureResult = {
+  ok?: boolean;
+  httpStatus?: number;
+  code?: string;
+  message?: string;
+  details?: unknown;
+};
+
+type SignatureDecision = {
+  allowed: boolean;
+  warning?: SignatureResult;
+  error?: SignatureResult;
+};
+
 type RelayErrorLike = Error & { code?: string; details?: unknown };
 
 type Allowlist = {
@@ -58,6 +72,26 @@ const { WebhookRelay, RelayError } = require("../../runtime/relay") as {
 
 const { validateEnvelope } = require("../../runtime/validation") as {
   validateEnvelope: (envelope: unknown) => ValidationError[];
+};
+
+const {
+  createSignatureTrustConfig,
+  evaluateEnvelopeSignaturePolicy
+} = require("../../runtime/signature") as {
+  createSignatureTrustConfig: (options?: {
+    policy?: string;
+    trustedKeys?: string;
+    trustedKeysFile?: string;
+    clockSkewSec?: number;
+    logger?: { log: (message: string) => void } | null;
+  }) => {
+    policy: string;
+    trustedKeys: Map<string, string>;
+  };
+  evaluateEnvelopeSignaturePolicy: (
+    envelope: unknown,
+    config: unknown
+  ) => SignatureDecision;
 };
 
 const { createEnvelope, createMessage, createTaskResponse } = require("../../sdk/js") as {
@@ -517,6 +551,16 @@ const relayInstanceId =
   relayInstanceIdRaw && relayInstanceIdRaw.length > 0
     ? relayInstanceIdRaw
     : `relay-${process.pid}`;
+const signatureClockSkewSec = parseOptionalNonNegativeEnvInt(
+  process.env.AIMTP_SIGNATURE_CLOCK_SKEW_SEC
+);
+const signatureConfig = createSignatureTrustConfig({
+  policy: process.env.AIMTP_SIGNATURE_POLICY,
+  trustedKeys: process.env.AIMTP_TRUSTED_KEYS,
+  trustedKeysFile: process.env.AIMTP_TRUSTED_KEYS_FILE,
+  clockSkewSec: signatureClockSkewSec,
+  logger: console
+});
 const mailbox: MailboxStore = createMailboxStore({
   type: mailboxStoreType,
   sqlitePath: mailboxSqlitePath,
@@ -561,7 +605,9 @@ console.log(
     event: "allowlist_state",
     enabled: recipientAllowlist.enabled,
     key_count: recipientKeys.keyToRecipients.size,
-    relay_instance_id: relayInstanceId
+    relay_instance_id: relayInstanceId,
+    signature_policy: signatureConfig.policy,
+    trusted_key_count: signatureConfig.trustedKeys.size
   })
 );
 
@@ -973,6 +1019,34 @@ const server = http.createServer(async (req, res) => {
       errors: validationErrors
     });
     logRequest(400);
+    return;
+  }
+
+  const signatureDecision = evaluateEnvelopeSignaturePolicy(payload, signatureConfig);
+  if (signatureDecision.warning) {
+    console.log(
+      JSON.stringify({
+        event: "signature_warning",
+        code: signatureDecision.warning.code || "signature_invalid",
+        message: signatureDecision.warning.message || "Signature validation warning",
+        details: signatureDecision.warning.details,
+        envelope_id:
+          payload && typeof (payload as { id?: unknown }).id === "string"
+            ? (payload as { id: string }).id
+            : "-"
+      })
+    );
+  }
+  if (!signatureDecision.allowed && signatureDecision.error) {
+    const status = signatureDecision.error.httpStatus || 403;
+    sendError(
+      res,
+      status,
+      signatureDecision.error.code || "signature_invalid",
+      signatureDecision.error.message || "Signature validation failed",
+      signatureDecision.error.details
+    );
+    logRequest(status);
     return;
   }
 

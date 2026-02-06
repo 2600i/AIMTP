@@ -99,10 +99,10 @@ For full request/response schemas and error codes, see
 ## Authentication and Signatures
 
 AIMTP envelopes can include an optional `signature` object with
-`key_id`, `signature`, and `alg` fields. The protocol is chain-agnostic and does
-not mandate a specific blockchain. Validation only checks structural shape; any
-cryptographic verification or key ownership checks are implemented by your
-runtime or gateway.
+`alg`, `kid`, and `sig` fields (optional `created_at`, `expires_at`). Backward-
+compatible aliases `key_id` and `signature` are also accepted. The protocol is
+chain-agnostic and does not mandate a specific blockchain. Signature validation
+behavior is runtime policy-driven (`off`, `warn`, `enforce`).
 
 ## System Architecture
 

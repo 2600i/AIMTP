@@ -46,6 +46,10 @@ node dist/runtime/relay.js
 - `AIMTP_REDIS_LOCK_ACQUIRE_TIMEOUT_MS` (default `5000`)
 - `AIMTP_REDIS_LOCK_RETRY_DELAY_MS` (default `20`)
 - `AIMTP_REDIS_LEASE_RESULT_TTL_MS` (default `300000`)
+- `AIMTP_SIGNATURE_POLICY` (`off` default, `warn`, or `enforce`)
+- `AIMTP_TRUSTED_KEYS` (comma-separated `kid=public_key`)
+- `AIMTP_TRUSTED_KEYS_FILE` (optional file with trusted key entries)
+- `AIMTP_SIGNATURE_CLOCK_SKEW_SEC` (default `0`)
 
 ### Recommended Redis Coordination Defaults
 | Variable | Recommended default | Notes |
@@ -70,9 +74,24 @@ Accepted headers:
 - `X-AIMTP-KEY: <key>`
 
 AIMTP envelopes may include an optional `signature` object. The protocol is
-chain-agnostic and does not mandate a specific blockchain. The relay validates
-only the signature **shape** (`key_id`, `signature`, `alg`); any cryptographic
-verification or key ownership checks are handled by your runtime or gateway.
+chain-agnostic and does not mandate a specific blockchain.
+
+Supported signature fields:
+- `alg`, `kid`, `sig`, optional `created_at`, optional `expires_at`
+- Backward-compatible aliases: `key_id` for `kid`, `signature` for `sig`
+- Trusted key values are loaded from `AIMTP_TRUSTED_KEYS` / `AIMTP_TRUSTED_KEYS_FILE`
+  and may be PEM public keys or base64/hex SPKI DER bytes.
+
+Canonical signing payload:
+- top-level `signature` removed from envelope
+- stable JSON key ordering (lexicographic at every object level)
+- array order preserved
+- UTF-8 bytes, no extra whitespace
+
+Verification policy behavior:
+- `off`: no signature verification.
+- `warn`: verify and log failures, still accept envelope.
+- `enforce`: reject envelope on missing/invalid/untrusted/expired signature.
 
 Exempt endpoints:
 - `GET /healthz`
@@ -109,13 +128,28 @@ Request:
   "timestamp": "2026-02-05T00:00:00Z",
   "sender": "agent-a",
   "recipient": "agent-b",
-  "message": { "id": "msg-1", "role": "user", "content": "ping" }
+  "message": { "id": "msg-1", "role": "user", "content": "ping" },
+  "signature": {
+    "alg": "ed25519",
+    "kid": "agent-a-key-1",
+    "sig": "<base64-signature>",
+    "created_at": "2026-02-06T00:00:00Z",
+    "expires_at": "2026-02-06T00:05:00Z"
+  }
 }
 ```
 
 Response `202`:
 ```json
 { "status": "accepted", "id": "<envelope.id>", "recipient": "<recipient>", "queued": true, "queue_depth": 2 }
+```
+
+Example (`warn` policy, request accepted even if signature fails verification):
+```sh
+curl -X POST "http://127.0.0.1:8787/aimtp" \
+  -H "Content-Type: application/json" \
+  -H "X-AIMTP-KEY: dev-key" \
+  -d '{"spec":"aimtp/0.1","id":"env-1","timestamp":"2026-02-06T00:00:00Z","sender":"agent-a","recipient":"agent-b","message":{"id":"msg-1","role":"user","content":"ping"},"signature":{"alg":"ed25519","kid":"agent-a-key-1","sig":"<base64-signature>"}}'
 ```
 
 ### `POST /aimtp/mailbox`
@@ -256,15 +290,25 @@ npm test
 - **Lease expired** (`409 lease_expired`): poll again and use the new lease id.
 - **Unknown recipient** (`404 unknown_recipient`): check allowlists and spelling.
 - **Unauthorized** (`401/403`): verify API keys and recipient key mapping.
+- **Signature rejected**: verify `AIMTP_SIGNATURE_POLICY`, trusted key source,
+  canonical payload consistency, and envelope `signature` fields.
 - **Port in use**: set `PORT` to an available port.
 
 ## Error Responses
 - `400` `invalid_schema`
 - `400` `invalid_request`
 - `400` `missing_recipient`
+- `400` `signature_invalid`
+- `400` `signature_unsupported_alg`
 - `401` `unauthorized`
+- `401` `signature_required`
+- `401` `signature_expired`
+- `401` `signature_not_yet_valid`
 - `403` `forbidden`
 - `403` `unknown_sender`
+- `403` `signature_untrusted_key`
+- `403` `signature_verification_failed`
+- `500` `signature_key_error`
 - `413` `payload_too_large`
 - `404` `unknown_recipient`
 - `404` `unknown_lease`

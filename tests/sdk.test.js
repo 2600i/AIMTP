@@ -32,6 +32,8 @@ function assertInvalid(name) {
 function main() {
   assertValid("valid-envelope.json");
   assertValid("valid-envelope-attachment.json");
+  assertValid("valid-envelope-signature.json");
+  assertValid("valid-envelope-signature-legacy.json");
 
   assertInvalid("invalid-missing-spec.json");
   assertInvalid("invalid-bad-role.json");

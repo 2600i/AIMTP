@@ -28,9 +28,13 @@ export type AIMTPContent =
   | Array<unknown>;
 
 export interface AIMTPSignature {
-  key_id: string;
-  signature: string;
   alg?: string;
+  kid?: string;
+  sig?: string;
+  key_id?: string;
+  signature?: string;
+  created_at?: string;
+  expires_at?: string;
 }
 
 export interface AIMTPEnvelope<TMessage = AIMTPMessage> {

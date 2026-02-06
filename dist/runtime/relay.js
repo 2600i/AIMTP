@@ -37,6 +37,7 @@ const http = __importStar(require("http"));
 const mailbox_1 = require("./mailbox");
 const { WebhookRelay, RelayError } = require("../../runtime/relay");
 const { validateEnvelope } = require("../../runtime/validation");
+const { createSignatureTrustConfig, evaluateEnvelopeSignaturePolicy } = require("../../runtime/signature");
 const { createEnvelope, createMessage, createTaskResponse } = require("../../sdk/js");
 const packageJson = require("../../package.json");
 const DEFAULT_PORT = 8787;
@@ -434,6 +435,14 @@ const relayInstanceIdRaw = process.env.AIMTP_RELAY_INSTANCE_ID?.trim();
 const relayInstanceId = relayInstanceIdRaw && relayInstanceIdRaw.length > 0
     ? relayInstanceIdRaw
     : `relay-${process.pid}`;
+const signatureClockSkewSec = parseOptionalNonNegativeEnvInt(process.env.AIMTP_SIGNATURE_CLOCK_SKEW_SEC);
+const signatureConfig = createSignatureTrustConfig({
+    policy: process.env.AIMTP_SIGNATURE_POLICY,
+    trustedKeys: process.env.AIMTP_TRUSTED_KEYS,
+    trustedKeysFile: process.env.AIMTP_TRUSTED_KEYS_FILE,
+    clockSkewSec: signatureClockSkewSec,
+    logger: console
+});
 const mailbox = (0, mailbox_1.createMailboxStore)({
     type: mailboxStoreType,
     sqlitePath: mailboxSqlitePath,
@@ -477,7 +486,9 @@ console.log(JSON.stringify({
     event: "allowlist_state",
     enabled: recipientAllowlist.enabled,
     key_count: recipientKeys.keyToRecipients.size,
-    relay_instance_id: relayInstanceId
+    relay_instance_id: relayInstanceId,
+    signature_policy: signatureConfig.policy,
+    trusted_key_count: signatureConfig.trustedKeys.size
 }));
 if (recipientAllowlist.enabled) {
     console.log(JSON.stringify({
@@ -861,6 +872,24 @@ const server = http.createServer(async (req, res) => {
             errors: validationErrors
         });
         logRequest(400);
+        return;
+    }
+    const signatureDecision = evaluateEnvelopeSignaturePolicy(payload, signatureConfig);
+    if (signatureDecision.warning) {
+        console.log(JSON.stringify({
+            event: "signature_warning",
+            code: signatureDecision.warning.code || "signature_invalid",
+            message: signatureDecision.warning.message || "Signature validation warning",
+            details: signatureDecision.warning.details,
+            envelope_id: payload && typeof payload.id === "string"
+                ? payload.id
+                : "-"
+        }));
+    }
+    if (!signatureDecision.allowed && signatureDecision.error) {
+        const status = signatureDecision.error.httpStatus || 403;
+        sendError(res, status, signatureDecision.error.code || "signature_invalid", signatureDecision.error.message || "Signature validation failed", signatureDecision.error.details);
+        logRequest(status);
         return;
     }
     const recipient = payload && typeof payload.recipient === "string"

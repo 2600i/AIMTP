@@ -259,18 +259,44 @@ function validateEnvelope(envelope) {
     if (!isPlainObject(envelope.signature)) {
       pushError(errors, "signature", "signature must be an object");
     } else {
-      // Signature validation here is structural only; cryptographic verification is out of scope.
-      if (typeof envelope.signature.key_id !== "string" || envelope.signature.key_id.trim() === "") {
-        pushError(errors, "signature.key_id", "key_id must be a non-empty string");
+      // Signature validation here is structural only; cryptographic verification is runtime policy.
+      const hasKid =
+        (typeof envelope.signature.kid === "string" && envelope.signature.kid.trim() !== "") ||
+        (typeof envelope.signature.key_id === "string" && envelope.signature.key_id.trim() !== "");
+      if (!hasKid) {
+        pushError(
+          errors,
+          "signature.kid",
+          "kid (or key_id) must be a non-empty string"
+        );
       }
-      if (
-        typeof envelope.signature.signature !== "string" ||
-        envelope.signature.signature.trim() === ""
-      ) {
-        pushError(errors, "signature.signature", "signature must be a non-empty string");
+      const hasSig =
+        (typeof envelope.signature.sig === "string" && envelope.signature.sig.trim() !== "") ||
+        (typeof envelope.signature.signature === "string" &&
+          envelope.signature.signature.trim() !== "");
+      if (!hasSig) {
+        pushError(
+          errors,
+          "signature.sig",
+          "sig (or signature) must be a non-empty string"
+        );
       }
       if (envelope.signature.alg !== undefined && typeof envelope.signature.alg !== "string") {
         pushError(errors, "signature.alg", "alg must be a string");
+      }
+      if (
+        envelope.signature.created_at !== undefined &&
+        (typeof envelope.signature.created_at !== "string" ||
+          !RFC3339_REGEX.test(envelope.signature.created_at))
+      ) {
+        pushError(errors, "signature.created_at", "created_at must be RFC3339 date-time");
+      }
+      if (
+        envelope.signature.expires_at !== undefined &&
+        (typeof envelope.signature.expires_at !== "string" ||
+          !RFC3339_REGEX.test(envelope.signature.expires_at))
+      ) {
+        pushError(errors, "signature.expires_at", "expires_at must be RFC3339 date-time");
       }
     }
   }

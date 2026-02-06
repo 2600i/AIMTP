@@ -30,6 +30,8 @@ Implement the following structures (or their equivalent) exactly, keeping them t
 Notes:
 - Keep `intent` for routing/interpretation (e.g., `task.request`, `task.response`).
 - Preserve unknown fields for forward compatibility.
+- Recommended signature block fields: `alg`, `kid`, `sig` (optional `created_at`, `expires_at`).
+- Backward-compatible aliases: `key_id` for `kid`, `signature` for `sig`.
 
 ## 5) Message Rules (v0.1)
 **Required:**

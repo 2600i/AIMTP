@@ -87,12 +87,29 @@
     },
     "signature": {
       "type": "object",
-      "required": ["key_id", "signature"],
       "additionalProperties": true,
+      "allOf": [
+        {
+          "anyOf": [
+            { "required": ["kid"] },
+            { "required": ["key_id"] }
+          ]
+        },
+        {
+          "anyOf": [
+            { "required": ["sig"] },
+            { "required": ["signature"] }
+          ]
+        }
+      ],
       "properties": {
+        "kid": {"type": "string", "minLength": 1},
+        "sig": {"type": "string", "minLength": 1},
         "key_id": {"type": "string", "minLength": 1},
         "signature": {"type": "string", "minLength": 1},
-        "alg": {"type": "string"}
+        "alg": {"type": "string"},
+        "created_at": {"type": "string", "format": "date-time"},
+        "expires_at": {"type": "string", "format": "date-time"}
       }
     },
     "metadata": {

@@ -104,12 +104,27 @@ An attachment is a metadata reference to binary content.
 - Transports without structured errors SHOULD surface an equivalent failure.
 
 ## Security
-- This spec does not mandate a signature format or algorithm.
-- If `signature` is present, it SHOULD include:
-  - `key_id`: Identifier for the signing key.
-  - `signature`: Signature bytes encoded as a string (implementation-defined).
-  - `alg`: Optional algorithm identifier.
+- The signature model is chain-agnostic and does not reference any blockchain.
+- If `signature` is present, implementations SHOULD use this signature block:
+  - `alg`: Signature algorithm identifier (e.g., `ed25519`, `secp256k1`).
+  - `kid`: Signing key identifier.
+  - `sig`: Signature bytes encoded as base64.
+  - `created_at`: Optional RFC3339 signing timestamp.
+  - `expires_at`: Optional RFC3339 expiration timestamp.
+- Backward compatibility aliases are allowed:
+  - `key_id` as alias for `kid`
+  - `signature` as alias for `sig`
 - Implementations SHOULD validate signatures when a trust policy exists.
+
+### Canonical Signing Payload
+- The signing payload is the full envelope JSON object with the top-level
+  `signature` field removed.
+- Serialization MUST be deterministic:
+  - UTF-8 encoding
+  - JSON object keys sorted lexicographically at every level
+  - Arrays preserved in existing order
+  - No insignificant whitespace
+- Signature verification MUST run against these canonical bytes.
 
 ## Runtime Delivery Profile (Non-normative)
 The AIMTP relay runtime provides **at-least-once** delivery when mailbox polling
@@ -125,6 +140,18 @@ Recommended behavior for runtimes:
 Implementations MAY expose mailbox-specific HTTP endpoints to support leasing,
 acknowledgement, failure, retries, and dead-letter inspection. These endpoints
 are outside the core AIMTP envelope schema and may vary by deployment.
+
+## Runtime Trust Policy (Non-normative)
+Reference runtime policy modes:
+- `off`: signature verification disabled.
+- `warn`: verification runs; failures are logged but envelopes are accepted.
+- `enforce`: verification failures reject the envelope.
+
+Reference runtime environment variables:
+- `AIMTP_SIGNATURE_POLICY=off|warn|enforce`
+- `AIMTP_TRUSTED_KEYS` (comma-separated `kid=public_key` entries)
+- `AIMTP_TRUSTED_KEYS_FILE` (optional key map file path)
+- `AIMTP_SIGNATURE_CLOCK_SKEW_SEC` (optional non-negative integer)
 
 ## Examples
 

@@ -6,14 +6,25 @@ appropriate to their environment.
 
 ## Signatures (Chain-Agnostic)
 AIMTP envelopes may include an optional `signature` object with:
-- `key_id`: identifier for the signing key
-- `signature`: signature bytes (encoding defined by your implementation)
-- `alg`: optional algorithm identifier
+- `alg`: algorithm identifier (for example `ed25519` or `secp256k1`)
+- `kid`: key identifier
+- `sig`: signature bytes (base64)
+- `created_at`: optional RFC3339 signing timestamp
+- `expires_at`: optional RFC3339 expiration timestamp
 
-The protocol does not prescribe a blockchain or key format. If you choose to
-use blockchain keys, AIMTP remains compatible because the signature fields are
-intentionally generic. Any cryptographic verification or key ownership checks
-are handled by your runtime or gateway.
+Backward-compatible aliases are supported:
+- `key_id` alias for `kid`
+- `signature` alias for `sig`
+
+The protocol does not prescribe a blockchain or key format. Any cryptographic
+verification or key ownership checks are handled by your runtime policy.
+
+## Canonical Signing Payload
+Signatures should be created over canonical envelope bytes:
+- Remove top-level `signature` from the envelope.
+- Serialize JSON with stable lexicographic key ordering at every object level.
+- Preserve array ordering.
+- Encode as UTF-8 with no extra whitespace.
 
 ## Diagrams (Conceptual)
 These diagrams are conceptual and optional. They illustrate one possible

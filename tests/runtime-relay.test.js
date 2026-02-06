@@ -5,9 +5,11 @@ const fs = require("fs");
 const http = require("http");
 const os = require("os");
 const path = require("path");
+const crypto = require("crypto");
 const packageJson = require("../package.json");
 const { WebhookRelay, createWebhookRelayServer, Mailbox } = require("../runtime");
 const { createEnvelope, createMessage, createTaskRequest } = require("../sdk/js");
+const { canonicalizeEnvelopeForSigning } = require("../runtime/signature");
 
 const ADMIN_KEY = "super-secret";
 
@@ -199,6 +201,24 @@ function buildRequestEnvelope(recipient, idSuffix = "001") {
       content: `Run the demo task ${idSuffix}.`
     }),
     task
+  });
+}
+
+function signEnvelope(envelope, privateKey, alg, kid, extraSignature = {}) {
+  const payload = canonicalizeEnvelopeForSigning(envelope);
+  const signatureBytes =
+    alg === "ed25519"
+      ? crypto.sign(null, payload, privateKey)
+      : crypto.sign("sha256", payload, privateKey);
+  return Object.assign({}, envelope, {
+    signature: Object.assign(
+      {
+        alg,
+        kid,
+        sig: signatureBytes.toString("base64")
+      },
+      extraSignature
+    )
   });
 }
 
@@ -441,6 +461,88 @@ async function main() {
   if (!ranDefault) {
     return;
   }
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory",
+      AIMTP_SIGNATURE_POLICY: "enforce",
+      AIMTP_TRUSTED_KEYS: undefined,
+      AIMTP_TRUSTED_KEYS_FILE: undefined
+    },
+    async () =>
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-b", "sig-required");
+        const missingSignature = await postJson(port, "/aimtp", requestEnvelope, authHeaders(ADMIN_KEY));
+        assert.strictEqual(missingSignature.status, 401);
+        assert.strictEqual(missingSignature.body.code, "signature_required");
+      })
+  );
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory",
+      AIMTP_SIGNATURE_POLICY: "warn",
+      AIMTP_TRUSTED_KEYS: undefined,
+      AIMTP_TRUSTED_KEYS_FILE: undefined
+    },
+    async () =>
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-b", "sig-warn");
+        const warnMissing = await postJson(port, "/aimtp", requestEnvelope, authHeaders(ADMIN_KEY));
+        assert.strictEqual(warnMissing.status, 202);
+      })
+  );
+
+  const { publicKey: edPublicKey, privateKey: edPrivateKey } = crypto.generateKeyPairSync("ed25519");
+  const trustedEdKey = edPublicKey.export({ format: "der", type: "spki" }).toString("base64");
+  const trustedEdKid = "relay-ed-key-1";
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory",
+      AIMTP_SIGNATURE_POLICY: "enforce",
+      AIMTP_TRUSTED_KEYS: `${trustedEdKid}=${trustedEdKey}`,
+      AIMTP_TRUSTED_KEYS_FILE: undefined
+    },
+    async () =>
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const requestEnvelope = buildRequestEnvelope("agent-b", "sig-valid");
+        const signed = signEnvelope(requestEnvelope, edPrivateKey, "ed25519", trustedEdKid);
+        const signedRes = await postJson(port, "/aimtp", signed, authHeaders(ADMIN_KEY));
+        assert.strictEqual(signedRes.status, 202);
+
+        const tampered = Object.assign({}, signed, {
+          message: Object.assign({}, signed.message, { content: "tampered" })
+        });
+        const bad = await postJson(port, "/aimtp", tampered, authHeaders(ADMIN_KEY));
+        assert.strictEqual(bad.status, 403);
+        assert.strictEqual(bad.body.code, "signature_verification_failed");
+      })
+  );
 
   await withEnv(
     {
