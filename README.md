@@ -135,6 +135,7 @@ We welcome issues and pull requests.
 ## Examples
 - `examples/python-client/` — Python interop demo (validates schemas + calls relay)
 - `examples/web-inbox/` — Browser demo (send + mailbox peek/poll)
+- `examples/reference-agents/` — Router + executor reference agents with local negotiation/execution demo (`node examples/reference-agents/demo.js`)
 
 ## License
 See `/Users/solo446/Documents/AIMTP/LICENSE`.

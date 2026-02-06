@@ -166,3 +166,15 @@ Environment variables supported by the webhook relay server:
 - `AIMTP_API_KEY` (default unset): when set, relay requests require a shared API key.
   Use `Authorization: Bearer <key>` or `X-AIMTP-KEY: <key>` headers. `GET /healthz` and `GET /readyz`
   remain unauthenticated.
+
+## Reference Agent Demo
+Run the provider-agnostic reference router/executor flow (local stub adapter, no network calls):
+- `node examples/reference-agents/demo.js`
+
+The demo performs:
+1. enqueue request
+2. router poll + negotiation counter
+3. client accept + re-enqueue
+4. router route to executor
+5. executor execute + respond
+6. client poll + ack
