@@ -589,6 +589,47 @@ function createWebhookRelayServer(relay, options = {}) {
       now: options.now,
       logger: options.logger || console
     });
+  const summaryIntervalMs =
+    typeof options.logSummaryIntervalMs === "number"
+      ? options.logSummaryIntervalMs
+      : parseOptionalNonNegativeEnvInt(process.env.AIMTP_LOG_SUMMARY_INTERVAL_MS, undefined);
+  const counters = {
+    enqueue: 0,
+    poll: 0,
+    ack: 0,
+    fail: 0,
+    dead_letter: 0
+  };
+  const recordCounter = (name, value, fields) => {
+    if (!Number.isFinite(value) || value <= 0) {
+      return;
+    }
+    counters[name] += value;
+    const record = {
+      event: "counter",
+      name,
+      value,
+      relay_instance_id: relayInstanceId
+    };
+    if (fields && typeof fields === "object") {
+      Object.assign(record, fields);
+    }
+    console.log(JSON.stringify(record));
+  };
+  let summaryTimer = null;
+  if (summaryIntervalMs && summaryIntervalMs > 0) {
+    summaryTimer = setInterval(() => {
+      console.log(
+        JSON.stringify({
+          event: "summary",
+          relay_instance_id: relayInstanceId,
+          uptime_sec: Math.floor(process.uptime()),
+          counters: { ...counters }
+        })
+      );
+    }, summaryIntervalMs);
+    summaryTimer.unref();
+  }
   let cleanupTimer = null;
   const defaultHandler = (envelope, context) => ({
     __aimtpAccepted: true,
@@ -821,6 +862,7 @@ function createWebhookRelayServer(relay, options = {}) {
       }));
       sendJson(res, 200, response);
       logMailbox(200, recipient, items.length);
+      recordCounter("poll", items.length, { recipient });
       return;
     }
 
@@ -894,6 +936,7 @@ function createWebhookRelayServer(relay, options = {}) {
         id
       });
       logRequest(200);
+      recordCounter("enqueue", 1, { recipient, path: "mailbox" });
       return;
     }
 
@@ -970,6 +1013,9 @@ function createWebhookRelayServer(relay, options = {}) {
         }
         sendJson(res, 200, { ok: true, status: "acknowledged" });
         logRequest(200);
+        if (result.ok) {
+          recordCounter("ack", 1, { recipient });
+        }
         return;
       }
 
@@ -991,6 +1037,12 @@ function createWebhookRelayServer(relay, options = {}) {
         retry_count: result.retryCount || 0
       });
       logRequest(200);
+      if (result.ok) {
+        recordCounter("fail", 1, { recipient, status: result.status });
+        if (result.status === "dead_lettered") {
+          recordCounter("dead_letter", 1, { recipient });
+        }
+      }
       return;
     }
 
@@ -1120,6 +1172,7 @@ function createWebhookRelayServer(relay, options = {}) {
       queue_depth: enqueueResult.queueDepth
     });
     logRequest(202);
+    recordCounter("enqueue", 1, { recipient, path: "relay" });
   });
 
   trackedServers.add(server);
@@ -1145,6 +1198,10 @@ function createWebhookRelayServer(relay, options = {}) {
     if (cleanupTimer) {
       clearInterval(cleanupTimer);
       cleanupTimer = null;
+    }
+    if (summaryTimer) {
+      clearInterval(summaryTimer);
+      summaryTimer = null;
     }
     if (mailbox && typeof mailbox.close === "function") {
       mailbox.close();

@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+  relay:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - redis
+    ports:
+      - "8787:8787"
+    environment:
+      PORT: "8787"
+      AIMTP_STORE: "redis"
+      AIMTP_REDIS_URL: "redis://redis:6379"
+      AIMTP_ALLOWED_RECIPIENTS: "demo-agent"
+      AIMTP_RELAY_INSTANCE_ID: "relay-1"
+
+volumes:
+  redis-data:

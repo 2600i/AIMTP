@@ -96,6 +96,10 @@ For full request/response schemas and error codes, see
 - Security model: `/Users/solo446/Documents/AIMTP/docs/security.md`
 - Protocol spec: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.1.md`
 
+## Operations
+For deployment, environment configuration, and recovery guidance, see
+`/Users/solo446/Documents/AIMTP/docs/operations.md`.
+
 ## Authentication and Signatures
 
 AIMTP envelopes can include an optional `signature` object with

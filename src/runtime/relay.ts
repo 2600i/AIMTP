@@ -19,6 +19,8 @@ type EnvelopeLog = {
 
 type ValidationError = { path: string; message: string };
 
+type CounterName = "enqueue" | "poll" | "ack" | "fail" | "dead_letter";
+
 type SignatureResult = {
   ok?: boolean;
   httpStatus?: number;
@@ -521,6 +523,9 @@ const mailboxMaxRecipients = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_MAX_R
 const mailboxCleanupIntervalMs = parseOptionalEnvInt(
   process.env.AIMTP_MAILBOX_CLEANUP_INTERVAL_MS
 );
+const logSummaryIntervalMs = parseOptionalNonNegativeEnvInt(
+  process.env.AIMTP_LOG_SUMMARY_INTERVAL_MS
+);
 const mailboxLeaseMs = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_LEASE_MS);
 const mailboxMaxRetries = parseOptionalNonNegativeEnvInt(
   process.env.AIMTP_MAILBOX_MAX_RETRIES
@@ -587,6 +592,45 @@ const mailbox: MailboxStore = createMailboxStore({
   relayInstanceId,
   logger: console
 });
+const counters: Record<CounterName, number> = {
+  enqueue: 0,
+  poll: 0,
+  ack: 0,
+  fail: 0,
+  dead_letter: 0
+};
+const recordCounter = (
+  name: CounterName,
+  value: number,
+  fields?: Record<string, unknown>
+) => {
+  if (!Number.isFinite(value) || value <= 0) {
+    return;
+  }
+  counters[name] += value;
+  const record = {
+    event: "counter",
+    name,
+    value,
+    relay_instance_id: relayInstanceId,
+    ...fields
+  };
+  console.log(JSON.stringify(record));
+};
+let summaryTimer: NodeJS.Timeout | null = null;
+if (logSummaryIntervalMs && logSummaryIntervalMs > 0) {
+  summaryTimer = setInterval(() => {
+    console.log(
+      JSON.stringify({
+        event: "summary",
+        relay_instance_id: relayInstanceId,
+        uptime_sec: Math.floor(process.uptime()),
+        counters: { ...counters }
+      })
+    );
+  }, logSummaryIntervalMs);
+  summaryTimer.unref();
+}
 let cleanupTimer: NodeJS.Timeout | null = null;
 if (mailboxCleanupIntervalMs && mailboxCleanupIntervalMs > 0 && mailbox.cleanupExpired) {
   cleanupTimer = setInterval(() => {
@@ -814,6 +858,7 @@ const server = http.createServer(async (req, res) => {
     }));
     sendJson(res, 200, response);
     logMailbox(200, recipient, items.length);
+    recordCounter("poll", items.length, { recipient });
     return;
   }
 
@@ -886,6 +931,7 @@ const server = http.createServer(async (req, res) => {
       id
     });
     logRequest(200);
+    recordCounter("enqueue", 1, { recipient, path: "mailbox" });
     return;
   }
 
@@ -962,6 +1008,9 @@ const server = http.createServer(async (req, res) => {
       }
       sendJson(res, 200, { ok: true, status: "acknowledged" });
       logRequest(200);
+      if (result.ok) {
+        recordCounter("ack", 1, { recipient });
+      }
       return;
     }
 
@@ -986,6 +1035,12 @@ const server = http.createServer(async (req, res) => {
       retry_count: result.retryCount ?? 0
     });
     logRequest(200);
+    if (result.ok) {
+      recordCounter("fail", 1, { recipient, status: result.status });
+      if (result.status === "dead_lettered") {
+        recordCounter("dead_letter", 1, { recipient });
+      }
+    }
     return;
   }
 
@@ -1111,6 +1166,7 @@ const server = http.createServer(async (req, res) => {
     queue_depth: enqueueResult.queueDepth
   });
   logRequest(202);
+  recordCounter("enqueue", 1, { recipient, path: "relay" });
 });
 
 server.listen(port, () => {
@@ -1127,6 +1183,10 @@ function shutdown(reason: string) {
   if (cleanupTimer) {
     clearInterval(cleanupTimer);
     cleanupTimer = null;
+  }
+  if (summaryTimer) {
+    clearInterval(summaryTimer);
+    summaryTimer = null;
   }
   if (typeof mailbox.close === "function") {
     mailbox.close();

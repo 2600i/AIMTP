@@ -50,6 +50,7 @@ node dist/runtime/relay.js
 - `AIMTP_TRUSTED_KEYS` (comma-separated `kid=public_key`)
 - `AIMTP_TRUSTED_KEYS_FILE` (optional file with trusted key entries)
 - `AIMTP_SIGNATURE_CLOCK_SKEW_SEC` (default `0`)
+- `AIMTP_LOG_SUMMARY_INTERVAL_MS` (optional periodic log summary interval)
 
 ### Recommended Redis Coordination Defaults
 | Variable | Recommended default | Notes |
