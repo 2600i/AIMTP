@@ -1,0 +1,51 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "f1a0a8d2-55c8-4e0d-8a4f-1a2b3c4d5e6f",
+  "timestamp": "2026-02-06T18:30:00Z",
+  "sender": "agent-orchestrator",
+  "recipient": "agent-worker",
+  "intent": {
+    "type": "task.request",
+    "priority": "high",
+    "deadline": "2026-02-07T00:00:00Z",
+    "requires_ack": true,
+    "tags": ["planning", "batch"]
+  },
+  "actions": [
+    {
+      "id": "action-plan-1",
+      "type": "invoke",
+      "inputs": {
+        "tool": "planner",
+        "mode": "fast"
+      },
+      "constraints": {
+        "timeout_ms": 5000
+      },
+      "on_success": {
+        "next": "action-store-1"
+      },
+      "on_failure": {
+        "strategy": "retry"
+      }
+    }
+  ],
+  "capabilities": {
+    "offered": ["summarizer.v2"],
+    "required": ["planner.v1"]
+  },
+  "negotiation": {
+    "offer": {
+      "max_latency_ms": 1200
+    },
+    "counter": {
+      "max_latency_ms": 900
+    },
+    "accept": false
+  },
+  "message": {
+    "id": "9f98aaef-8c53-40bc-ad85-a99c47f0368d",
+    "role": "user",
+    "content": "Please produce an execution plan."
+  }
+}

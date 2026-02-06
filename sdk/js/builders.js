@@ -17,6 +17,10 @@ function createMessage(options = {}) {
     role,
     content,
     content_type,
+    intent,
+    actions,
+    capabilities,
+    negotiation,
     attachments,
     metadata
   } = options;
@@ -40,6 +44,18 @@ function createMessage(options = {}) {
     message.content_type = "text/plain";
   }
 
+  if (intent !== undefined) {
+    message.intent = intent;
+  }
+  if (actions !== undefined) {
+    message.actions = actions;
+  }
+  if (capabilities !== undefined) {
+    message.capabilities = capabilities;
+  }
+  if (negotiation !== undefined) {
+    message.negotiation = negotiation;
+  }
   if (attachments !== undefined) {
     message.attachments = attachments;
   }
@@ -119,6 +135,9 @@ function createEnvelope(options = {}) {
     sender,
     recipient,
     intent,
+    actions,
+    capabilities,
+    negotiation,
     message,
     task,
     signature,
@@ -145,6 +164,15 @@ function createEnvelope(options = {}) {
   }
   if (intent !== undefined) {
     envelope.intent = intent;
+  }
+  if (actions !== undefined) {
+    envelope.actions = actions;
+  }
+  if (capabilities !== undefined) {
+    envelope.capabilities = capabilities;
+  }
+  if (negotiation !== undefined) {
+    envelope.negotiation = negotiation;
   }
   if (task !== undefined) {
     envelope.task = task;

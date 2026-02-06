@@ -5,6 +5,81 @@
   "type": "object",
   "required": ["id", "role", "content"],
   "additionalProperties": true,
+  "$defs": {
+    "intent_type": {
+      "anyOf": [
+        {"type": "string", "enum": ["task.request", "task.response", "task.update", "task.cancel", "event", "query"]},
+        {"type": "string", "minLength": 1, "maxLength": 128}
+      ]
+    },
+    "intent_priority": {
+      "anyOf": [
+        {"type": "string", "enum": ["low", "normal", "high", "urgent"]},
+        {"type": "integer", "minimum": 0, "maximum": 100}
+      ]
+    },
+    "ai_intent": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": true,
+      "properties": {
+        "type": {"$ref": "#/$defs/intent_type"},
+        "priority": {"$ref": "#/$defs/intent_priority"},
+        "deadline": {"type": "string", "format": "date-time"},
+        "requires_ack": {"type": "boolean"},
+        "tags": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    },
+    "ai_action_type": {
+      "anyOf": [
+        {"type": "string", "enum": ["invoke", "route", "transform", "store", "notify"]},
+        {"type": "string", "minLength": 1, "maxLength": 128}
+      ]
+    },
+    "ai_action": {
+      "type": "object",
+      "required": ["id", "type", "inputs"],
+      "additionalProperties": true,
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "type": {"$ref": "#/$defs/ai_action_type"},
+        "inputs": {"type": "object", "additionalProperties": true},
+        "constraints": {"type": "object", "additionalProperties": true},
+        "on_success": {"type": "object", "additionalProperties": true},
+        "on_failure": {"type": "object", "additionalProperties": true}
+      }
+    },
+    "ai_capabilities": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "offered": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        },
+        "required": {
+          "type": "array",
+          "items": {"type": "string", "minLength": 1},
+          "uniqueItems": true
+        }
+      }
+    },
+    "ai_negotiation": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "offer": {"type": "object", "additionalProperties": true},
+        "counter": {"type": "object", "additionalProperties": true},
+        "accept": {"type": "boolean"},
+        "reject": {"type": "boolean"}
+      }
+    }
+  },
   "properties": {
     "id": {
       "type": "string",
@@ -29,6 +104,18 @@
       "type": "string",
       "default": "text/plain"
     },
+    "intent": {
+      "oneOf": [
+        {"type": "string"},
+        {"$ref": "#/$defs/ai_intent"}
+      ]
+    },
+    "actions": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/ai_action"}
+    },
+    "capabilities": {"$ref": "#/$defs/ai_capabilities"},
+    "negotiation": {"$ref": "#/$defs/ai_negotiation"},
     "attachments": {
       "type": "array",
       "items": {

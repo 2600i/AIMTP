@@ -4,9 +4,170 @@ const ROLE_VALUES = new Set(["system", "user", "assistant", "tool"]);
 const SPEC_VERSION = "aimtp/0.1";
 const RFC3339_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const SHA256_REGEX = /^[a-f0-9]{64}$/;
+const INTENT_TYPE_VALUES = new Set([
+  "task.request",
+  "task.response",
+  "task.update",
+  "task.cancel",
+  "event",
+  "query"
+]);
+const INTENT_PRIORITY_VALUES = new Set(["low", "normal", "high", "urgent"]);
+const ACTION_TYPE_VALUES = new Set(["invoke", "route", "transform", "store", "notify"]);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function validateIntentValue(errors, path, value) {
+  if (typeof value === "string") {
+    return;
+  }
+  if (!isPlainObject(value)) {
+    errors.push({ path, message: "intent must be a string or object" });
+    return;
+  }
+
+  if (typeof value.type !== "string" || value.type.trim() === "") {
+    errors.push({ path: `${path}.type`, message: "type must be a non-empty string" });
+  } else if (!INTENT_TYPE_VALUES.has(value.type) && value.type.length > 128) {
+    errors.push({ path: `${path}.type`, message: "type must be 128 characters or fewer" });
+  }
+
+  if (value.priority !== undefined) {
+    const validStringPriority =
+      typeof value.priority === "string" && INTENT_PRIORITY_VALUES.has(value.priority);
+    const validNumericPriority =
+      Number.isInteger(value.priority) && value.priority >= 0 && value.priority <= 100;
+    if (!validStringPriority && !validNumericPriority) {
+      errors.push({
+        path: `${path}.priority`,
+        message: "priority must be low, normal, high, urgent, or an integer 0-100"
+      });
+    }
+  }
+
+  if (
+    value.deadline !== undefined &&
+    (typeof value.deadline !== "string" || !RFC3339_REGEX.test(value.deadline))
+  ) {
+    errors.push({ path: `${path}.deadline`, message: "deadline must be RFC3339 date-time" });
+  }
+
+  if (value.requires_ack !== undefined && typeof value.requires_ack !== "boolean") {
+    errors.push({ path: `${path}.requires_ack`, message: "requires_ack must be a boolean" });
+  }
+
+  if (value.tags !== undefined) {
+    if (!Array.isArray(value.tags)) {
+      errors.push({ path: `${path}.tags`, message: "tags must be an array" });
+    } else {
+      value.tags.forEach((tag, index) => {
+        if (typeof tag !== "string" || tag.trim() === "") {
+          errors.push({
+            path: `${path}.tags[${index}]`,
+            message: "tag must be a non-empty string"
+          });
+        }
+      });
+    }
+  }
+}
+
+function validateActions(errors, path, actions) {
+  if (actions === undefined) {
+    return;
+  }
+  if (!Array.isArray(actions)) {
+    errors.push({ path, message: "actions must be an array" });
+    return;
+  }
+  actions.forEach((action, index) => {
+    const base = `${path}[${index}]`;
+    if (!isPlainObject(action)) {
+      errors.push({ path: base, message: "action must be an object" });
+      return;
+    }
+    if (typeof action.id !== "string" || action.id.trim() === "") {
+      errors.push({ path: `${base}.id`, message: "id must be a non-empty string" });
+    }
+    if (typeof action.type !== "string" || action.type.trim() === "") {
+      errors.push({ path: `${base}.type`, message: "type must be a non-empty string" });
+    } else if (!ACTION_TYPE_VALUES.has(action.type) && action.type.length > 128) {
+      errors.push({ path: `${base}.type`, message: "type must be 128 characters or fewer" });
+    }
+    if (!isPlainObject(action.inputs)) {
+      errors.push({ path: `${base}.inputs`, message: "inputs must be an object" });
+    }
+    if (action.constraints !== undefined && !isPlainObject(action.constraints)) {
+      errors.push({
+        path: `${base}.constraints`,
+        message: "constraints must be an object"
+      });
+    }
+    if (action.on_success !== undefined && !isPlainObject(action.on_success)) {
+      errors.push({
+        path: `${base}.on_success`,
+        message: "on_success must be an object"
+      });
+    }
+    if (action.on_failure !== undefined && !isPlainObject(action.on_failure)) {
+      errors.push({
+        path: `${base}.on_failure`,
+        message: "on_failure must be an object"
+      });
+    }
+  });
+}
+
+function validateCapabilities(errors, path, capabilities) {
+  if (capabilities === undefined) {
+    return;
+  }
+  if (!isPlainObject(capabilities)) {
+    errors.push({ path, message: "capabilities must be an object" });
+    return;
+  }
+  const fields = ["offered", "required"];
+  fields.forEach((field) => {
+    if (capabilities[field] === undefined) {
+      return;
+    }
+    if (!Array.isArray(capabilities[field])) {
+      errors.push({ path: `${path}.${field}`, message: `${field} must be an array` });
+      return;
+    }
+    capabilities[field].forEach((value, index) => {
+      if (typeof value !== "string" || value.trim() === "") {
+        errors.push({
+          path: `${path}.${field}[${index}]`,
+          message: "capability must be a non-empty string"
+        });
+      }
+    });
+  });
+}
+
+function validateNegotiation(errors, path, negotiation) {
+  if (negotiation === undefined) {
+    return;
+  }
+  if (!isPlainObject(negotiation)) {
+    errors.push({ path, message: "negotiation must be an object" });
+    return;
+  }
+  if (negotiation.offer !== undefined && !isPlainObject(negotiation.offer)) {
+    errors.push({ path: `${path}.offer`, message: "offer must be an object" });
+  }
+  if (negotiation.counter !== undefined && !isPlainObject(negotiation.counter)) {
+    errors.push({ path: `${path}.counter`, message: "counter must be an object" });
+  }
+  if (negotiation.accept !== undefined && typeof negotiation.accept !== "boolean") {
+    errors.push({ path: `${path}.accept`, message: "accept must be a boolean" });
+  }
+  if (negotiation.reject !== undefined && typeof negotiation.reject !== "boolean") {
+    errors.push({ path: `${path}.reject`, message: "reject must be a boolean" });
+  }
 }
 
 function validateMessage(message) {
@@ -30,6 +191,14 @@ function validateMessage(message) {
   if (message.content_type !== undefined && typeof message.content_type !== "string") {
     errors.push({ path: "message.content_type", message: "content_type must be a string" });
   }
+
+  if (message.intent !== undefined) {
+    validateIntentValue(errors, "message.intent", message.intent);
+  }
+
+  validateActions(errors, "message.actions", message.actions);
+  validateCapabilities(errors, "message.capabilities", message.capabilities);
+  validateNegotiation(errors, "message.negotiation", message.negotiation);
 
   if (message.attachments !== undefined) {
     if (!Array.isArray(message.attachments)) {
@@ -100,6 +269,14 @@ function validateEnvelope(envelope) {
   if (envelope.recipient !== undefined && typeof envelope.recipient !== "string") {
     errors.push({ path: "recipient", message: "recipient must be a string" });
   }
+
+  if (envelope.intent !== undefined) {
+    validateIntentValue(errors, "intent", envelope.intent);
+  }
+
+  validateActions(errors, "actions", envelope.actions);
+  validateCapabilities(errors, "capabilities", envelope.capabilities);
+  validateNegotiation(errors, "negotiation", envelope.negotiation);
 
   if (envelope.signature !== undefined) {
     if (!isPlainObject(envelope.signature)) {

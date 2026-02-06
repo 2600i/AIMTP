@@ -1,0 +1,36 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "89f9dc8d-5e0f-4e67-8b10-2fc6d32f11a4",
+  "timestamp": "2026-02-06T19:00:00Z",
+  "sender": "agent-a",
+  "recipient": "agent-b",
+  "intent": "task.request",
+  "message": {
+    "id": "09fc9172-0d8c-4e2a-9159-ad5356e75a0b",
+    "role": "assistant",
+    "content": "Negotiating execution parameters.",
+    "intent": {
+      "type": "task.update",
+      "priority": 70,
+      "tags": ["negotiation"]
+    },
+    "actions": [
+      {
+        "id": "action-negotiate-1",
+        "type": "route",
+        "inputs": {
+          "target": "agent-c"
+        }
+      }
+    ],
+    "capabilities": {
+      "required": ["router.v1"]
+    },
+    "negotiation": {
+      "offer": {
+        "budget": 20
+      },
+      "reject": false
+    }
+  }
+}

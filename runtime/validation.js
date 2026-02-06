@@ -25,6 +25,16 @@ const STATUS_VALUES = new Set(
 const SHA256_REGEX = new RegExp(
   MESSAGE_SCHEMA.properties.attachments.items.properties.sha256.pattern
 );
+const INTENT_TYPE_VALUES = new Set([
+  "task.request",
+  "task.response",
+  "task.update",
+  "task.cancel",
+  "event",
+  "query"
+]);
+const INTENT_PRIORITY_VALUES = new Set(["low", "normal", "high", "urgent"]);
+const ACTION_TYPE_VALUES = new Set(["invoke", "route", "transform", "store", "notify"]);
 
 function isPlainObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -32,6 +42,141 @@ function isPlainObject(value) {
 
 function pushError(errors, path, message) {
   errors.push({ path, message });
+}
+
+function validateIntentValue(errors, path, value) {
+  if (typeof value === "string") {
+    return;
+  }
+  if (!isPlainObject(value)) {
+    pushError(errors, path, "intent must be a string or object");
+    return;
+  }
+
+  if (typeof value.type !== "string" || value.type.trim() === "") {
+    pushError(errors, `${path}.type`, "type must be a non-empty string");
+  } else if (!INTENT_TYPE_VALUES.has(value.type) && value.type.length > 128) {
+    pushError(errors, `${path}.type`, "type must be 128 characters or fewer");
+  }
+
+  if (value.priority !== undefined) {
+    const validStringPriority =
+      typeof value.priority === "string" && INTENT_PRIORITY_VALUES.has(value.priority);
+    const validNumericPriority =
+      Number.isInteger(value.priority) && value.priority >= 0 && value.priority <= 100;
+    if (!validStringPriority && !validNumericPriority) {
+      pushError(
+        errors,
+        `${path}.priority`,
+        "priority must be low, normal, high, urgent, or an integer 0-100"
+      );
+    }
+  }
+
+  if (
+    value.deadline !== undefined &&
+    (typeof value.deadline !== "string" || !RFC3339_REGEX.test(value.deadline))
+  ) {
+    pushError(errors, `${path}.deadline`, "deadline must be RFC3339 date-time");
+  }
+  if (value.requires_ack !== undefined && typeof value.requires_ack !== "boolean") {
+    pushError(errors, `${path}.requires_ack`, "requires_ack must be a boolean");
+  }
+  if (value.tags !== undefined) {
+    if (!Array.isArray(value.tags)) {
+      pushError(errors, `${path}.tags`, "tags must be an array");
+    } else {
+      value.tags.forEach((tag, index) => {
+        if (typeof tag !== "string" || tag.trim() === "") {
+          pushError(errors, `${path}.tags[${index}]`, "tag must be a non-empty string");
+        }
+      });
+    }
+  }
+}
+
+function validateActions(errors, path, actions) {
+  if (actions === undefined) {
+    return;
+  }
+  if (!Array.isArray(actions)) {
+    pushError(errors, path, "actions must be an array");
+    return;
+  }
+  actions.forEach((action, index) => {
+    const base = `${path}[${index}]`;
+    if (!isPlainObject(action)) {
+      pushError(errors, base, "action must be an object");
+      return;
+    }
+    if (typeof action.id !== "string" || action.id.trim() === "") {
+      pushError(errors, `${base}.id`, "id must be a non-empty string");
+    }
+    if (typeof action.type !== "string" || action.type.trim() === "") {
+      pushError(errors, `${base}.type`, "type must be a non-empty string");
+    } else if (!ACTION_TYPE_VALUES.has(action.type) && action.type.length > 128) {
+      pushError(errors, `${base}.type`, "type must be 128 characters or fewer");
+    }
+    if (!isPlainObject(action.inputs)) {
+      pushError(errors, `${base}.inputs`, "inputs must be an object");
+    }
+    if (action.constraints !== undefined && !isPlainObject(action.constraints)) {
+      pushError(errors, `${base}.constraints`, "constraints must be an object");
+    }
+    if (action.on_success !== undefined && !isPlainObject(action.on_success)) {
+      pushError(errors, `${base}.on_success`, "on_success must be an object");
+    }
+    if (action.on_failure !== undefined && !isPlainObject(action.on_failure)) {
+      pushError(errors, `${base}.on_failure`, "on_failure must be an object");
+    }
+  });
+}
+
+function validateCapabilities(errors, path, capabilities) {
+  if (capabilities === undefined) {
+    return;
+  }
+  if (!isPlainObject(capabilities)) {
+    pushError(errors, path, "capabilities must be an object");
+    return;
+  }
+  ["offered", "required"].forEach((field) => {
+    const values = capabilities[field];
+    if (values === undefined) {
+      return;
+    }
+    if (!Array.isArray(values)) {
+      pushError(errors, `${path}.${field}`, `${field} must be an array`);
+      return;
+    }
+    values.forEach((value, index) => {
+      if (typeof value !== "string" || value.trim() === "") {
+        pushError(errors, `${path}.${field}[${index}]`, "capability must be a non-empty string");
+      }
+    });
+  });
+}
+
+function validateNegotiation(errors, path, negotiation) {
+  if (negotiation === undefined) {
+    return;
+  }
+  if (!isPlainObject(negotiation)) {
+    pushError(errors, path, "negotiation must be an object");
+    return;
+  }
+  if (negotiation.offer !== undefined && !isPlainObject(negotiation.offer)) {
+    pushError(errors, `${path}.offer`, "offer must be an object");
+  }
+  if (negotiation.counter !== undefined && !isPlainObject(negotiation.counter)) {
+    pushError(errors, `${path}.counter`, "counter must be an object");
+  }
+  if (negotiation.accept !== undefined && typeof negotiation.accept !== "boolean") {
+    pushError(errors, `${path}.accept`, "accept must be a boolean");
+  }
+  if (negotiation.reject !== undefined && typeof negotiation.reject !== "boolean") {
+    pushError(errors, `${path}.reject`, "reject must be a boolean");
+  }
 }
 
 function validateMessage(message) {
@@ -55,6 +200,13 @@ function validateMessage(message) {
   if (message.content_type !== undefined && typeof message.content_type !== "string") {
     pushError(errors, "message.content_type", "content_type must be a string");
   }
+
+  if (message.intent !== undefined) {
+    validateIntentValue(errors, "message.intent", message.intent);
+  }
+  validateActions(errors, "message.actions", message.actions);
+  validateCapabilities(errors, "message.capabilities", message.capabilities);
+  validateNegotiation(errors, "message.negotiation", message.negotiation);
 
   if (message.attachments !== undefined) {
     if (!Array.isArray(message.attachments)) {
@@ -245,9 +397,13 @@ function validateEnvelope(envelope) {
     pushError(errors, "recipient", "recipient must be a string");
   }
 
-  if (envelope.intent !== undefined && typeof envelope.intent !== "string") {
-    pushError(errors, "intent", "intent must be a string");
+  if (envelope.intent !== undefined) {
+    validateIntentValue(errors, "intent", envelope.intent);
   }
+
+  validateActions(errors, "actions", envelope.actions);
+  validateCapabilities(errors, "capabilities", envelope.capabilities);
+  validateNegotiation(errors, "negotiation", envelope.negotiation);
 
   if (!Object.prototype.hasOwnProperty.call(envelope, "message")) {
     pushError(errors, "message", "message is required");

@@ -7,11 +7,47 @@ export interface AIMTPAttachment {
     sha256?: string;
     url?: string;
 }
+export type AIMTPIntentType = string;
+export type AIMTPIntentPriority = "low" | "normal" | "high" | "urgent" | number;
+export interface AIMTPIntentHint {
+    type: AIMTPIntentType;
+    priority?: AIMTPIntentPriority;
+    deadline?: string;
+    requires_ack?: boolean;
+    tags?: string[];
+    [key: string]: unknown;
+}
+export interface AIMTPAction {
+    id: string;
+    type: string;
+    inputs: Record<string, unknown>;
+    constraints?: Record<string, unknown>;
+    on_success?: Record<string, unknown>;
+    on_failure?: Record<string, unknown>;
+    [key: string]: unknown;
+}
+export interface AIMTPCapabilities {
+    offered?: string[];
+    required?: string[];
+    [key: string]: unknown;
+}
+export interface AIMTPNegotiation {
+    offer?: Record<string, unknown>;
+    counter?: Record<string, unknown>;
+    accept?: boolean;
+    reject?: boolean;
+    [key: string]: unknown;
+}
+export type AIMTPIntent = string | AIMTPIntentHint;
 export interface AIMTPMessage {
     id: string;
     role: Role;
     content: AIMTPContent;
     content_type?: string;
+    intent?: AIMTPIntent;
+    actions?: AIMTPAction[];
+    capabilities?: AIMTPCapabilities;
+    negotiation?: AIMTPNegotiation;
     attachments?: AIMTPAttachment[];
     metadata?: Record<string, unknown>;
 }
@@ -31,7 +67,10 @@ export interface AIMTPEnvelope<TMessage = AIMTPMessage> {
     timestamp: string;
     sender?: string;
     recipient?: string;
-    intent?: string;
+    intent?: AIMTPIntent;
+    actions?: AIMTPAction[];
+    capabilities?: AIMTPCapabilities;
+    negotiation?: AIMTPNegotiation;
     message: TMessage;
     task?: AIMTPTask;
     signature?: AIMTPSignature;

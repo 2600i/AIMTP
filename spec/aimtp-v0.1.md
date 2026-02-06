@@ -32,7 +32,10 @@ The envelope wraps a single message and optional routing/security metadata.
 ### Optional Fields
 - `sender`: String identifier for the sender.
 - `recipient`: String identifier for the recipient.
-- `intent`: High-level intent for routing or interpretation (e.g., `task.request`, `task.response`).
+- `intent`: High-level intent for routing or interpretation. Backward-compatible string form is allowed, and structured object form is defined in AI Hooks.
+- `actions`: Optional action descriptors for machine-readable workflow hints (see AI Hooks).
+- `capabilities`: Optional offered/required capability hints (see AI Hooks).
+- `negotiation`: Optional lightweight offer/counter/accept/reject hints (see AI Hooks).
 - `task`: Optional task request/response object (see Task).
 - `signature`: Object containing signature metadata (see Security).
 - `metadata`: Free-form object for extensions.
@@ -47,8 +50,52 @@ The message represents a single AI message.
 
 ### Optional Fields
 - `content_type`: MIME type for content. Default `text/plain`.
+- `intent`, `actions`, `capabilities`, `negotiation`: Optional AI hook fields. Semantics match envelope-level AI Hooks and remain optional.
 - `attachments`: Array of attachment descriptors.
 - `metadata`: Free-form object for extensions.
+
+## AI Hooks
+AI Hooks are optional, chain-agnostic data model fields for AI-readable intent
+and action planning. They are metadata only in v0.1 and do not change delivery
+semantics or transport behavior.
+
+### `intent`
+- Backward-compatible form: string (e.g., `task.request`).
+- Structured form: object with:
+  - `type` (required): intent classifier.
+  - `priority` (optional): enum (`low|normal|high|urgent`) or integer `0..100`.
+  - `deadline` (optional): RFC3339 timestamp.
+  - `requires_ack` (optional): boolean processing hint.
+  - `tags` (optional): array of string labels.
+- Known `type` values include:
+  - `task.request`, `task.response`, `task.update`, `task.cancel`, `event`, `query`
+- Implementations MAY use custom `type` strings.
+
+### `actions`
+- Optional array of action objects:
+  - `id` (required): stable action identifier.
+  - `type` (required): action classifier (known examples: `invoke`, `route`, `transform`, `store`, `notify`; custom strings allowed).
+  - `inputs` (required): free-form object.
+  - `constraints` (optional): free-form object.
+  - `on_success` (optional): free-form object.
+  - `on_failure` (optional): free-form object.
+
+### `capabilities`
+- Optional object:
+  - `offered` (optional): array of capability identifiers.
+  - `required` (optional): array of capability identifiers.
+
+### `negotiation`
+- Optional object:
+  - `offer` (optional): free-form object.
+  - `counter` (optional): free-form object.
+  - `accept` (optional): boolean.
+  - `reject` (optional): boolean.
+
+### Placement
+- AI Hooks MAY appear on the envelope and/or inside `message`.
+- Unknown AI Hook fields MUST be ignored unless an implementation profile
+  explicitly requires them.
 
 ## Task
 Tasks encode request/response intent and status. They are optional and carried on the envelope.

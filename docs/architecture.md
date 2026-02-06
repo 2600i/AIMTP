@@ -58,6 +58,46 @@ runtime verifies signatures over canonicalized envelope bytes (top-level
 `signature` removed, stable JSON key order, UTF-8) based on policy mode
 (`off`, `warn`, `enforce`).
 
+## AI Hooks (Data Model Only)
+Phase 4 introduces optional AI hook fields for richer machine-readable context:
+- `intent`: string (legacy) or structured object (`type`, `priority`, `deadline`, `requires_ack`, `tags`).
+- `actions`: ordered action hints (`id`, `type`, `inputs`, optional constraints/result branches).
+- `capabilities`: optional offered/required capability sets.
+- `negotiation`: optional offer/counter/accept/reject metadata.
+
+These fields are schema-level metadata only in v0.1:
+- No new endpoints.
+- No delivery guarantee changes.
+- No blockchain or provider-specific behavior.
+- Existing clients that only use string `intent` remain valid.
+
+Example envelope-level hook payload:
+```json
+{
+  "intent": {
+    "type": "task.request",
+    "priority": "high",
+    "requires_ack": true,
+    "tags": ["planning", "batch"]
+  },
+  "actions": [
+    {
+      "id": "act-1",
+      "type": "invoke",
+      "inputs": {"tool": "planner", "mode": "fast"}
+    }
+  ],
+  "capabilities": {
+    "required": ["planner.v1"],
+    "offered": ["summarizer.v2"]
+  },
+  "negotiation": {
+    "offer": {"max_latency_ms": 1500},
+    "counter": {"max_latency_ms": 1000}
+  }
+}
+```
+
 ## Protocol Surfaces
 - **Spec**: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.1.md`
 - **Schemas**: `/Users/solo446/Documents/AIMTP/schemas/`
