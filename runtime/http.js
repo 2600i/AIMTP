@@ -166,6 +166,25 @@ function parseMailboxStoreOptions(options) {
     typeof options.redisCommandTimeoutMs === "number"
       ? options.redisCommandTimeoutMs
       : parseOptionalEnvInt(process.env.AIMTP_REDIS_TIMEOUT_MS, undefined);
+  const redisLockTtlMs =
+    typeof options.redisLockTtlMs === "number"
+      ? options.redisLockTtlMs
+      : parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_TTL_MS, undefined);
+  const redisLockAcquireTimeoutMs =
+    typeof options.redisLockAcquireTimeoutMs === "number"
+      ? options.redisLockAcquireTimeoutMs
+      : parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_ACQUIRE_TIMEOUT_MS, undefined);
+  const redisLockRetryDelayMs =
+    typeof options.redisLockRetryDelayMs === "number"
+      ? options.redisLockRetryDelayMs
+      : parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_RETRY_DELAY_MS, undefined);
+  const redisLeaseResultTtlMs =
+    typeof options.redisLeaseResultTtlMs === "number"
+      ? options.redisLeaseResultTtlMs
+      : parseOptionalEnvInt(process.env.AIMTP_REDIS_LEASE_RESULT_TTL_MS, undefined);
+  const relayInstanceId =
+    options.relayInstanceId ||
+    (process.env.AIMTP_RELAY_INSTANCE_ID && process.env.AIMTP_RELAY_INSTANCE_ID.trim());
 
   return {
     storeType,
@@ -186,7 +205,12 @@ function parseMailboxStoreOptions(options) {
     redisPassword,
     redisKeyPrefix,
     redisCliPath,
-    redisCommandTimeoutMs
+    redisCommandTimeoutMs,
+    redisLockTtlMs,
+    redisLockAcquireTimeoutMs,
+    redisLockRetryDelayMs,
+    redisLeaseResultTtlMs,
+    relayInstanceId
   };
 }
 
@@ -515,6 +539,7 @@ function createWebhookRelayServer(relay, options = {}) {
     : parsedAllowlist;
   const senderAllowlist = parseAllowlist(process.env.AIMTP_ALLOWED_SENDERS);
   const mailboxStoreOptions = parseMailboxStoreOptions(options);
+  const relayInstanceId = mailboxStoreOptions.relayInstanceId || `relay-${process.pid}`;
   const mailbox =
     options.mailbox ||
     options.mailboxStore ||
@@ -537,6 +562,11 @@ function createWebhookRelayServer(relay, options = {}) {
       redisKeyPrefix: mailboxStoreOptions.redisKeyPrefix,
       redisCliPath: mailboxStoreOptions.redisCliPath,
       redisCommandTimeoutMs: mailboxStoreOptions.redisCommandTimeoutMs,
+      redisLockTtlMs: mailboxStoreOptions.redisLockTtlMs,
+      redisLockAcquireTimeoutMs: mailboxStoreOptions.redisLockAcquireTimeoutMs,
+      redisLockRetryDelayMs: mailboxStoreOptions.redisLockRetryDelayMs,
+      redisLeaseResultTtlMs: mailboxStoreOptions.redisLeaseResultTtlMs,
+      relayInstanceId,
       now: options.now,
       logger: options.logger || console
     });
@@ -553,7 +583,8 @@ function createWebhookRelayServer(relay, options = {}) {
     JSON.stringify({
       event: "allowlist_state",
       enabled: recipientAllowlist.enabled,
-      key_count: recipientKeys.keyToRecipients.size
+      key_count: recipientKeys.keyToRecipients.size,
+      relay_instance_id: relayInstanceId
     })
   );
 

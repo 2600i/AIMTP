@@ -19,6 +19,10 @@ const DEFAULT_REDIS_PORT = 6379;
 const DEFAULT_REDIS_DB = 0;
 const DEFAULT_REDIS_KEY_PREFIX = "aimtp:mailbox:";
 const DEFAULT_REDIS_TIMEOUT_MS = 1000;
+const DEFAULT_REDIS_LOCK_TTL_MS = 10 * 1000;
+const DEFAULT_REDIS_LOCK_ACQUIRE_TIMEOUT_MS = 5 * 1000;
+const DEFAULT_REDIS_LOCK_RETRY_DELAY_MS = 20;
+const DEFAULT_REDIS_LEASE_RESULT_TTL_MS = 5 * 60 * 1000;
 
 const SQLITE_MAILBOX_SCHEMA = `
 CREATE TABLE IF NOT EXISTS mailbox_recipients (
@@ -90,6 +94,32 @@ function generateLeaseId() {
     return randomUUID();
   } catch (_err) {
     return randomBytes(16).toString("hex");
+  }
+}
+
+function normalizeInstanceId(value) {
+  const trimmed = value ? value.trim() : "";
+  if (trimmed.length > 0) {
+    return trimmed;
+  }
+  return `relay-${process.pid}-${generateLeaseId()}`;
+}
+
+function parseLeaseResultRecord(raw) {
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || typeof parsed.status !== "string") {
+      return null;
+    }
+    if (typeof parsed.retryCount === "number" && Number.isFinite(parsed.retryCount)) {
+      return { status: parsed.status, retryCount: Math.max(0, Math.floor(parsed.retryCount)) };
+    }
+    return { status: parsed.status };
+  } catch (_err) {
+    return null;
   }
 }
 
@@ -922,6 +952,7 @@ class SQLiteMailboxStore {
 
 class RedisMailboxStore {
   constructor(options = {}) {
+    this.instanceId = normalizeInstanceId(options.relayInstanceId);
     this.ttlMs = parsePositiveInt(options.ttlMs, DEFAULT_TTL_MS);
     this.maxQueueLength = parsePositiveInt(options.maxQueueLength, DEFAULT_MAX_QUEUE_LENGTH);
     this.maxRecipients = parsePositiveInt(options.maxRecipients, DEFAULT_MAX_RECIPIENTS);
@@ -942,6 +973,19 @@ class RedisMailboxStore {
     this.redisPassword = (options.redisPassword && options.redisPassword.trim()) || "";
     this.redisKeyPrefix = (options.redisKeyPrefix && options.redisKeyPrefix.trim()) || DEFAULT_REDIS_KEY_PREFIX;
     this.redisCommandTimeoutMs = parsePositiveInt(options.redisCommandTimeoutMs, DEFAULT_REDIS_TIMEOUT_MS);
+    this.redisLockTtlMs = parsePositiveInt(options.redisLockTtlMs, DEFAULT_REDIS_LOCK_TTL_MS);
+    this.redisLockAcquireTimeoutMs = parsePositiveInt(
+      options.redisLockAcquireTimeoutMs,
+      DEFAULT_REDIS_LOCK_ACQUIRE_TIMEOUT_MS
+    );
+    this.redisLockRetryDelayMs = parsePositiveInt(
+      options.redisLockRetryDelayMs,
+      DEFAULT_REDIS_LOCK_RETRY_DELAY_MS
+    );
+    this.redisLeaseResultTtlMs = parsePositiveInt(
+      options.redisLeaseResultTtlMs,
+      DEFAULT_REDIS_LEASE_RESULT_TTL_MS
+    );
 
     const pong = this.runRedis(["PING"]);
     if (pong.trim().toUpperCase() !== "PONG") {
@@ -950,65 +994,69 @@ class RedisMailboxStore {
   }
 
   enqueue(recipient, envelope) {
-    const now = this.now();
-    this.requeueExpiredLeasesForRecipient(recipient, now);
-    this.purgeExpiredForRecipient(recipient, now);
+    return this.withRecipientLock(recipient, "enqueue", () => {
+      const now = this.now();
+      this.requeueExpiredLeasesForRecipient(recipient, now);
+      this.purgeExpiredForRecipient(recipient, now);
 
-    const messageId = generateLeaseId();
-    const payload = JSON.stringify({ envelope, enqueuedAt: now, attempts: 0 });
-    this.runRedis(["HSET", this.payloadKey(recipient), messageId, payload]);
-    this.runRedis(["ZADD", this.pendingKey(recipient), String(now), messageId]);
+      const messageId = generateLeaseId();
+      const payload = JSON.stringify({ envelope, enqueuedAt: now, attempts: 0 });
+      this.runRedis(["HSET", this.payloadKey(recipient), messageId, payload]);
+      this.runRedis(["ZADD", this.pendingKey(recipient), String(now), messageId]);
 
-    let dropped = 0;
-    const pendingCount = this.readInteger(["ZCARD", this.pendingKey(recipient)]);
-    if (pendingCount > this.maxQueueLength) {
-      dropped = pendingCount - this.maxQueueLength;
-      const evicted = this.readList([
-        "ZRANGE",
-        this.pendingKey(recipient),
-        "0",
-        String(Math.max(0, dropped - 1))
-      ]);
-      evicted.forEach((id) => {
-        if (!id) {
-          return;
-        }
-        this.runRedis(["ZREM", this.pendingKey(recipient), id]);
-        this.runRedis(["HDEL", this.payloadKey(recipient), id]);
-      });
-      this.logDropOldest(recipient, dropped, Math.max(0, pendingCount - dropped));
-    }
+      let dropped = 0;
+      const pendingCount = this.readInteger(["ZCARD", this.pendingKey(recipient)]);
+      if (pendingCount > this.maxQueueLength) {
+        dropped = pendingCount - this.maxQueueLength;
+        const evicted = this.readList([
+          "ZRANGE",
+          this.pendingKey(recipient),
+          "0",
+          String(Math.max(0, dropped - 1))
+        ]);
+        evicted.forEach((id) => {
+          if (!id) {
+            return;
+          }
+          this.runRedis(["ZREM", this.pendingKey(recipient), id]);
+          this.runRedis(["HDEL", this.payloadKey(recipient), id]);
+        });
+        this.logDropOldest(recipient, dropped, Math.max(0, pendingCount - dropped));
+      }
 
-    const leasedCount = this.readInteger(["ZCARD", this.leaseKey(recipient)]);
-    const queueDepth = this.readInteger(["ZCARD", this.pendingKey(recipient)]) + leasedCount;
+      const leasedCount = this.readInteger(["ZCARD", this.leaseKey(recipient)]);
+      const queueDepth = this.readInteger(["ZCARD", this.pendingKey(recipient)]) + leasedCount;
 
-    this.touchRecipient(recipient, now);
-    this.enforceRecipientLimit();
-    this.extendRecipientTtl(recipient);
+      this.touchRecipient(recipient, now);
+      this.enforceRecipientLimit();
+      this.extendRecipientTtl(recipient);
 
-    return { queueDepth, dropped };
+      return { queueDepth, dropped };
+    });
   }
 
   peek(recipient) {
-    const now = this.now();
-    this.requeueExpiredLeasesForRecipient(recipient, now);
-    this.purgeExpiredForRecipient(recipient, now);
+    return this.withRecipientLock(recipient, "peek", () => {
+      const now = this.now();
+      this.requeueExpiredLeasesForRecipient(recipient, now);
+      this.purgeExpiredForRecipient(recipient, now);
 
-    const pending = this.readInteger(["ZCARD", this.pendingKey(recipient)]);
-    const leased = this.readInteger(["ZCARD", this.leaseKey(recipient)]);
-    const deadLetters = this.readInteger(["LLEN", this.deadLetterKey(recipient)]);
-    const count = pending + leased;
+      const pending = this.readInteger(["ZCARD", this.pendingKey(recipient)]);
+      const leased = this.readInteger(["ZCARD", this.leaseKey(recipient)]);
+      const deadLetters = this.readInteger(["LLEN", this.deadLetterKey(recipient)]);
+      const count = pending + leased;
 
-    if (count === 0) {
-      if (deadLetters === 0) {
-        this.clearRecipient(recipient);
+      if (count === 0) {
+        if (deadLetters === 0) {
+          this.clearRecipient(recipient);
+        }
+        return { count: 0, pending: 0, leased: 0, deadLetters };
       }
-      return { count: 0, pending: 0, leased: 0, deadLetters };
-    }
 
-    this.touchRecipient(recipient, now);
-    this.extendRecipientTtl(recipient);
-    return { count, pending, leased, deadLetters };
+      this.touchRecipient(recipient, now);
+      this.extendRecipientTtl(recipient);
+      return { count, pending, leased, deadLetters };
+    });
   }
 
   poll(recipient, maxItems) {
@@ -1017,134 +1065,188 @@ class RedisMailboxStore {
       return [];
     }
 
-    const now = this.now();
-    this.requeueExpiredLeasesForRecipient(recipient, now);
-    this.purgeExpiredForRecipient(recipient, now);
+    return this.withRecipientLock(recipient, "poll", () => {
+      const now = this.now();
+      this.requeueExpiredLeasesForRecipient(recipient, now);
+      this.purgeExpiredForRecipient(recipient, now);
 
-    const items = [];
-    const ids = this.readList([
-      "ZRANGEBYSCORE",
-      this.pendingKey(recipient),
-      "-inf",
-      String(now),
-      "LIMIT",
-      "0",
-      String(boundedMax)
-    ]);
+      const items = [];
+      const ids = this.readList([
+        "ZRANGEBYSCORE",
+        this.pendingKey(recipient),
+        "-inf",
+        String(now),
+        "LIMIT",
+        "0",
+        String(boundedMax)
+      ]);
 
-    ids.forEach((id) => {
-      if (!id) {
-        return;
-      }
-      const payload = this.readPayload(recipient, id);
-      if (!payload) {
+      ids.forEach((id) => {
+        if (!id) {
+          return;
+        }
+        const payload = this.readPayload(recipient, id);
+        if (!payload) {
+          this.runRedis(["ZREM", this.pendingKey(recipient), id]);
+          return;
+        }
+        if (payload.attempts >= this.maxAttempts) {
+          this.moveToDeadLetter(recipient, payload, "max_retries_exceeded");
+          this.runRedis(["ZREM", this.pendingKey(recipient), id]);
+          this.runRedis(["HDEL", this.payloadKey(recipient), id]);
+          return;
+        }
+        const leaseId = generateLeaseId();
+        const leaseUntil = now + this.leaseMs;
+        payload.attempts += 1;
+        this.writePayload(recipient, id, payload);
         this.runRedis(["ZREM", this.pendingKey(recipient), id]);
-        return;
-      }
-      if (payload.attempts >= this.maxAttempts) {
-        this.moveToDeadLetter(recipient, payload, "max_retries_exceeded");
-        this.runRedis(["ZREM", this.pendingKey(recipient), id]);
-        this.runRedis(["HDEL", this.payloadKey(recipient), id]);
-        return;
-      }
-      const leaseId = generateLeaseId();
-      const leaseUntil = now + this.leaseMs;
-      payload.attempts += 1;
-      this.writePayload(recipient, id, payload);
-      this.runRedis(["ZREM", this.pendingKey(recipient), id]);
-      this.runRedis(["HSET", this.leaseMapKey(recipient), leaseId, id]);
-      this.runRedis(["HSET", this.messageLeaseKey(recipient), id, leaseId]);
-      this.runRedis(["ZADD", this.leaseKey(recipient), String(leaseUntil), leaseId]);
-      items.push({
-        envelope: payload.envelope,
-        leaseId,
-        leaseExpiresAt: leaseUntil,
-        retryCount: Math.max(0, payload.attempts - 1),
-        deliveryAttempt: payload.attempts
+        this.runRedis(["HSET", this.leaseMapKey(recipient), leaseId, id]);
+        this.runRedis(["HSET", this.messageLeaseKey(recipient), id, leaseId]);
+        this.runRedis(["ZADD", this.leaseKey(recipient), String(leaseUntil), leaseId]);
+        items.push({
+          envelope: payload.envelope,
+          leaseId,
+          leaseExpiresAt: leaseUntil,
+          retryCount: Math.max(0, payload.attempts - 1),
+          deliveryAttempt: payload.attempts
+        });
       });
-    });
 
-    const pending = this.readInteger(["ZCARD", this.pendingKey(recipient)]);
-    const leased = this.readInteger(["ZCARD", this.leaseKey(recipient)]);
-    if (pending + leased === 0) {
-      const deadLetters = this.readInteger(["LLEN", this.deadLetterKey(recipient)]);
-      if (deadLetters === 0) {
-        this.clearRecipient(recipient);
+      const pending = this.readInteger(["ZCARD", this.pendingKey(recipient)]);
+      const leased = this.readInteger(["ZCARD", this.leaseKey(recipient)]);
+      if (pending + leased === 0) {
+        const deadLetters = this.readInteger(["LLEN", this.deadLetterKey(recipient)]);
+        if (deadLetters === 0) {
+          this.clearRecipient(recipient);
+        }
+      } else {
+        this.touchRecipient(recipient, now);
+        this.extendRecipientTtl(recipient);
       }
-    } else {
-      this.touchRecipient(recipient, now);
-      this.extendRecipientTtl(recipient);
-    }
 
-    return items;
+      return items;
+    });
   }
 
   ack(recipient, leaseId) {
-    const now = this.now();
-    const leaseUntilRaw = this.runRedis(["ZSCORE", this.leaseKey(recipient), leaseId]).trim();
-    if (!leaseUntilRaw) {
-      return { ok: false, status: "unknown_lease" };
-    }
-    const leaseUntil = Number.parseInt(leaseUntilRaw, 10);
-    if (!Number.isFinite(leaseUntil) || leaseUntil <= now) {
-      this.requeueExpiredLeasesForRecipient(recipient, now);
-      return { ok: false, status: "expired" };
-    }
-    const messageId = this.runRedis([
-      "HGET",
-      this.leaseMapKey(recipient),
-      leaseId
-    ]).trim();
-    if (!messageId) {
-      return { ok: false, status: "unknown_lease" };
-    }
-    this.runRedis(["ZREM", this.leaseKey(recipient), leaseId]);
-    this.runRedis(["HDEL", this.leaseMapKey(recipient), leaseId]);
-    this.runRedis(["HDEL", this.messageLeaseKey(recipient), messageId]);
-    this.runRedis(["HDEL", this.payloadKey(recipient), messageId]);
-    return { ok: true, status: "acknowledged" };
+    return this.withRecipientLock(recipient, "ack", () => {
+      const resultKey = this.ackResultKey(recipient, leaseId);
+      const cached = this.readLeaseResult(resultKey);
+      if (cached) {
+        if (cached.status === "acknowledged") {
+          return { ok: true, status: "acknowledged" };
+        }
+        if (cached.status === "expired" || cached.status === "unknown_lease") {
+          return { ok: false, status: cached.status };
+        }
+      }
+
+      const now = this.now();
+      const leaseUntilRaw = this.runRedis(["ZSCORE", this.leaseKey(recipient), leaseId]).trim();
+      if (!leaseUntilRaw) {
+        return { ok: false, status: "unknown_lease" };
+      }
+      const leaseUntil = Number.parseInt(leaseUntilRaw, 10);
+      if (!Number.isFinite(leaseUntil) || leaseUntil <= now) {
+        this.requeueExpiredLeasesForRecipient(recipient, now);
+        const result = { ok: false, status: "expired" };
+        this.writeLeaseResult(resultKey, { status: result.status });
+        return result;
+      }
+      const messageId = this.runRedis([
+        "HGET",
+        this.leaseMapKey(recipient),
+        leaseId
+      ]).trim();
+      if (!messageId) {
+        return { ok: false, status: "unknown_lease" };
+      }
+      this.runRedis(["ZREM", this.leaseKey(recipient), leaseId]);
+      this.runRedis(["HDEL", this.leaseMapKey(recipient), leaseId]);
+      this.runRedis(["HDEL", this.messageLeaseKey(recipient), messageId]);
+      this.runRedis(["HDEL", this.payloadKey(recipient), messageId]);
+      const result = { ok: true, status: "acknowledged" };
+      this.writeLeaseResult(resultKey, { status: result.status });
+      return result;
+    });
   }
 
   fail(recipient, leaseId, reason) {
-    const now = this.now();
-    const leaseUntilRaw = this.runRedis(["ZSCORE", this.leaseKey(recipient), leaseId]).trim();
-    if (!leaseUntilRaw) {
-      return { ok: false, status: "unknown_lease" };
-    }
-    const leaseUntil = Number.parseInt(leaseUntilRaw, 10);
-    if (!Number.isFinite(leaseUntil) || leaseUntil <= now) {
-      this.requeueExpiredLeasesForRecipient(recipient, now);
-      return { ok: false, status: "expired" };
-    }
-    const messageId = this.runRedis([
-      "HGET",
-      this.leaseMapKey(recipient),
-      leaseId
-    ]).trim();
-    if (!messageId) {
-      return { ok: false, status: "unknown_lease" };
-    }
-    const payload = this.readPayload(recipient, messageId);
-    if (!payload) {
-      return { ok: false, status: "unknown_lease" };
-    }
-    this.runRedis(["ZREM", this.leaseKey(recipient), leaseId]);
-    this.runRedis(["HDEL", this.leaseMapKey(recipient), leaseId]);
-    this.runRedis(["HDEL", this.messageLeaseKey(recipient), messageId]);
-    if (payload.attempts >= this.maxAttempts) {
-      this.moveToDeadLetter(recipient, payload, reason);
-      this.runRedis(["HDEL", this.payloadKey(recipient), messageId]);
-      return {
+    return this.withRecipientLock(recipient, "fail", () => {
+      const resultKey = this.failResultKey(recipient, leaseId);
+      const cached = this.readLeaseResult(resultKey);
+      if (cached) {
+        if (
+          cached.status === "requeued" ||
+          cached.status === "dead_lettered" ||
+          cached.status === "expired" ||
+          cached.status === "unknown_lease"
+        ) {
+          return {
+            ok: cached.status === "requeued" || cached.status === "dead_lettered",
+            status: cached.status,
+            retryCount: cached.retryCount
+          };
+        }
+      }
+
+      const now = this.now();
+      const leaseUntilRaw = this.runRedis(["ZSCORE", this.leaseKey(recipient), leaseId]).trim();
+      if (!leaseUntilRaw) {
+        return { ok: false, status: "unknown_lease" };
+      }
+      const leaseUntil = Number.parseInt(leaseUntilRaw, 10);
+      if (!Number.isFinite(leaseUntil) || leaseUntil <= now) {
+        this.requeueExpiredLeasesForRecipient(recipient, now);
+        const result = { ok: false, status: "expired" };
+        this.writeLeaseResult(resultKey, { status: result.status });
+        return result;
+      }
+      const messageId = this.runRedis([
+        "HGET",
+        this.leaseMapKey(recipient),
+        leaseId
+      ]).trim();
+      if (!messageId) {
+        return { ok: false, status: "unknown_lease" };
+      }
+      const payload = this.readPayload(recipient, messageId);
+      if (!payload) {
+        return { ok: false, status: "unknown_lease" };
+      }
+      this.runRedis(["ZREM", this.leaseKey(recipient), leaseId]);
+      this.runRedis(["HDEL", this.leaseMapKey(recipient), leaseId]);
+      this.runRedis(["HDEL", this.messageLeaseKey(recipient), messageId]);
+      if (payload.attempts >= this.maxAttempts) {
+        this.moveToDeadLetter(recipient, payload, reason);
+        this.runRedis(["HDEL", this.payloadKey(recipient), messageId]);
+        const result = {
+          ok: true,
+          status: "dead_lettered",
+          retryCount: Math.max(0, payload.attempts - 1)
+        };
+        this.writeLeaseResult(resultKey, {
+          status: result.status,
+          retryCount: result.retryCount
+        });
+        return result;
+      }
+      const availableAt =
+        now + computeBackoffMs(payload.attempts, this.retryBaseMs, this.retryMaxMs);
+      this.writePayload(recipient, messageId, payload);
+      this.runRedis(["ZADD", this.pendingKey(recipient), String(availableAt), messageId]);
+      const result = {
         ok: true,
-        status: "dead_lettered",
+        status: "requeued",
         retryCount: Math.max(0, payload.attempts - 1)
       };
-    }
-    const availableAt =
-      now + computeBackoffMs(payload.attempts, this.retryBaseMs, this.retryMaxMs);
-    this.writePayload(recipient, messageId, payload);
-    this.runRedis(["ZADD", this.pendingKey(recipient), String(availableAt), messageId]);
-    return { ok: true, status: "requeued", retryCount: Math.max(0, payload.attempts - 1) };
+      this.writeLeaseResult(resultKey, {
+        status: result.status,
+        retryCount: result.retryCount
+      });
+      return result;
+    });
   }
 
   pollDeadLetters(recipient, maxItems) {
@@ -1152,39 +1254,43 @@ class RedisMailboxStore {
     if (boundedMax === 0) {
       return [];
     }
-    const items = [];
-    for (let i = 0; i < boundedMax; i += 1) {
-      const raw = this.runRedis(["LPOP", this.deadLetterKey(recipient)]).trim();
-      if (!raw) {
-        break;
+    return this.withRecipientLock(recipient, "poll_dead_letters", () => {
+      const items = [];
+      for (let i = 0; i < boundedMax; i += 1) {
+        const raw = this.runRedis(["LPOP", this.deadLetterKey(recipient)]).trim();
+        if (!raw) {
+          break;
+        }
+        try {
+          const parsed = JSON.parse(raw);
+          items.push({
+            envelope: parsed.envelope,
+            enqueuedAt: Number(parsed.enqueuedAt || 0),
+            failedAt: Number(parsed.failedAt || 0),
+            retryCount: Math.max(0, Number(parsed.attempts || 0) - 1),
+            deliveryAttempt: Number(parsed.attempts || 0),
+            lastError: typeof parsed.lastError === "string" ? parsed.lastError : undefined
+          });
+        } catch (_err) {
+          // Ignore corrupt items.
+        }
       }
-      try {
-        const parsed = JSON.parse(raw);
-        items.push({
-          envelope: parsed.envelope,
-          enqueuedAt: Number(parsed.enqueuedAt || 0),
-          failedAt: Number(parsed.failedAt || 0),
-          retryCount: Math.max(0, Number(parsed.attempts || 0) - 1),
-          deliveryAttempt: Number(parsed.attempts || 0),
-          lastError: typeof parsed.lastError === "string" ? parsed.lastError : undefined
-        });
-      } catch (_err) {
-        // Ignore corrupt items.
-      }
-    }
-    return items;
+      return items;
+    });
   }
 
   cleanupExpired() {
-    const now = this.now();
     const recipients = this.readList(["ZRANGE", this.recipientsKey(), "0", "-1"]);
     let removed = 0;
     recipients.forEach((recipient) => {
       if (!recipient) {
         return;
       }
-      this.requeueExpiredLeasesForRecipient(recipient, now);
-      removed += this.purgeExpiredForRecipient(recipient, now);
+      removed += this.withRecipientLock(recipient, "cleanup_expired", () => {
+        const now = this.now();
+        this.requeueExpiredLeasesForRecipient(recipient, now);
+        return this.purgeExpiredForRecipient(recipient, now);
+      });
     });
     return removed;
   }
@@ -1220,6 +1326,18 @@ class RedisMailboxStore {
 
   recipientsKey() {
     return `${this.redisKeyPrefix}__recipients`;
+  }
+
+  lockKey(recipient) {
+    return `${this.redisKeyPrefix}${recipient}:lock`;
+  }
+
+  ackResultKey(recipient, leaseId) {
+    return `${this.redisKeyPrefix}${recipient}:lease_result:ack:${leaseId}`;
+  }
+
+  failResultKey(recipient, leaseId) {
+    return `${this.redisKeyPrefix}${recipient}:lease_result:fail:${leaseId}`;
   }
 
   touchRecipient(recipient, now) {
@@ -1400,6 +1518,88 @@ class RedisMailboxStore {
     this.runRedis(["EXPIRE", this.leaseMapKey(recipient), String(ttlSeconds)]);
     this.runRedis(["EXPIRE", this.messageLeaseKey(recipient), String(ttlSeconds)]);
     this.runRedis(["EXPIRE", this.deadLetterKey(recipient), String(ttlSeconds)]);
+  }
+
+  readLeaseResult(key) {
+    const raw = this.runRedis(["GET", key]).trim();
+    return parseLeaseResultRecord(raw);
+  }
+
+  writeLeaseResult(key, value) {
+    this.runRedis([
+      "SET",
+      key,
+      JSON.stringify(value),
+      "PX",
+      String(this.redisLeaseResultTtlMs)
+    ]);
+  }
+
+  withRecipientLock(recipient, operation, fn) {
+    const token = this.acquireRecipientLock(recipient, operation);
+    try {
+      return fn();
+    } finally {
+      this.releaseRecipientLock(recipient, token);
+    }
+  }
+
+  acquireRecipientLock(recipient, operation) {
+    const lockKey = this.lockKey(recipient);
+    const token = `${this.instanceId}:${generateLeaseId()}`;
+    const deadline = Date.now() + this.redisLockAcquireTimeoutMs;
+    while (true) {
+      const acquired = this.runRedis([
+        "SET",
+        lockKey,
+        token,
+        "NX",
+        "PX",
+        String(this.redisLockTtlMs)
+      ])
+        .trim()
+        .toUpperCase();
+      if (acquired === "OK") {
+        return token;
+      }
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `Redis lock timeout recipient=${recipient} operation=${operation} instance_id=${this.instanceId}`
+        );
+      }
+      this.sleepMs(this.redisLockRetryDelayMs);
+    }
+  }
+
+  releaseRecipientLock(recipient, token) {
+    try {
+      this.runRedis([
+        "EVAL",
+        "if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end",
+        "1",
+        this.lockKey(recipient),
+        token
+      ]);
+    } catch (_err) {
+      // Best effort unlock; TTL protects against deadlocks.
+    }
+  }
+
+  sleepMs(ms) {
+    const delay = Math.max(0, Math.floor(ms));
+    if (delay <= 0) {
+      return;
+    }
+    try {
+      const waitBuffer = new SharedArrayBuffer(4);
+      const waitArray = new Int32Array(waitBuffer);
+      Atomics.wait(waitArray, 0, 0, delay);
+    } catch (_err) {
+      const end = Date.now() + delay;
+      while (Date.now() < end) {
+        // Fallback busy wait for older runtimes.
+      }
+    }
   }
 
   readInteger(args) {

@@ -75,8 +75,79 @@ function main() {
   }
 
   if (redisUsable) {
-    const redisStore = createMailboxStore({ type: "redis", redisCommandTimeoutMs: 200 });
-    assert.ok(redisStore instanceof RedisMailboxStore);
+    let nowRedis = 0;
+    const redisKeyPrefix = `aimtp:test:multi-relay:${Date.now()}:${Math.random()
+      .toString(16)
+      .slice(2)}:`;
+    const redisOptions = {
+      type: "redis",
+      redisCommandTimeoutMs: 200,
+      redisKeyPrefix,
+      leaseMs: 50,
+      maxRetries: 1,
+      retryBaseMs: 5,
+      retryMaxMs: 5,
+      now: () => nowRedis
+    };
+
+    const relayA = createMailboxStore({
+      ...redisOptions,
+      relayInstanceId: "relay-a"
+    });
+    const relayB = createMailboxStore({
+      ...redisOptions,
+      relayInstanceId: "relay-b"
+    });
+    assert.ok(relayA instanceof RedisMailboxStore);
+    assert.ok(relayB instanceof RedisMailboxStore);
+
+    relayA.enqueue("agent-r", { id: "env-redis-ack" });
+    const leaseA1 = relayA.poll("agent-r", 1)[0];
+    assert.strictEqual(leaseA1.deliveryAttempt, 1);
+
+    const crossAck = relayB.ack("agent-r", leaseA1.leaseId);
+    assert.strictEqual(crossAck.status, "acknowledged");
+
+    const duplicateAck = relayA.ack("agent-r", leaseA1.leaseId);
+    assert.strictEqual(duplicateAck.status, "acknowledged");
+    assert.deepStrictEqual(relayA.poll("agent-r", 1), []);
+
+    relayA.enqueue("agent-r", { id: "env-redis-fail" });
+    const leaseB1 = relayB.poll("agent-r", 1)[0];
+    assert.strictEqual(leaseB1.deliveryAttempt, 1);
+
+    const fail1 = relayA.fail("agent-r", leaseB1.leaseId, "boom-1");
+    assert.strictEqual(fail1.status, "requeued");
+    const duplicateFail1 = relayB.fail("agent-r", leaseB1.leaseId, "boom-1-dup");
+    assert.strictEqual(duplicateFail1.status, "requeued");
+
+    const pollBeforeBackoff = relayB.poll("agent-r", 1);
+    assert.strictEqual(pollBeforeBackoff.length, 0);
+
+    nowRedis += 5;
+    const leaseB2 = relayA.poll("agent-r", 1)[0];
+    assert.strictEqual(leaseB2.deliveryAttempt, 2);
+
+    const fail2 = relayB.fail("agent-r", leaseB2.leaseId, "boom-2");
+    assert.strictEqual(fail2.status, "dead_lettered");
+    const duplicateFail2 = relayA.fail("agent-r", leaseB2.leaseId, "boom-2-dup");
+    assert.strictEqual(duplicateFail2.status, "dead_lettered");
+
+    const dead = relayA.pollDeadLetters("agent-r", 1);
+    assert.strictEqual(dead.length, 1);
+    assert.strictEqual(dead[0].envelope.id, "env-redis-fail");
+
+    relayA.enqueue("agent-r", { id: "env-redis-expire" });
+    const expLease1 = relayA.poll("agent-r", 1)[0];
+    assert.strictEqual(expLease1.deliveryAttempt, 1);
+    nowRedis += 60;
+    const expPollPending = relayB.poll("agent-r", 1);
+    assert.strictEqual(expPollPending.length, 0);
+    nowRedis += 5;
+    const expLease2 = relayB.poll("agent-r", 1)[0];
+    assert.strictEqual(expLease2.deliveryAttempt, 2);
+    const expAck = relayB.ack("agent-r", expLease2.leaseId);
+    assert.strictEqual(expAck.status, "acknowledged");
   }
 
   let now = 0;

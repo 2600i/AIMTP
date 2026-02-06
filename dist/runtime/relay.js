@@ -68,6 +68,16 @@ function parseOptionalEnvInt(value) {
     }
     return parsed;
 }
+function parseOptionalNonNegativeEnvInt(value) {
+    if (!value || value.trim() === "") {
+        return undefined;
+    }
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return undefined;
+    }
+    return parsed;
+}
 function envPath(name, fallback) {
     const raw = process.env[name];
     if (raw === undefined) {
@@ -377,6 +387,9 @@ const relayPath = relayPathInput.length > 1 && relayPathInput.endsWith("/")
 const peekPath = `${relayPath}/peek`;
 const pollPath = `${relayPath}/poll`;
 const mailboxPath = `${relayPath}/mailbox`;
+const ackPath = `${relayPath}/ack`;
+const failPath = `${relayPath}/fail`;
+const deadPath = `${relayPath}/dead`;
 const healthPath = envPath("AIMTP_HEALTH_PATH", DEFAULT_HEALTH_PATH) || DEFAULT_HEALTH_PATH;
 const readyPath = envPath("AIMTP_READY_PATH", DEFAULT_READY_PATH);
 const readyEnabled = readyPath !== "";
@@ -400,6 +413,10 @@ const mailboxTtlMs = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_TTL_MS);
 const mailboxMaxQueueLength = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_MAX_QUEUE_LENGTH);
 const mailboxMaxRecipients = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_MAX_RECIPIENTS);
 const mailboxCleanupIntervalMs = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_CLEANUP_INTERVAL_MS);
+const mailboxLeaseMs = parseOptionalEnvInt(process.env.AIMTP_MAILBOX_LEASE_MS);
+const mailboxMaxRetries = parseOptionalNonNegativeEnvInt(process.env.AIMTP_MAILBOX_MAX_RETRIES);
+const mailboxRetryBaseMs = parseOptionalNonNegativeEnvInt(process.env.AIMTP_MAILBOX_RETRY_BASE_MS);
+const mailboxRetryMaxMs = parseOptionalNonNegativeEnvInt(process.env.AIMTP_MAILBOX_RETRY_MAX_MS);
 const redisUrl = process.env.AIMTP_REDIS_URL?.trim();
 const redisHost = process.env.AIMTP_REDIS_HOST?.trim();
 const redisPort = parseOptionalEnvInt(process.env.AIMTP_REDIS_PORT);
@@ -409,12 +426,24 @@ const redisPassword = process.env.AIMTP_REDIS_PASSWORD?.trim();
 const redisKeyPrefix = process.env.AIMTP_REDIS_KEY_PREFIX?.trim();
 const redisCliPath = process.env.AIMTP_REDIS_CLI_PATH?.trim();
 const redisCommandTimeoutMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_TIMEOUT_MS);
+const redisLockTtlMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_TTL_MS);
+const redisLockAcquireTimeoutMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_ACQUIRE_TIMEOUT_MS);
+const redisLockRetryDelayMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_RETRY_DELAY_MS);
+const redisLeaseResultTtlMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_LEASE_RESULT_TTL_MS);
+const relayInstanceIdRaw = process.env.AIMTP_RELAY_INSTANCE_ID?.trim();
+const relayInstanceId = relayInstanceIdRaw && relayInstanceIdRaw.length > 0
+    ? relayInstanceIdRaw
+    : `relay-${process.pid}`;
 const mailbox = (0, mailbox_1.createMailboxStore)({
     type: mailboxStoreType,
     sqlitePath: mailboxSqlitePath,
     ttlMs: mailboxTtlMs,
     maxQueueLength: mailboxMaxQueueLength,
     maxRecipients: mailboxMaxRecipients,
+    leaseMs: mailboxLeaseMs,
+    maxRetries: mailboxMaxRetries,
+    retryBaseMs: mailboxRetryBaseMs,
+    retryMaxMs: mailboxRetryMaxMs,
     redisUrl,
     redisHost,
     redisPort,
@@ -424,6 +453,11 @@ const mailbox = (0, mailbox_1.createMailboxStore)({
     redisKeyPrefix,
     redisCliPath,
     redisCommandTimeoutMs,
+    redisLockTtlMs,
+    redisLockAcquireTimeoutMs,
+    redisLockRetryDelayMs,
+    redisLeaseResultTtlMs,
+    relayInstanceId,
     logger: console
 });
 let cleanupTimer = null;
@@ -442,7 +476,8 @@ if (mailboxCleanupIntervalMs && mailboxCleanupIntervalMs > 0 && mailbox.cleanupE
 console.log(JSON.stringify({
     event: "allowlist_state",
     enabled: recipientAllowlist.enabled,
-    key_count: recipientKeys.keyToRecipients.size
+    key_count: recipientKeys.keyToRecipients.size,
+    relay_instance_id: relayInstanceId
 }));
 if (recipientAllowlist.enabled) {
     console.log(JSON.stringify({
@@ -506,9 +541,12 @@ const server = http.createServer(async (req, res) => {
     };
     const isPeek = url.pathname === peekPath;
     const isPoll = url.pathname === pollPath;
+    const isDead = url.pathname === deadPath;
+    const isAck = url.pathname === ackPath;
+    const isFail = url.pathname === failPath;
     const isMailboxPath = url.pathname === mailboxPath;
     const isRelayPath = url.pathname === relayPath;
-    if (!isPeek && !isPoll && !isMailboxPath && !isRelayPath) {
+    if (!isPeek && !isPoll && !isDead && !isAck && !isFail && !isMailboxPath && !isRelayPath) {
         sendError(res, 404, "not_found", "Not Found");
         logRequest(404);
         return;
@@ -517,7 +555,7 @@ const server = http.createServer(async (req, res) => {
     if (method === "OPTIONS") {
         if (!allowedOrigin) {
             sendError(res, 403, "forbidden", "Origin not allowed");
-            if (isPeek || isPoll) {
+            if (isPeek || isPoll || isDead) {
                 logMailbox(403);
             }
             else {
@@ -531,7 +569,7 @@ const server = http.createServer(async (req, res) => {
         res.setHeader("Access-Control-Max-Age", "600");
         res.statusCode = 204;
         res.end();
-        if (isPeek || isPoll) {
+        if (isPeek || isPoll || isDead) {
             logMailbox(204);
         }
         else {
@@ -545,7 +583,7 @@ const server = http.createServer(async (req, res) => {
     if (authResult.enabled && !authResult.ok) {
         if (authStatus === "missing") {
             sendError(res, 401, "unauthorized", "Missing API key");
-            if (isPeek || isPoll) {
+            if (isPeek || isPoll || isDead) {
                 logMailbox(401);
             }
             else {
@@ -554,7 +592,7 @@ const server = http.createServer(async (req, res) => {
             return;
         }
         sendError(res, 403, "forbidden", "Invalid API key");
-        if (isPeek || isPoll) {
+        if (isPeek || isPoll || isDead) {
             logMailbox(403);
         }
         else {
@@ -562,7 +600,7 @@ const server = http.createServer(async (req, res) => {
         }
         return;
     }
-    if (isPeek || isPoll) {
+    if (isPeek || isPoll || isDead) {
         if (method !== "GET") {
             sendError(res, 405, "method_not_allowed", "Method not allowed");
             logMailbox(405);
@@ -600,13 +638,40 @@ const server = http.createServer(async (req, res) => {
         }
         if (isPeek) {
             const result = mailbox.peek(recipient);
-            sendJson(res, 200, { recipient, count: result.count });
+            sendJson(res, 200, {
+                recipient,
+                count: result.count,
+                pending: result.pending,
+                leased: result.leased,
+                dead_letters: result.deadLetters
+            });
             logMailbox(200, recipient, result.count);
             return;
         }
         const maxItems = parseMaxParam(url.searchParams.get("max"));
+        if (isDead) {
+            const items = mailbox.pollDeadLetters(recipient, maxItems);
+            const response = items.map((item) => ({
+                envelope: item.envelope,
+                enqueued_at: new Date(item.enqueuedAt).toISOString(),
+                failed_at: new Date(item.failedAt).toISOString(),
+                retry_count: item.retryCount,
+                delivery_attempt: item.deliveryAttempt,
+                last_error: item.lastError
+            }));
+            sendJson(res, 200, response);
+            logMailbox(200, recipient, items.length);
+            return;
+        }
         const items = mailbox.poll(recipient, maxItems);
-        sendJson(res, 200, items);
+        const response = items.map((item) => ({
+            envelope: item.envelope,
+            lease_id: item.leaseId,
+            lease_expires_at: new Date(item.leaseExpiresAt).toISOString(),
+            retry_count: item.retryCount,
+            delivery_attempt: item.deliveryAttempt
+        }));
+        sendJson(res, 200, response);
         logMailbox(200, recipient, items.length);
         return;
     }
@@ -671,6 +736,98 @@ const server = http.createServer(async (req, res) => {
             ok: true,
             recipient,
             id
+        });
+        logRequest(200);
+        return;
+    }
+    if (isAck || isFail) {
+        if (method !== "POST") {
+            sendError(res, 405, "method_not_allowed", "Method not allowed");
+            logRequest(405);
+            return;
+        }
+        let payload;
+        try {
+            const raw = await readRequestBody(req, maxBytes);
+            payload = JSON.parse(raw);
+        }
+        catch (err) {
+            if (isRelayError(err) && err.code === "payload_too_large") {
+                sendError(res, 413, "payload_too_large", "Request body exceeds maximum size");
+                logRequest(413);
+                return;
+            }
+            sendError(res, 400, "invalid_json", "Invalid JSON payload");
+            logRequest(400);
+            return;
+        }
+        const recipient = payload && typeof payload.recipient === "string"
+            ? payload.recipient.trim()
+            : "";
+        if (!recipient) {
+            sendError(res, 400, "invalid_request", "Recipient is required", { recipient: null });
+            logRequest(400);
+            return;
+        }
+        if (!RECIPIENT_PATTERN.test(recipient)) {
+            sendError(res, 400, "invalid_request", "Recipient format is invalid", { recipient });
+            logRequest(400);
+            return;
+        }
+        if (recipientAllowlist.enabled && !recipientAllowlist.set.has(recipient)) {
+            sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+                recipient
+            });
+            logRequest(404);
+            return;
+        }
+        if (!isRecipientAuthorized(authResult, recipient)) {
+            sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
+            logRequest(403);
+            return;
+        }
+        const leaseId = payload && typeof payload.lease_id === "string"
+            ? payload.lease_id.trim()
+            : "";
+        if (!leaseId) {
+            sendError(res, 400, "invalid_request", "Lease id is required");
+            logRequest(400);
+            return;
+        }
+        if (isAck) {
+            const result = mailbox.ack(recipient, leaseId);
+            if (!result.ok && result.status === "unknown_lease") {
+                sendError(res, 404, "unknown_lease", "Lease not found");
+                logRequest(404);
+                return;
+            }
+            if (!result.ok && result.status === "expired") {
+                sendError(res, 409, "lease_expired", "Lease has expired");
+                logRequest(409);
+                return;
+            }
+            sendJson(res, 200, { ok: true, status: "acknowledged" });
+            logRequest(200);
+            return;
+        }
+        const reason = payload && typeof payload.reason === "string"
+            ? payload.reason.trim()
+            : undefined;
+        const result = mailbox.fail(recipient, leaseId, reason);
+        if (!result.ok && result.status === "unknown_lease") {
+            sendError(res, 404, "unknown_lease", "Lease not found");
+            logRequest(404);
+            return;
+        }
+        if (!result.ok && result.status === "expired") {
+            sendError(res, 409, "lease_expired", "Lease has expired");
+            logRequest(409);
+            return;
+        }
+        sendJson(res, 200, {
+            ok: true,
+            status: result.status,
+            retry_count: result.retryCount ?? 0
         });
         logRequest(200);
         return;

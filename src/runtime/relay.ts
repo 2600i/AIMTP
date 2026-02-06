@@ -506,6 +506,17 @@ const redisPassword = process.env.AIMTP_REDIS_PASSWORD?.trim();
 const redisKeyPrefix = process.env.AIMTP_REDIS_KEY_PREFIX?.trim();
 const redisCliPath = process.env.AIMTP_REDIS_CLI_PATH?.trim();
 const redisCommandTimeoutMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_TIMEOUT_MS);
+const redisLockTtlMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_TTL_MS);
+const redisLockAcquireTimeoutMs = parseOptionalEnvInt(
+  process.env.AIMTP_REDIS_LOCK_ACQUIRE_TIMEOUT_MS
+);
+const redisLockRetryDelayMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_LOCK_RETRY_DELAY_MS);
+const redisLeaseResultTtlMs = parseOptionalEnvInt(process.env.AIMTP_REDIS_LEASE_RESULT_TTL_MS);
+const relayInstanceIdRaw = process.env.AIMTP_RELAY_INSTANCE_ID?.trim();
+const relayInstanceId =
+  relayInstanceIdRaw && relayInstanceIdRaw.length > 0
+    ? relayInstanceIdRaw
+    : `relay-${process.pid}`;
 const mailbox: MailboxStore = createMailboxStore({
   type: mailboxStoreType,
   sqlitePath: mailboxSqlitePath,
@@ -525,6 +536,11 @@ const mailbox: MailboxStore = createMailboxStore({
   redisKeyPrefix,
   redisCliPath,
   redisCommandTimeoutMs,
+  redisLockTtlMs,
+  redisLockAcquireTimeoutMs,
+  redisLockRetryDelayMs,
+  redisLeaseResultTtlMs,
+  relayInstanceId,
   logger: console
 });
 let cleanupTimer: NodeJS.Timeout | null = null;
@@ -544,7 +560,8 @@ console.log(
   JSON.stringify({
     event: "allowlist_state",
     enabled: recipientAllowlist.enabled,
-    key_count: recipientKeys.keyToRecipients.size
+    key_count: recipientKeys.keyToRecipients.size,
+    relay_instance_id: relayInstanceId
   })
 );
 

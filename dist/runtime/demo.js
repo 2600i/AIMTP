@@ -114,6 +114,7 @@ async function runMailboxHttpDemo(params) {
     peekUrl.search = new URLSearchParams({ recipient: params.recipient }).toString();
     const pollUrl = new URL("/aimtp/poll", base);
     pollUrl.search = new URLSearchParams({ recipient: params.recipient, max: "10" }).toString();
+    const ackUrl = new URL("/aimtp/ack", base);
     const mailboxPayload = {
         recipient: params.recipient,
         message: {
@@ -143,5 +144,19 @@ async function runMailboxHttpDemo(params) {
         headers: { "X-AIMTP-KEY": params.apiKey }
     });
     const polled = (await pollResponse.json());
+    for (const item of polled) {
+        const leaseId = item.leaseId || item.lease_id;
+        if (!leaseId) {
+            continue;
+        }
+        await fetch(ackUrl, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "X-AIMTP-KEY": params.apiKey
+            },
+            body: JSON.stringify({ recipient: params.recipient, lease_id: leaseId })
+        });
+    }
     return { peekCount: peekBody.count ?? 0, polled };
 }

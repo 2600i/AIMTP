@@ -45,6 +45,12 @@ sequenceDiagram
 - If you need fan-out notifications, integrate Redis Pub/Sub or streams
   externally. The relay does not require Pub/Sub to function.
 
+## Multi-Relay Safety
+- Relay instances use a per-recipient Redis lock so mailbox state transitions are serialized across instances.
+- Lease state is shared in Redis; `ack` and `fail` are valid from any relay instance.
+- Duplicate `ack`/`fail` calls for the same lease id are treated idempotently for a bounded TTL window.
+- Lock acquisition is bounded by timeout to avoid permanent stalls after instance failures.
+
 ## Authentication and Signatures
 AIMTP envelopes may include an optional `signature` object with `key_id`,
 `signature`, and `alg`. The protocol is chain-agnostic and does not mandate a

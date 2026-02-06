@@ -41,6 +41,19 @@ node dist/runtime/relay.js
 - `AIMTP_REDIS_KEY_PREFIX` (default `aimtp:mailbox:`)
 - `AIMTP_REDIS_CLI_PATH` (default `redis-cli`)
 - `AIMTP_REDIS_TIMEOUT_MS` (default `1000`)
+- `AIMTP_RELAY_INSTANCE_ID` (optional stable relay instance id for logs/locks)
+- `AIMTP_REDIS_LOCK_TTL_MS` (default `10000`)
+- `AIMTP_REDIS_LOCK_ACQUIRE_TIMEOUT_MS` (default `5000`)
+- `AIMTP_REDIS_LOCK_RETRY_DELAY_MS` (default `20`)
+- `AIMTP_REDIS_LEASE_RESULT_TTL_MS` (default `300000`)
+
+### Recommended Redis Coordination Defaults
+| Variable | Recommended default | Notes |
+| --- | ---: | --- |
+| `AIMTP_REDIS_LOCK_TTL_MS` | `10000` | Lease time for per-recipient lock ownership. |
+| `AIMTP_REDIS_LOCK_ACQUIRE_TIMEOUT_MS` | `5000` | Max wait to acquire recipient lock before returning error. |
+| `AIMTP_REDIS_LOCK_RETRY_DELAY_MS` | `20` | Sleep between lock acquire attempts. |
+| `AIMTP_REDIS_LEASE_RESULT_TTL_MS` | `300000` | TTL for cached idempotent `ack`/`fail` lease results. |
 
 ## Authentication and Signatures
 Auth is required for all mailbox endpoints:
@@ -206,6 +219,13 @@ Response `200`:
 - Lease expiration triggers requeue with exponential backoff
 - Max retry limit moves messages to the dead-letter queue
 
+## Multi-Relay Semantics
+- Redis-backed mailbox operations are coordinated with per-recipient distributed locks.
+- `poll`, `ack`, `fail`, `peek`, and dead-letter reads are serialized per recipient across relay instances.
+- Duplicate `ack` and `fail` requests for the same lease id are idempotent for a short TTL window.
+- Lease ownership is global to Redis state, so a lease polled by relay A can be acknowledged or failed by relay B.
+- Lock acquisition timeout returns an internal error; tune lock env vars for high-contention recipients.
+
 ## Mailbox Limits
 - TTL: `10 minutes`. Expired messages are dropped on enqueue + peek/poll
 - Max queue length per recipient: `100` (oldest dropped first)
@@ -221,6 +241,7 @@ SQLite schema is defined in `docs/mailbox-sqlite-schema.sql`.
 - Place relays behind a load balancer and keep key routing consistent.
 - If you need cross-process notifications, integrate Redis Pub/Sub or streams
   externally. The relay does not require Pub/Sub to function.
+- Assign `AIMTP_RELAY_INSTANCE_ID` per instance (or rely on default `relay-<pid>`) for operational traceability.
 
 ## Testing
 ```sh
@@ -230,6 +251,8 @@ npm test
 ## Troubleshooting
 - **Redis connection errors**: verify `redis-cli`, host/port, credentials, and
   `AIMTP_REDIS_TIMEOUT_MS`.
+- **Redis lock timeout** (`500 internal_error`): increase `AIMTP_REDIS_LOCK_TTL_MS`
+  or `AIMTP_REDIS_LOCK_ACQUIRE_TIMEOUT_MS` for busy recipients.
 - **Lease expired** (`409 lease_expired`): poll again and use the new lease id.
 - **Unknown recipient** (`404 unknown_recipient`): check allowlists and spelling.
 - **Unauthorized** (`401/403`): verify API keys and recipient key mapping.
