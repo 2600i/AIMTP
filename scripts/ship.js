@@ -5,8 +5,17 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { execFileSync, spawnSync } = require("node:child_process");
 
+function output(message) {
+  console.log(message);
+}
+
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
 function run(command, args) {
-  console.log(`$ ${command} ${args.join(" ")}`);
+  output(`$ ${command} ${args.join(" ")}`);
   const result = spawnSync(command, args, {
     stdio: "inherit"
   });
@@ -50,6 +59,44 @@ function hasUpstream() {
   }
 }
 
+function readUpstreamOrNull() {
+  try {
+    return readCommand("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  } catch {
+    return null;
+  }
+}
+
+function ensureSafeMainShipping() {
+  const branch = readCommand("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch !== "main") {
+    return;
+  }
+
+  const upstream = readUpstreamOrNull();
+  if (!upstream) {
+    fail("Refusing to ship from main without upstream tracking. Sync main or ship from a release branch.");
+  }
+
+  const rawCounts = readCommand("git", ["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
+  const parts = rawCounts.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    fail("Refusing to ship from main: unable to determine divergence against upstream.");
+  }
+
+  const ahead = Number(parts[0]);
+  const behind = Number(parts[1]);
+  if (!Number.isInteger(ahead) || !Number.isInteger(behind)) {
+    fail("Refusing to ship from main: invalid divergence data from git.");
+  }
+
+  if (ahead !== 0 || behind !== 0) {
+    fail(
+      `Refusing to ship from diverged main (ahead ${ahead}, behind ${behind}). Create a release branch or sync main with origin.`
+    );
+  }
+}
+
 function shouldPushFromEnv(value) {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
@@ -81,6 +128,8 @@ async function askToPush() {
 }
 
 async function main() {
+  ensureSafeMainShipping();
+
   const commitMessage =
     process.env.SHIP_MESSAGE && process.env.SHIP_MESSAGE.trim()
       ? process.env.SHIP_MESSAGE.trim()
@@ -97,7 +146,7 @@ async function main() {
     run("git", ["add", "-A"]);
     run("git", ["commit", "-m", commitMessage]);
   } else {
-    console.log("No changes to commit before version bump.");
+    output("No changes to commit before version bump.");
   }
 
   writePackageVersion(packagePath, nextVersion);
@@ -112,7 +161,7 @@ async function main() {
 
   const shouldPush = await askToPush();
   if (!shouldPush) {
-    console.log("Push skipped.");
+    output("Push skipped.");
     return;
   }
 
@@ -127,6 +176,6 @@ async function main() {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  console.error(message);
+  fail(message);
   process.exit(1);
 });
