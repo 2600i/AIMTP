@@ -2,6 +2,7 @@
 
 const http = require("http");
 const https = require("https");
+const crypto = require("crypto");
 const { RelayError } = require("./relay");
 const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
 const { validateEnvelope } = require("./validation");
@@ -9,6 +10,7 @@ const {
   createSignatureTrustConfig,
   evaluateEnvelopeSignaturePolicy
 } = require("./signature");
+const { createIdentityVerifier } = require("./identity");
 const {
   buildRelayDescriptor,
   isTrustEntryExpired,
@@ -16,6 +18,7 @@ const {
   loadTrustPolicy,
   parseFederationConfig,
   resolveDestinationRelayId,
+  stableJsonStringify,
   validateHopLimit,
   verifyRelayDescriptor
 } = require("./federation");
@@ -107,6 +110,20 @@ function parseOptionalNonNegativeEnvInt(value, fallback) {
     return fallback;
   }
   return parsed;
+}
+
+function parseIdentityMode(value, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "log") {
+    return "log";
+  }
+  if (normalized === "enforce") {
+    return "enforce";
+  }
+  return fallback;
 }
 
 function parseMailboxStoreOptions(options) {
@@ -632,6 +649,15 @@ function createWebhookRelayServer(relay, options = {}) {
     ...signatureOptions,
     logger: options.logger || console
   });
+  const identityEnabled = process.env.AIMTP_IDENTITY === "on";
+  const identityMode = identityEnabled
+    ? parseIdentityMode(
+      typeof options.identityMode === "string" ? options.identityMode : process.env.AIMTP_IDENTITY_MODE,
+      "log"
+    )
+    : "off";
+  const identityEnforce = identityEnabled && identityMode === "enforce";
+  const identityVerifier = identityEnabled ? createIdentityVerifier() : null;
   const testModeEnabled =
     process.env.AIMTP_TEST_MODE === "on" || process.env.NODE_ENV === "test";
   const federationConfig = parseFederationConfig({
@@ -725,6 +751,99 @@ function createWebhookRelayServer(relay, options = {}) {
     }
     console.log(JSON.stringify(record));
   };
+  const logIdentityVerification = (source, envelope, result) => {
+    if (!identityEnabled || !result) {
+      return;
+    }
+    if (result.code === "identity_not_present" && !identityEnforce) {
+      return;
+    }
+    const identity =
+      envelope && envelope.identity && typeof envelope.identity === "object" &&
+      !Array.isArray(envelope.identity)
+        ? envelope.identity
+        : null;
+    const proof =
+      envelope && envelope.proof && typeof envelope.proof === "object" && !Array.isArray(envelope.proof)
+        ? envelope.proof
+        : null;
+    const details =
+      result.details && typeof result.details === "object" && !Array.isArray(result.details)
+        ? result.details
+        : null;
+    const detailsKid = details && typeof details.kid === "string" ? details.kid : "";
+    const proofKid = proof && typeof proof.kid === "string" ? proof.kid : "";
+    const missingIdentity =
+      result.code === "identity_not_present" ||
+      result.code === "identity_missing" ||
+      result.code === "identity_proof_missing";
+    const enforcementFailed = identityEnforce && (missingIdentity || !result.ok);
+    let identityHash = "";
+    if (identity) {
+      try {
+        identityHash = crypto
+          .createHash("sha256")
+          .update(stableJsonStringify(identity))
+          .digest("hex")
+          .slice(0, 16);
+      } catch (_err) {
+        identityHash = "";
+      }
+    }
+    const record = {
+      event: "identity_verification",
+      relay_instance_id: relayInstanceId,
+      source,
+      outcome: enforcementFailed ? "fail" : result.ok ? "ok" : "fail",
+      reason_code: result.code,
+      envelope_id: envelope && typeof envelope.id === "string" ? envelope.id : "-"
+    };
+    if (identity && typeof identity.id === "string" && identity.id.trim()) {
+      record.id = identity.id.trim();
+    }
+    if (identity && typeof identity.role === "string" && identity.role.trim()) {
+      record.role = identity.role.trim();
+    }
+    if (detailsKid || proofKid) {
+      record.kid = detailsKid || proofKid;
+    }
+    if (identityHash) {
+      record.identity_hash = identityHash;
+    }
+    console.log(
+      JSON.stringify(record)
+    );
+  };
+  const verifyIdentityEnvelope = (res, source, envelope) => {
+    if (!identityVerifier) {
+      return { ok: true, statusCode: 0 };
+    }
+    const identityResult = identityVerifier.verifyEnvelopeIdentity(envelope);
+    logIdentityVerification(source, envelope, identityResult);
+    if (!identityEnforce) {
+      return { ok: true, statusCode: 0 };
+    }
+    const missingIdentity =
+      identityResult.code === "identity_not_present" ||
+      identityResult.code === "identity_missing" ||
+      identityResult.code === "identity_proof_missing";
+    if (missingIdentity) {
+      sendError(
+        res,
+        400,
+        "invalid_request",
+        "identity and proof are required when identity enforcement is enabled"
+      );
+      return { ok: false, statusCode: 400 };
+    }
+    if (!identityResult.ok) {
+      sendError(res, 403, "identity_verification_failed", "Identity verification failed", {
+        reason: identityResult.code
+      });
+      return { ok: false, statusCode: 403 };
+    }
+    return { ok: true, statusCode: 0 };
+  };
   let summaryTimer = null;
   if (summaryIntervalMs && summaryIntervalMs > 0) {
     summaryTimer = setInterval(() => {
@@ -756,6 +875,8 @@ function createWebhookRelayServer(relay, options = {}) {
       relay_instance_id: relayInstanceId,
       signature_policy: signatureConfig.policy,
       trusted_key_count: signatureConfig.trustedKeys.size,
+      identity_enabled: identityEnabled,
+      identity_mode: identityMode,
       federation_enabled: federationConfig.enabled,
       federation_trust_policy_mode: federationConfig.trustPolicyMode
     })
@@ -973,6 +1094,12 @@ function createWebhookRelayServer(relay, options = {}) {
           signatureDecision.error.details
         );
         return;
+      }
+      if (identityVerifier) {
+        const identityDecision = verifyIdentityEnvelope(res, "federation_inbound", envelope);
+        if (!identityDecision.ok) {
+          return;
+        }
       }
 
       const recipient = typeof envelope.recipient === "string" ? envelope.recipient.trim() : "";
@@ -1433,6 +1560,13 @@ function createWebhookRelayServer(relay, options = {}) {
       );
       logRequest(signatureDecision.error.httpStatus || 403);
       return;
+    }
+    if (identityVerifier) {
+      const identityDecision = verifyIdentityEnvelope(res, "relay_inbound", payload);
+      if (!identityDecision.ok) {
+        logRequest(identityDecision.statusCode || 403);
+        return;
+      }
     }
 
     const recipient =

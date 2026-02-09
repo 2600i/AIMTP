@@ -10,6 +10,7 @@ const packageJson = require("../package.json");
 const { WebhookRelay, createWebhookRelayServer, Mailbox } = require("../runtime");
 const { createEnvelope, createMessage, createTaskRequest } = require("../sdk/js");
 const { canonicalizeEnvelopeForSigning } = require("../runtime/signature");
+const { createProof } = require("../runtime/identity");
 
 const ADMIN_KEY = "super-secret";
 
@@ -506,6 +507,77 @@ async function main() {
         const requestEnvelope = buildRequestEnvelope("agent-b", "sig-warn");
         const warnMissing = await postJson(port, "/aimtp", requestEnvelope, authHeaders(ADMIN_KEY));
         assert.strictEqual(warnMissing.status, 202);
+      })
+  );
+
+  const { publicKey: identityPublicKey, privateKey: identityPrivateKey } = crypto.generateKeyPairSync("ed25519");
+  const identityPublicKeyBase64 = identityPublicKey
+    .export({ format: "der", type: "spki" })
+    .toString("base64");
+  const identityPrivateKeyBase64 = identityPrivateKey
+    .export({ format: "der", type: "pkcs8" })
+    .toString("base64");
+  const identityDoc = {
+    id: "did:aimtp:test-agent-a",
+    role: "agent",
+    keys: [
+      {
+        kid: "did:aimtp:test-agent-a#k1",
+        alg: "ed25519",
+        public_key: identityPublicKeyBase64,
+        purposes: ["assertion"]
+      }
+    ],
+    issued_at: "2026-01-01T00:00:00Z",
+    expires_at: "2029-01-01T00:00:00Z"
+  };
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory",
+      AIMTP_IDENTITY: "on",
+      AIMTP_IDENTITY_MODE: "enforce",
+      AIMTP_SIGNATURE_POLICY: "off"
+    },
+    async () =>
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const missingIdentity = await postJson(
+          port,
+          "/aimtp",
+          buildRequestEnvelope("agent-b", "identity-enforce-missing"),
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(missingIdentity.status, 400);
+        assert.strictEqual(missingIdentity.body.code, "invalid_request");
+
+        const validEnvelope = Object.assign(
+          {},
+          buildRequestEnvelope("agent-b", "identity-enforce-valid"),
+          { identity: identityDoc }
+        );
+        validEnvelope.proof = createProof(validEnvelope, identityPrivateKeyBase64, {
+          kid: identityDoc.keys[0].kid,
+          createdAt: "2026-01-01T00:00:00Z",
+          expiresAt: "2028-01-01T00:00:00Z"
+        });
+
+        const tamperedEnvelope = Object.assign({}, validEnvelope, {
+          message: Object.assign({}, validEnvelope.message, { content: "tampered-content" })
+        });
+        const invalidProof = await postJson(port, "/aimtp", tamperedEnvelope, authHeaders(ADMIN_KEY));
+        assert.strictEqual(invalidProof.status, 403);
+        assert.strictEqual(invalidProof.body.code, "identity_verification_failed");
+
+        const ok = await postJson(port, "/aimtp", validEnvelope, authHeaders(ADMIN_KEY));
+        assert.strictEqual(ok.status, 202);
       })
   );
 

@@ -17,6 +17,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./protocol/message"), exports);
 __exportStar(require("./protocol/agent"), exports);
 __exportStar(require("./protocol/task"), exports);
+__exportStar(require("./protocol/identity"), exports);
 __exportStar(require("./runtime/registry"), exports);
 __exportStar(require("./runtime/router"), exports);
 __exportStar(require("./runtime/demo"), exports);
