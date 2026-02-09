@@ -1,0 +1,47 @@
+{
+  "case": "task-chain-valid",
+  "sequence": [
+    {
+      "message_type": "task.create",
+      "task": {
+        "id": "task-vec-001",
+        "intent_id": "intent-vec-001",
+        "type": "classify",
+        "input": { "goal": "Summarize launch blockers" },
+        "status": "queued",
+        "created_at": "2026-02-09T00:00:01Z"
+      }
+    },
+    {
+      "message_type": "task.claim",
+      "request": {
+        "action": "task.claim",
+        "resource": "task:task-vec-001",
+        "subject": "did:aimtp:agent.worker-1"
+      },
+      "expected": {
+        "allow": true,
+        "task_status": "claimed"
+      }
+    },
+    {
+      "message_type": "task.result",
+      "request": {
+        "action": "task.result",
+        "resource": "task:task-vec-001",
+        "subject": "did:aimtp:agent.worker-1"
+      },
+      "result": {
+        "task_id": "task-vec-001",
+        "status": "completed",
+        "output": { "category": "ops" },
+        "created_at": "2026-02-09T00:00:04Z"
+      },
+      "expected": {
+        "allow": true,
+        "task_status": "completed",
+        "intent_status": "completed"
+      }
+    }
+  ]
+}

@@ -15,6 +15,7 @@ const { validateEnvelope, validateMessage, validateTask, SPEC_VERSION } = requir
 const federation = require("./federation");
 const identity = require("./identity");
 const capabilities = require("./capabilities");
+const intentos = require("./intentos");
 
 module.exports = {
   AgentRegistry,
@@ -30,6 +31,7 @@ module.exports = {
   federation,
   identity,
   capabilities,
+  intentos,
   validateEnvelope,
   validateMessage,
   validateTask,

@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/identity.test.js && node tests/capabilities.test.js && node tests/mailbox-store.test.js && node tests/federation.test.js && node tests/runtime-relay.test.js",
+    "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/identity.test.js && node tests/capabilities.test.js && node tests/mailbox-store.test.js && node tests/federation.test.js && node tests/intentos-store.test.js && node tests/intentos-authz.test.js && node tests/runtime-relay.test.js",
     "smoke:federation": "node tests/smoke/federation.smoke.js",
     "build": "tsc -p tsconfig.json",
     "demo": "npm run build && node dist/runtime/demo-run.js",

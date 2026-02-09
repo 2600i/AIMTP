@@ -1,0 +1,13 @@
+{
+  "case": "task-claim-unauthorized",
+  "message_type": "task.claim",
+  "request": {
+    "action": "task.claim",
+    "resource": "task:task-vec-002",
+    "subject": "did:aimtp:agent.unauthorized"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capability_scope_mismatch"
+  }
+}

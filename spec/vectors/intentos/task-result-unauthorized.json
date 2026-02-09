@@ -1,0 +1,13 @@
+{
+  "case": "task-result-unauthorized",
+  "message_type": "task.result",
+  "request": {
+    "action": "task.result",
+    "resource": "task:task-vec-003",
+    "subject": "did:aimtp:agent.worker-2"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capability_missing"
+  }
+}

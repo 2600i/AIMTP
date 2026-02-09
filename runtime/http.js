@@ -5,6 +5,7 @@ const https = require("https");
 const crypto = require("crypto");
 const { RelayError } = require("./relay");
 const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
+const { createIntentStore } = require("./intentos");
 const { validateEnvelope } = require("./validation");
 const {
   createSignatureTrustConfig,
@@ -28,6 +29,7 @@ const packageJson = require("../package.json");
 const DEFAULT_PATH = "/aimtp";
 const DEFAULT_HEALTH_PATH = "/healthz";
 const DEFAULT_READY_PATH = "/readyz";
+const DEFAULT_INTENTOS_PATH = "/intentos";
 const DEFAULT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_POLL_MAX = 1;
 const MAX_POLL_LIMIT = 50;
@@ -36,6 +38,10 @@ const DEFAULT_CORS_ORIGINS = [
   "http://127.0.0.1:8080"
 ];
 const RECIPIENT_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -128,6 +134,20 @@ function parseIdentityMode(value, fallback) {
 }
 
 function parseCapabilityMode(value, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "log") {
+    return "log";
+  }
+  if (normalized === "enforce") {
+    return "enforce";
+  }
+  return fallback;
+}
+
+function parseIntentosMode(value, fallback) {
   if (typeof value !== "string") {
     return fallback;
   }
@@ -494,6 +514,17 @@ function parseMaxParam(value) {
   return Math.min(parsed, MAX_POLL_LIMIT);
 }
 
+function parseIntentosLimit(value) {
+  if (!value) {
+    return 50;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return 50;
+  }
+  return Math.min(parsed, 500);
+}
+
 function buildAuthConfig(apiKey, recipientKeys) {
   return {
     enabled: Boolean(apiKey) || recipientKeys.enabled,
@@ -567,6 +598,41 @@ async function readJson(req, maxBytes) {
   }
 }
 
+function extractIntentosAuthEnvelope(payload, defaults = {}) {
+  const envelope = {};
+  if (isPlainObject(payload && payload.envelope)) {
+    Object.assign(envelope, payload.envelope);
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(envelope, "identity") && isPlainObject(payload && payload.identity)) {
+    envelope.identity = payload.identity;
+  }
+  if (!Object.prototype.hasOwnProperty.call(envelope, "proof") && isPlainObject(payload && payload.proof)) {
+    envelope.proof = payload.proof;
+  }
+  if (
+    !Object.prototype.hasOwnProperty.call(envelope, "capabilities") &&
+    isPlainObject(payload && payload.capabilities)
+  ) {
+    envelope.capabilities = payload.capabilities;
+  }
+  if (!Object.prototype.hasOwnProperty.call(envelope, "sender") && typeof payload.sender === "string") {
+    envelope.sender = payload.sender.trim();
+  }
+  if (!Object.prototype.hasOwnProperty.call(envelope, "id") && typeof payload.id === "string") {
+    envelope.id = payload.id.trim();
+  }
+
+  if (!envelope.id && defaults.id) {
+    envelope.id = defaults.id;
+  }
+  if (!envelope.intent && defaults.intent) {
+    envelope.intent = defaults.intent;
+  }
+
+  return envelope;
+}
+
 function postJsonWithTimeout(endpoint, pathname, payload, options = {}) {
   const url = new URL(pathname, endpoint);
   const body = JSON.stringify(payload);
@@ -634,6 +700,13 @@ function createWebhookRelayServer(relay, options = {}) {
   const ackPath = `${relayPath}/ack`;
   const failPath = `${relayPath}/fail`;
   const deadPath = `${relayPath}/dead`;
+  const intentosPath =
+    options.intentosPath ||
+    (process.env.INTENTOS_PATH && process.env.INTENTOS_PATH.trim()) ||
+    DEFAULT_INTENTOS_PATH;
+  const intentSubmitPath = `${intentosPath}/intent`;
+  const intentListPath = `${intentosPath}/intents`;
+  const intentTaskPath = `${intentosPath}/task`;
   const healthPath =
     options.healthPath ||
     (process.env.AIMTP_HEALTH_PATH && process.env.AIMTP_HEALTH_PATH.trim()) ||
@@ -694,6 +767,32 @@ function createWebhookRelayServer(relay, options = {}) {
   const capabilityIdentityVerifier = capabilitiesEnabled
     ? createIdentityVerifier({ clockSkewSec: capabilityClockSkewSec })
     : null;
+  const intentosEnabled =
+    options.intentosEnabled === true ||
+    (typeof options.intentosEnabled !== "boolean" && process.env.INTENTOS === "on");
+  const intentosMode = intentosEnabled
+    ? parseIntentosMode(
+      typeof options.intentosMode === "string" ? options.intentosMode : process.env.INTENTOS_MODE,
+      "log"
+    )
+    : "off";
+  const intentosEnforce = intentosEnabled && intentosMode === "enforce";
+  const intentosBoxId =
+    typeof options.intentosBoxId === "string" && options.intentosBoxId.trim()
+      ? options.intentosBoxId.trim()
+      : typeof process.env.INTENTOS_BOX_ID === "string" && process.env.INTENTOS_BOX_ID.trim()
+        ? process.env.INTENTOS_BOX_ID.trim()
+        : "default";
+  const intentosAudience =
+    typeof options.intentosAudience === "string" && options.intentosAudience.trim()
+      ? options.intentosAudience.trim()
+      : capabilityAudience;
+  const intentosStore = intentosEnabled
+    ? options.intentosStore || createIntentStore({ boxId: intentosBoxId, now: options.now })
+    : null;
+  const intentosIdentityVerifier = createIdentityVerifier({
+    clockSkewSec: capabilityClockSkewSec
+  });
   const testModeEnabled =
     process.env.AIMTP_TEST_MODE === "on" || process.env.NODE_ENV === "test";
   const federationConfig = parseFederationConfig({
@@ -803,6 +902,144 @@ function createWebhookRelayServer(relay, options = {}) {
       reason_code: reasonCode,
       message
     });
+  };
+  const logIntentos = (event, fields) => {
+    const record = {
+      event,
+      relay_instance_id: relayInstanceId
+    };
+    if (fields && typeof fields === "object") {
+      Object.assign(record, fields);
+    }
+    console.log(JSON.stringify(record));
+  };
+  const verifyIntentosAuthorization = (res, source, payload, authRequest) => {
+    const envelope = extractIntentosAuthEnvelope(payload, {
+      intent: authRequest.action
+    });
+    const identityResult = intentosIdentityVerifier.verifyEnvelopeIdentity(envelope);
+    const identity =
+      envelope && isPlainObject(envelope.identity) ? envelope.identity : null;
+    const proof = envelope && isPlainObject(envelope.proof) ? envelope.proof : null;
+    const identityPresent = identity !== null || proof !== null;
+    const identityId =
+      identity && typeof identity.id === "string" && identity.id.trim() ? identity.id.trim() : "";
+
+    if (identityPresent || intentosEnforce) {
+      logIntentos("intentos_identity_verification", {
+        source,
+        action: authRequest.action,
+        resource: authRequest.resource,
+        outcome: identityResult.ok ? "ok" : "fail",
+        reason_code: identityResult.code,
+        principal: identityId || "-"
+      });
+    }
+
+    const missingIdentity =
+      identityResult.code === "identity_not_present" ||
+      identityResult.code === "identity_missing" ||
+      identityResult.code === "identity_proof_missing";
+    if (intentosEnforce && missingIdentity) {
+      sendUnauthorized(
+        res,
+        401,
+        "identity_required",
+        "identity and proof are required for IntentOS enforcement"
+      );
+      return { ok: false, statusCode: 401 };
+    }
+    if (intentosEnforce && !identityResult.ok) {
+      sendUnauthorized(
+        res,
+        403,
+        "identity_verification_failed",
+        "identity verification failed for IntentOS request"
+      );
+      return { ok: false, statusCode: 403 };
+    }
+
+    const capabilityPresentation =
+      envelope && isPlainObject(envelope.capabilities) ? envelope.capabilities : null;
+    if (!capabilityPresentation) {
+      if (intentosEnforce) {
+        logIntentos("intentos_capability_authorization", {
+          source,
+          action: authRequest.action,
+          resource: authRequest.resource,
+          outcome: "deny",
+          reason_code: "capability_missing",
+          principal: identityId || "-"
+        });
+        sendUnauthorized(
+          res,
+          401,
+          "capability_missing",
+          "capability presentation is required for IntentOS enforcement"
+        );
+        return { ok: false, statusCode: 401 };
+      }
+      return { ok: true, statusCode: 0, identity: identity || null };
+    }
+
+    const capabilityRequest = {
+      action: authRequest.action,
+      resource: authRequest.resource,
+      hops: 0
+    };
+    if (identityId) {
+      capabilityRequest.subject = identityId;
+    }
+    if (intentosAudience) {
+      capabilityRequest.audience = intentosAudience;
+    }
+
+    const capabilityDecision = evaluateCapability(capabilityPresentation, capabilityRequest, {
+      nowMs: Date.now(),
+      clockSkewSec: capabilityClockSkewSec,
+      identityVerifier: intentosIdentityVerifier,
+      lookupIdentity: (issuer, doc) => {
+        if (
+          isPlainObject(capabilityPresentation.identities) &&
+          isPlainObject(capabilityPresentation.identities[issuer])
+        ) {
+          return capabilityPresentation.identities[issuer];
+        }
+        if (doc && isPlainObject(doc.issuer_identity)) {
+          return doc.issuer_identity;
+        }
+        if (identity && identity.id === issuer) {
+          return identity;
+        }
+        return null;
+      }
+    });
+
+    logIntentos("intentos_capability_authorization", {
+      source,
+      action: authRequest.action,
+      resource: authRequest.resource,
+      outcome: capabilityDecision.allow ? "allow" : "deny",
+      reason_code: capabilityDecision.reason_code,
+      principal: identityId || "-"
+    });
+
+    if (intentosEnforce && !capabilityDecision.allow) {
+      sendUnauthorized(
+        res,
+        403,
+        capabilityDecision.reason_code || "capability_denied",
+        capabilityDecision.message || "capability authorization denied"
+      );
+      return { ok: false, statusCode: 403 };
+    }
+
+    return {
+      ok: true,
+      statusCode: 0,
+      identity: identity || null,
+      capabilityDecision
+    };
   };
   const parseHopCount = (value) => {
     const headerValue = firstHeaderValue(value);
@@ -1126,6 +1363,9 @@ function createWebhookRelayServer(relay, options = {}) {
       identity_mode: identityMode,
       capabilities_enabled: capabilitiesEnabled,
       capability_mode: capabilityMode,
+      intentos_enabled: intentosEnabled,
+      intentos_mode: intentosMode,
+      intentos_box_id: intentosBoxId,
       federation_enabled: federationConfig.enabled,
       federation_trust_policy_mode: federationConfig.trustPolicyMode
     })
@@ -1433,19 +1673,43 @@ function createWebhookRelayServer(relay, options = {}) {
       console.log(JSON.stringify(record));
     };
 
-  const isPeek = url.pathname === peekPath;
-  const isPoll = url.pathname === pollPath;
-  const isDead = url.pathname === deadPath;
-  const isAck = url.pathname === ackPath;
-  const isFail = url.pathname === failPath;
-  const isMailboxPath = url.pathname === mailboxPath;
-  const isRelayPath = url.pathname === relayPath;
+    const isPeek = url.pathname === peekPath;
+    const isPoll = url.pathname === pollPath;
+    const isDead = url.pathname === deadPath;
+    const isAck = url.pathname === ackPath;
+    const isFail = url.pathname === failPath;
+    const isMailboxPath = url.pathname === mailboxPath;
+    const isRelayPath = url.pathname === relayPath;
+    const isIntentSubmitRoute = url.pathname === intentSubmitPath;
+    const isIntentListRoute = url.pathname === intentListPath;
+    const isIntentDetailRoute = url.pathname.startsWith(`${intentSubmitPath}/`);
+    const isIntentTaskCreateRoute = url.pathname === intentTaskPath;
+    const isIntentTaskClaimRoute =
+      url.pathname.startsWith(`${intentTaskPath}/`) && url.pathname.endsWith("/claim");
+    const isIntentTaskResultRoute =
+      url.pathname.startsWith(`${intentTaskPath}/`) && url.pathname.endsWith("/result");
+    const isIntentosRoute =
+      isIntentSubmitRoute ||
+      isIntentListRoute ||
+      isIntentDetailRoute ||
+      isIntentTaskCreateRoute ||
+      isIntentTaskClaimRoute ||
+      isIntentTaskResultRoute;
 
-  if (!isPeek && !isPoll && !isDead && !isAck && !isFail && !isMailboxPath && !isRelayPath) {
-    sendError(res, 404, "not_found", "Not Found");
-    logRequest(404);
-    return;
-  }
+    if (
+      !isPeek &&
+      !isPoll &&
+      !isDead &&
+      !isAck &&
+      !isFail &&
+      !isMailboxPath &&
+      !isRelayPath &&
+      !isIntentosRoute
+    ) {
+      sendError(res, 404, "not_found", "Not Found");
+      logRequest(404);
+      return;
+    }
 
     const allowedOrigin = resolveAllowedOrigin(req, corsOrigins);
     if (req.method === "OPTIONS") {
@@ -1496,6 +1760,361 @@ function createWebhookRelayServer(relay, options = {}) {
         logRequest(403);
       }
       return;
+    }
+
+    if (isIntentosRoute) {
+      if (!intentosEnabled || !intentosStore) {
+        sendError(res, 404, "not_found", "Not Found");
+        logRequest(404);
+        return;
+      }
+
+      const logIntentosRequest = (status, fields) => {
+        logIntentos("intentos_request", {
+          path: url.pathname,
+          method: req.method || "GET",
+          status,
+          auth: authStatus,
+          ...(fields || {})
+        });
+      };
+
+      if (isIntentListRoute) {
+        if (req.method !== "GET") {
+          sendError(res, 405, "method_not_allowed", "Method not allowed");
+          logIntentosRequest(405);
+          return;
+        }
+        const statusFilter = url.searchParams.get("status");
+        const limit = parseIntentosLimit(url.searchParams.get("limit"));
+        const intents = intentosStore.listIntents(statusFilter || "", limit);
+        sendJson(res, 200, { intents });
+        logIntentosRequest(200, { count: intents.length });
+        return;
+      }
+
+      if (isIntentDetailRoute) {
+        if (req.method !== "GET") {
+          sendError(res, 405, "method_not_allowed", "Method not allowed");
+          logIntentosRequest(405);
+          return;
+        }
+        const segments = url.pathname.split("/").filter(Boolean);
+        if (segments.length !== 3) {
+          sendError(res, 404, "not_found", "Not Found");
+          logIntentosRequest(404);
+          return;
+        }
+        const intentId = decodeURIComponent(segments[2] || "");
+        const intentRecord = intentosStore.getIntent(intentId);
+        if (!intentRecord) {
+          sendError(res, 404, "intent_not_found", "Intent not found");
+          logIntentosRequest(404, { intent_id: intentId || "-" });
+          return;
+        }
+        sendJson(res, 200, intentRecord);
+        logIntentosRequest(200, { intent_id: intentId });
+        return;
+      }
+
+      if (isIntentSubmitRoute) {
+        if (req.method !== "POST") {
+          sendError(res, 405, "method_not_allowed", "Method not allowed");
+          logIntentosRequest(405);
+          return;
+        }
+
+        let payload;
+        try {
+          payload = await readJson(req, maxBytes);
+        } catch (err) {
+          if (err instanceof RelayError && err.code === "payload_too_large") {
+            sendError(res, 413, "payload_too_large", err.message);
+            logIntentosRequest(413);
+            return;
+          }
+          sendError(res, 400, "invalid_json", "Invalid JSON payload");
+          logIntentosRequest(400);
+          return;
+        }
+        if (!isPlainObject(payload)) {
+          sendError(res, 400, "invalid_request", "Payload must be an object");
+          logIntentosRequest(400, { reason_code: "payload_object_required" });
+          return;
+        }
+
+        const authDecision = verifyIntentosAuthorization(res, "intentos_intent_submit", payload, {
+          action: "intent.submit",
+          resource: `intentbox:${intentosBoxId}`
+        });
+        if (!authDecision.ok) {
+          logIntentosRequest(authDecision.statusCode || 403, {
+            reason_code: "authz_failed"
+          });
+          return;
+        }
+
+        const goal = typeof payload.goal === "string" ? payload.goal.trim() : "";
+        if (!goal) {
+          sendError(res, 400, "invalid_request", "goal is required");
+          logIntentosRequest(400, { reason_code: "goal_required" });
+          return;
+        }
+
+        const principalFromIdentity =
+          authDecision.identity &&
+          typeof authDecision.identity.id === "string" &&
+          authDecision.identity.id.trim()
+            ? authDecision.identity.id.trim()
+            : "";
+        const principalFromBody =
+          payload && typeof payload.principal === "string" && payload.principal.trim()
+            ? payload.principal.trim()
+            : "";
+        const principal = principalFromIdentity || principalFromBody || "anonymous";
+
+        let intentId;
+        try {
+          intentId = intentosStore.submitIntent({
+            principal,
+            goal,
+            metadata: isPlainObject(payload.metadata) ? payload.metadata : {},
+            idempotency_key:
+              typeof payload.idempotency_key === "string" ? payload.idempotency_key.trim() : ""
+          });
+        } catch (_err) {
+          sendError(res, 400, "invalid_request", "invalid intent payload");
+          logIntentosRequest(400, { reason_code: "intent_invalid" });
+          return;
+        }
+
+        const intentRecord = intentosStore.getIntent(intentId);
+        const status = intentRecord && intentRecord.intent ? intentRecord.intent.status : "submitted";
+        sendJson(res, 202, { intent_id: intentId, status });
+        logIntentosRequest(202, { intent_id: intentId, reason_code: "accepted" });
+        return;
+      }
+
+      if (isIntentTaskCreateRoute) {
+        if (req.method !== "POST") {
+          sendError(res, 405, "method_not_allowed", "Method not allowed");
+          logIntentosRequest(405);
+          return;
+        }
+        let payload;
+        try {
+          payload = await readJson(req, maxBytes);
+        } catch (err) {
+          if (err instanceof RelayError && err.code === "payload_too_large") {
+            sendError(res, 413, "payload_too_large", err.message);
+            logIntentosRequest(413);
+            return;
+          }
+          sendError(res, 400, "invalid_json", "Invalid JSON payload");
+          logIntentosRequest(400);
+          return;
+        }
+        if (!isPlainObject(payload)) {
+          sendError(res, 400, "invalid_request", "Payload must be an object");
+          logIntentosRequest(400, { reason_code: "payload_object_required" });
+          return;
+        }
+
+        const intentId = typeof payload.intent_id === "string" ? payload.intent_id.trim() : "";
+        const taskType = typeof payload.type === "string" ? payload.type.trim() : "";
+        if (!intentId || !taskType) {
+          sendError(res, 400, "invalid_request", "intent_id and type are required");
+          logIntentosRequest(400, { reason_code: "task_fields_required" });
+          return;
+        }
+
+        let taskId;
+        try {
+          taskId = intentosStore.enqueueTask({
+            id: typeof payload.id === "string" ? payload.id.trim() : "",
+            intent_id: intentId,
+            type: taskType,
+            input: Object.prototype.hasOwnProperty.call(payload, "input") ? payload.input : {}
+          });
+        } catch (err) {
+          const code = err instanceof Error ? err.message : "task_invalid";
+          if (code === "task_intent_not_found") {
+            sendError(res, 404, "intent_not_found", "Intent not found");
+            logIntentosRequest(404, { intent_id: intentId, reason_code: code });
+            return;
+          }
+          sendError(res, 400, "invalid_request", "Invalid task payload");
+          logIntentosRequest(400, { intent_id: intentId, reason_code: code });
+          return;
+        }
+
+        sendJson(res, 202, {
+          task_id: taskId,
+          intent_id: intentId,
+          status: "queued"
+        });
+        logIntentosRequest(202, { intent_id: intentId, task_id: taskId, reason_code: "queued" });
+        return;
+      }
+
+      if (isIntentTaskClaimRoute || isIntentTaskResultRoute) {
+        if (req.method !== "POST") {
+          sendError(res, 405, "method_not_allowed", "Method not allowed");
+          logIntentosRequest(405);
+          return;
+        }
+        const segments = url.pathname.split("/").filter(Boolean);
+        if (segments.length !== 4) {
+          sendError(res, 404, "not_found", "Not Found");
+          logIntentosRequest(404);
+          return;
+        }
+        const taskId = decodeURIComponent(segments[2] || "");
+        const operation = segments[3];
+        if ((isIntentTaskClaimRoute && operation !== "claim") || (isIntentTaskResultRoute && operation !== "result")) {
+          sendError(res, 404, "not_found", "Not Found");
+          logIntentosRequest(404);
+          return;
+        }
+
+        let payload;
+        try {
+          payload = await readJson(req, maxBytes);
+        } catch (err) {
+          if (err instanceof RelayError && err.code === "payload_too_large") {
+            sendError(res, 413, "payload_too_large", err.message);
+            logIntentosRequest(413, { task_id: taskId || "-" });
+            return;
+          }
+          sendError(res, 400, "invalid_json", "Invalid JSON payload");
+          logIntentosRequest(400, { task_id: taskId || "-" });
+          return;
+        }
+        if (!isPlainObject(payload)) {
+          sendError(res, 400, "invalid_request", "Payload must be an object");
+          logIntentosRequest(400, { task_id: taskId || "-", reason_code: "payload_object_required" });
+          return;
+        }
+
+        const authDecision = verifyIntentosAuthorization(
+          res,
+          isIntentTaskClaimRoute ? "intentos_task_claim" : "intentos_task_result",
+          payload,
+          {
+            action: isIntentTaskClaimRoute ? "task.claim" : "task.result",
+            resource: `task:${taskId}`
+          }
+        );
+        if (!authDecision.ok) {
+          logIntentosRequest(authDecision.statusCode || 403, {
+            task_id: taskId || "-",
+            reason_code: "authz_failed"
+          });
+          return;
+        }
+
+        const principalFromIdentity =
+          authDecision.identity &&
+          typeof authDecision.identity.id === "string" &&
+          authDecision.identity.id.trim()
+            ? authDecision.identity.id.trim()
+            : "";
+        const principalFromBody =
+          payload && typeof payload.agent_id === "string" && payload.agent_id.trim()
+            ? payload.agent_id.trim()
+            : "";
+        const agentId = principalFromBody || principalFromIdentity;
+        if (!agentId) {
+          sendError(res, 400, "invalid_request", "agent_id is required");
+          logIntentosRequest(400, { task_id: taskId || "-", reason_code: "agent_id_required" });
+          return;
+        }
+        if (principalFromIdentity && principalFromBody && principalFromIdentity !== principalFromBody) {
+          sendUnauthorized(res, 403, "identity_subject_mismatch", "identity subject does not match agent_id");
+          logIntentosRequest(403, { task_id: taskId || "-", reason_code: "identity_subject_mismatch" });
+          return;
+        }
+
+        if (isIntentTaskClaimRoute) {
+          const claimResult = intentosStore.claimTask(taskId, agentId);
+          if (!claimResult.ok && claimResult.code === "task_not_found") {
+            sendError(res, 404, "task_not_found", "Task not found");
+            logIntentosRequest(404, { task_id: taskId || "-", reason_code: claimResult.code });
+            return;
+          }
+          if (!claimResult.ok) {
+            sendError(res, 409, "task_claim_denied", "Task claim denied", {
+              reason_code: claimResult.code
+            });
+            logIntentosRequest(409, { task_id: taskId || "-", reason_code: claimResult.code });
+            return;
+          }
+          sendJson(res, 200, {
+            ok: true,
+            task_id: taskId,
+            status: claimResult.status,
+            assigned_to: claimResult.task && claimResult.task.assigned_to ? claimResult.task.assigned_to : agentId
+          });
+          logIntentosRequest(200, { task_id: taskId, reason_code: "claimed" });
+          return;
+        }
+
+        const taskRecord = intentosStore.getTask(taskId);
+        if (!taskRecord) {
+          sendError(res, 404, "task_not_found", "Task not found");
+          logIntentosRequest(404, { task_id: taskId || "-", reason_code: "task_not_found" });
+          return;
+        }
+        if (taskRecord.assigned_to && taskRecord.assigned_to !== agentId) {
+          sendUnauthorized(
+            res,
+            403,
+            "task_claim_mismatch",
+            "task is claimed by a different agent principal"
+          );
+          logIntentosRequest(403, { task_id: taskId, reason_code: "task_claim_mismatch" });
+          return;
+        }
+
+        const statusCandidate = typeof payload.status === "string" ? payload.status.trim().toLowerCase() : "";
+        const finalStatus = statusCandidate === "failed" ? "failed" : "completed";
+        if (finalStatus === "completed" && !Object.prototype.hasOwnProperty.call(payload, "output")) {
+          sendError(res, 400, "invalid_request", "output is required for completed task.result");
+          logIntentosRequest(400, { task_id: taskId, reason_code: "output_required" });
+          return;
+        }
+
+        const completeResult = intentosStore.completeTask(taskId, {
+          status: finalStatus,
+          output: payload.output,
+          error: typeof payload.error === "string" ? payload.error : undefined,
+          agent_id: agentId
+        });
+
+        if (!completeResult.ok && completeResult.code === "task_not_found") {
+          sendError(res, 404, "task_not_found", "Task not found");
+          logIntentosRequest(404, { task_id: taskId, reason_code: completeResult.code });
+          return;
+        }
+        if (!completeResult.ok) {
+          sendError(res, 409, "task_result_denied", "Task result denied", {
+            reason_code: completeResult.code
+          });
+          logIntentosRequest(409, { task_id: taskId, reason_code: completeResult.code });
+          return;
+        }
+
+        sendJson(res, 200, {
+          ok: true,
+          task_id: taskId,
+          status: completeResult.status
+        });
+        logIntentosRequest(200, {
+          task_id: taskId,
+          reason_code: completeResult.status === "failed" ? "failed" : "completed"
+        });
+        return;
+      }
     }
 
     if (isPeek || isPoll || isDead) {

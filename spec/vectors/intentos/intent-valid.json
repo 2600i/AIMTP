@@ -1,0 +1,20 @@
+{
+  "case": "intent-valid",
+  "message_type": "intent.submit",
+  "request": {
+    "action": "intent.submit",
+    "resource": "intentbox:default",
+    "subject": "did:aimtp:user.alice"
+  },
+  "intent": {
+    "id": "intent-vec-001",
+    "principal": "did:aimtp:user.alice",
+    "goal": "Summarize launch blockers",
+    "created_at": "2026-02-09T00:00:00Z",
+    "status": "submitted"
+  },
+  "expected": {
+    "allow": true,
+    "reason_code": "capability_authorized"
+  }
+}
