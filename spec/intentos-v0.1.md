@@ -64,6 +64,22 @@ Rules:
 - `status` MUST be one of: `queued`, `claimed`, `completed`, `failed`.
 - `assigned_to` MAY be omitted until claim.
 
+### 3.2.1 Task State Transition Invariants
+
+Allowed transitions:
+
+| From | To | Requirement |
+| --- | --- | --- |
+| `queued` | `claimed` | MUST be allowed on valid claim |
+| `claimed` | `completed` | MUST be allowed on valid result |
+| `claimed` | `failed` | MUST be allowed on valid failure result |
+
+Rules:
+
+- `claimed -> queued` MUST NOT be allowed.
+- `completed -> failed` and `failed -> completed` MUST NOT be allowed.
+- In `enforce` mode, `task.result` submissions MUST be rejected when the task is not currently `claimed` by the submitting agent identity.
+
 ### 3.3 Result
 
 ```json
@@ -130,6 +146,9 @@ Exact-match capability mapping for v0.1:
 
 Rules:
 
+- `box_id` identifies the target Intent Inbox namespace for `intent.submit`.
+- When not explicitly provided, `box_id` MUST default to `default`.
+- Future multi-tenant deployments MAY derive `box_id` from principal context, but v0.1 default behavior MUST remain `default`.
 - Capability scope matching MUST be exact on both action and resource.
 - Default mode SHOULD be `log`.
 - Production deployments SHOULD use `enforce`.
