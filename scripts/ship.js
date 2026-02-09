@@ -22,6 +22,21 @@ function output(cmd) {
   return execSync(cmd, { encoding: "utf8" }).trim();
 }
 
+function runPush(cmd) {
+  console.log(`\n> ${cmd}`);
+  try {
+    const out = execSync(cmd, { encoding: "utf8", stdio: ["inherit", "pipe", "pipe"] });
+    if (out && out.trim()) {
+      process.stdout.write(out);
+    }
+  } catch (err) {
+    if (err && err.stderr) {
+      process.stderr.write(String(err.stderr));
+    }
+    fail(`Push failed: ${cmd}`);
+  }
+}
+
 function fail(msg) {
   console.error(`\n❌ ${msg}`);
   process.exit(1);
@@ -134,12 +149,29 @@ run(`git tag -a ${tagName} -m "AIMTP ${tagName} — Federation & Trust (Phase 7)
 (async () => {
   const shouldPush = await confirm("Push commits and tags to origin?");
   if (shouldPush) {
-    run("git push");
-    run("git push --tags");
+    let branch;
+    try {
+      branch = output("git rev-parse --abbrev-ref HEAD");
+    } catch {
+      fail("Unable to determine current branch");
+    }
+
+    let hasUpstream = true;
+    try {
+      output("git rev-parse --abbrev-ref --symbolic-full-name @{u}");
+    } catch {
+      hasUpstream = false;
+    }
+
+    if (!hasUpstream) {
+      runPush(`git push -u origin ${branch}`);
+    } else {
+      runPush("git push");
+    }
+    runPush("git push --tags");
   } else {
     console.log("Push skipped.");
   }
 
   console.log(`\n✅ Ship complete: ${tagName}`);
 })();
-
