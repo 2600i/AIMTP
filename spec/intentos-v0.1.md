@@ -29,7 +29,20 @@ IntentOS v0.2 adds a small read-only web inbox served by the relay HTTP server.
 
 ### Auth and Enforcement
 
-- v0.2 introduces no new auth model.
-- In `INTENTOS_MODE=log`, the UI behaves like existing read endpoints.
-- In `INTENTOS_MODE=enforce`, UI API calls MUST satisfy the same identity/capability checks already enforced by the read endpoints.
+- IntentOS API authorization uses AIMTP capabilities when `AIMTP_CAPABILITIES=on`.
+- Audience (`aud`) MUST exactly match the relay base URL (for example `http://localhost:8787/aimtp`).
+- Scope matching is exact (`action` + `resource`), without wildcard expansion.
+
+Required scope mapping:
+- `GET /intentos/intents` => `action=intentos.read`, `resource=intentos:intents`
+- `GET /intentos/tasks` => `action=intentos.read`, `resource=intentos:tasks`
+- `GET /intentos/intent/:id` => `action=intentos.read`, `resource=intentos:intent/<id>`
+- `POST /intentos/task/:id/claim` => `action=intentos.task.claim`, `resource=intentos:task/<id>`
+- `POST /intentos/task/:id/result` => `action=intentos.task.result`, `resource=intentos:task/<id>`
+
+Mode semantics:
+- In `INTENTOS_MODE=log`, missing or invalid capabilities MUST be logged and requests MAY proceed.
+- In `INTENTOS_MODE=enforce` with `AIMTP_CAP_MODE=enforce`, all IntentOS API endpoints (read and write) MUST require a valid, exact-scope capability.
+- Missing capability in enforce mode MUST return `403` with `code=capability_required`.
+- Invalid capability (bad format/signature/aud/expired/scope mismatch) in enforce mode MUST return `403` with `code=capability_invalid`.
 - The UI MUST surface read errors from those API calls to the user without attempting fallback writes.

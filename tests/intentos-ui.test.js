@@ -1,8 +1,10 @@
 "use strict";
 
 const assert = require("assert");
+const crypto = require("crypto");
 const http = require("http");
 const { WebhookRelay, createWebhookRelayServer } = require("../runtime");
+const { signCapabilityPresentation } = require("../runtime/capabilities");
 const { deriveIntentosApiBase } = require("../runtime/static/intentos/app.js");
 
 function startServer(server) {
@@ -21,14 +23,15 @@ function startServer(server) {
   });
 }
 
-function getText(port, path) {
+function getText(port, path, options = {}) {
   return new Promise((resolve, reject) => {
     const req = http.request(
       {
         hostname: "127.0.0.1",
         port,
         path,
-        method: "GET"
+        method: options.method || "GET",
+        headers: options.headers || {}
       },
       (res) => {
         const chunks = [];
@@ -45,6 +48,35 @@ function getText(port, path) {
     req.on("error", reject);
     req.end();
   });
+}
+
+function generateEd25519PemKeyPair() {
+  const pair = crypto.generateKeyPairSync("ed25519");
+  return {
+    publicKey: pair.publicKey.export({ type: "spki", format: "pem" }),
+    privateKey: pair.privateKey.export({ type: "pkcs8", format: "pem" })
+  };
+}
+
+function mintCapabilityPresentation(options) {
+  const nowSec = Math.floor(Date.now() / 1000);
+  return signCapabilityPresentation(
+    [
+      {
+        issuer: options.issuer,
+        subject: options.subject,
+        aud: options.aud,
+        iat: nowSec - 1,
+        exp: nowSec + options.ttlSec,
+        scopes: options.scopes
+      }
+    ],
+    {
+      privateKey: options.privateKey,
+      publicKey: options.publicKey,
+      kid: options.issuer
+    }
+  );
 }
 
 async function withEnv(values, fn) {
@@ -223,6 +255,94 @@ async function main() {
   );
 
   if (!ranOnTrailing) {
+    return;
+  }
+
+  const keyPair = generateEd25519PemKeyPair();
+  const ranEnforce = await withServer(
+    {
+      INTENTOS: "on",
+      INTENTOS_MODE: "enforce",
+      AIMTP_CAPABILITIES: "on",
+      AIMTP_CAP_MODE: "enforce",
+      AIMTP_CAP_PUBLIC_KEY: keyPair.publicKey
+    },
+    async (port) => {
+      const aud = `http://127.0.0.1:${port}/aimtp`;
+      const readPresentation = mintCapabilityPresentation({
+        issuer: "local-admin",
+        subject: "demo-ui",
+        aud,
+        ttlSec: 900,
+        privateKey: keyPair.privateKey,
+        publicKey: keyPair.publicKey,
+        scopes: [
+          { action: "intentos.read", resource: "intentos:intents" },
+          { action: "intentos.read", resource: "intentos:tasks" }
+        ]
+      });
+      const detailPresentation = mintCapabilityPresentation({
+        issuer: "local-admin",
+        subject: "demo-ui",
+        aud,
+        ttlSec: 900,
+        privateKey: keyPair.privateKey,
+        publicKey: keyPair.publicKey,
+        scopes: [
+          {
+            action: "intentos.read",
+            resource: "intentos:intent/demo-intent-001"
+          }
+        ]
+      });
+
+      const missingIntents = await getText(port, "/aimtp/intentos/intents");
+      assert.strictEqual(missingIntents.status, 403);
+      assert.strictEqual(JSON.parse(missingIntents.body).code, "capability_required");
+
+      const missingTasks = await getText(port, "/aimtp/intentos/tasks");
+      assert.strictEqual(missingTasks.status, 403);
+      assert.strictEqual(JSON.parse(missingTasks.body).code, "capability_required");
+
+      const missingDetail = await getText(port, "/aimtp/intentos/intent/demo-intent-001");
+      assert.strictEqual(missingDetail.status, 403);
+      assert.strictEqual(JSON.parse(missingDetail.body).code, "capability_required");
+
+      const readHeaders = {
+        "X-AIMTP-Capability": JSON.stringify(readPresentation)
+      };
+
+      const allowedIntents = await getText(port, "/aimtp/intentos/intents", {
+        headers: readHeaders
+      });
+      assert.strictEqual(allowedIntents.status, 200);
+      assert.ok(Array.isArray(JSON.parse(allowedIntents.body).intents));
+
+      const allowedTasks = await getText(port, "/aimtp/intentos/tasks", {
+        headers: readHeaders
+      });
+      assert.strictEqual(allowedTasks.status, 200);
+      assert.ok(Array.isArray(JSON.parse(allowedTasks.body).tasks));
+
+      const deniedDetail = await getText(port, "/aimtp/intentos/intent/demo-intent-001", {
+        headers: readHeaders
+      });
+      assert.strictEqual(deniedDetail.status, 403);
+      assert.strictEqual(JSON.parse(deniedDetail.body).code, "capability_invalid");
+
+      const detailHeaders = {
+        "X-AIMTP-Capability": JSON.stringify(detailPresentation)
+      };
+      const allowedDetail = await getText(port, "/aimtp/intentos/intent/demo-intent-001", {
+        headers: detailHeaders
+      });
+      assert.strictEqual(allowedDetail.status, 404);
+      assert.strictEqual(JSON.parse(allowedDetail.body).code, "not_found");
+    },
+    { path: "/aimtp" }
+  );
+
+  if (!ranEnforce) {
     return;
   }
 

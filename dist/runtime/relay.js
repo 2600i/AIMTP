@@ -40,6 +40,7 @@ const mailbox_1 = require("./mailbox");
 const { WebhookRelay, RelayError } = require("../../runtime/relay");
 const { validateEnvelope } = require("../../runtime/validation");
 const { createSignatureTrustConfig, evaluateEnvelopeSignaturePolicy } = require("../../runtime/signature");
+const { validateCapabilityPresentation } = require("../../runtime/capabilities");
 const { createEnvelope, createMessage, createTaskResponse } = require("../../sdk/js");
 const packageJson = require("../../package.json");
 const DEFAULT_PORT = 8787;
@@ -58,6 +59,8 @@ const INTENTOS_UI_BASE_PLACEHOLDER = "__INTENTOS_UI_BASE_PATH__";
 const INTENTOS_INTENTS_PATH = "/intentos/intents";
 const INTENTOS_TASKS_PATH = "/intentos/tasks";
 const INTENTOS_INTENT_PREFIX = "/intentos/intent/";
+const INTENTOS_TASK_PREFIX = "/intentos/task/";
+const INTENTOS_CAPABILITY_HEADER = "x-aimtp-capability";
 function parseEnvInt(value, fallback) {
     if (!value) {
         return fallback;
@@ -412,6 +415,237 @@ function normalizePathname(pathname, relayPathInput) {
     }
     return `/${pathname.slice(relayPrefix.length)}`;
 }
+function normalizeIntentosMode(value, fallback) {
+    if (!value) {
+        return fallback;
+    }
+    const normalized = value.trim().toLowerCase();
+    if (normalized === "log" || normalized === "enforce") {
+        return normalized;
+    }
+    return fallback;
+}
+function readOptionalPemEnv(value) {
+    if (!value || !value.trim()) {
+        return "";
+    }
+    return value.trim().replace(/\\n/g, "\n");
+}
+function readForwardedHeader(value) {
+    const raw = firstHeaderValue(value);
+    if (typeof raw !== "string") {
+        return "";
+    }
+    return (raw
+        .split(",")
+        .map((entry) => entry.trim())
+        .find((entry) => entry.length > 0) || "");
+}
+function resolveRequestProtocol(req) {
+    const forwarded = readForwardedHeader(req.headers["x-forwarded-proto"]);
+    if (forwarded) {
+        return forwarded.toLowerCase();
+    }
+    const socket = req.socket;
+    return socket && socket.encrypted ? "https" : "http";
+}
+function resolveRequestHost(req) {
+    const forwarded = readForwardedHeader(req.headers["x-forwarded-host"]);
+    if (forwarded) {
+        return forwarded;
+    }
+    const host = firstHeaderValue(req.headers.host);
+    if (typeof host === "string" && host.trim()) {
+        return host.trim();
+    }
+    return "localhost";
+}
+function resolveIntentosAudience(req, relayPathInput) {
+    const protocol = resolveRequestProtocol(req);
+    const host = resolveRequestHost(req);
+    const basePath = relayPathInput && relayPathInput !== "/" ? trimTrailingSlash(relayPathInput) : "";
+    return `${protocol}://${host}${basePath}`;
+}
+function parseCapabilityPresentationHeader(req) {
+    const raw = firstHeaderValue(req.headers[INTENTOS_CAPABILITY_HEADER]);
+    if (typeof raw !== "string" || !raw.trim()) {
+        return { present: false, value: null, error: "" };
+    }
+    const value = raw.trim();
+    try {
+        return { present: true, value: JSON.parse(value), error: "" };
+    }
+    catch (_err) {
+        // fall through and try base64-decoded JSON
+    }
+    try {
+        const decoded = Buffer.from(value, "base64").toString("utf8");
+        return { present: true, value: JSON.parse(decoded), error: "" };
+    }
+    catch (_err) {
+        return {
+            present: true,
+            value: null,
+            error: "capability header must be JSON or base64-encoded JSON"
+        };
+    }
+}
+function resolveIntentosCapabilityRequirement(method, pathname) {
+    const normalizedMethod = typeof method === "string" ? method.toUpperCase() : "";
+    if (normalizedMethod === "GET" && pathname === INTENTOS_INTENTS_PATH) {
+        return { action: "intentos.read", resource: "intentos:intents" };
+    }
+    if (normalizedMethod === "GET" && pathname === INTENTOS_TASKS_PATH) {
+        return { action: "intentos.read", resource: "intentos:tasks" };
+    }
+    if (normalizedMethod === "GET" && pathname.startsWith(INTENTOS_INTENT_PREFIX)) {
+        const intentId = pathname.slice(INTENTOS_INTENT_PREFIX.length).trim();
+        if (!intentId || intentId.includes("/")) {
+            return null;
+        }
+        return { action: "intentos.read", resource: `intentos:intent/${intentId}` };
+    }
+    if (normalizedMethod === "POST" && pathname.startsWith(INTENTOS_TASK_PREFIX)) {
+        const suffix = pathname.slice(INTENTOS_TASK_PREFIX.length);
+        const claimSuffix = "/claim";
+        const resultSuffix = "/result";
+        if (suffix.endsWith(claimSuffix)) {
+            const taskId = suffix.slice(0, -claimSuffix.length).trim();
+            if (taskId && !taskId.includes("/")) {
+                return { action: "intentos.task.claim", resource: `intentos:task/${taskId}` };
+            }
+        }
+        if (suffix.endsWith(resultSuffix)) {
+            const taskId = suffix.slice(0, -resultSuffix.length).trim();
+            if (taskId && !taskId.includes("/")) {
+                return { action: "intentos.task.result", resource: `intentos:task/${taskId}` };
+            }
+        }
+    }
+    return null;
+}
+function hasRequiredIntentosScope(summary, requirement) {
+    const scopes = Array.isArray(summary.scopes) ? summary.scopes : [];
+    return scopes.some((scope) => Boolean(scope) &&
+        scope.action === requirement.action &&
+        scope.resource === requirement.resource);
+}
+function requireIntentosCapability(req, options) {
+    const requirement = resolveIntentosCapabilityRequirement(options.method, options.pathname);
+    if (!requirement) {
+        return { ok: true };
+    }
+    const enforce = options.capabilitiesEnabled &&
+        options.intentosMode === "enforce" &&
+        options.capabilityMode === "enforce";
+    const evaluate = options.capabilitiesEnabled &&
+        (enforce || options.intentosMode === "log" || options.capabilityMode === "log");
+    const aud = resolveIntentosAudience(req, options.relayPath);
+    const logDecision = (status, details) => {
+        if (!evaluate) {
+            return;
+        }
+        const record = {
+            event: "intentos_capability",
+            mode: options.intentosMode,
+            cap_mode: options.capabilityMode,
+            enforced: enforce,
+            status,
+            method: options.method,
+            path: options.pathname,
+            action: requirement.action,
+            resource: requirement.resource,
+            aud
+        };
+        if (details) {
+            Object.assign(record, details);
+        }
+        console.log(JSON.stringify(record));
+    };
+    if (!evaluate) {
+        return { ok: true };
+    }
+    const parsed = parseCapabilityPresentationHeader(req);
+    if (!parsed.present) {
+        logDecision("missing");
+        if (enforce) {
+            return {
+                ok: false,
+                status: 403,
+                code: "capability_required",
+                message: "Capability is required for this IntentOS endpoint",
+                details: {
+                    action: requirement.action,
+                    resource: requirement.resource,
+                    aud
+                }
+            };
+        }
+        return { ok: true };
+    }
+    if (parsed.error) {
+        logDecision("invalid", { errors: [parsed.error] });
+        if (enforce) {
+            return {
+                ok: false,
+                status: 403,
+                code: "capability_invalid",
+                message: "Capability is invalid for this IntentOS endpoint",
+                details: {
+                    action: requirement.action,
+                    resource: requirement.resource,
+                    aud,
+                    errors: [parsed.error]
+                }
+            };
+        }
+        return { ok: true };
+    }
+    const validation = validateCapabilityPresentation(parsed.value, {
+        aud,
+        publicKey: options.publicKey || undefined,
+        verifySignature: true
+    });
+    if (!validation.ok) {
+        logDecision("invalid", { errors: validation.errors });
+        if (enforce) {
+            return {
+                ok: false,
+                status: 403,
+                code: "capability_invalid",
+                message: "Capability is invalid for this IntentOS endpoint",
+                details: {
+                    action: requirement.action,
+                    resource: requirement.resource,
+                    aud,
+                    errors: validation.errors
+                }
+            };
+        }
+        return { ok: true };
+    }
+    if (!hasRequiredIntentosScope(validation.summary, requirement)) {
+        const error = `scope ${requirement.action} ${requirement.resource} is required`;
+        logDecision("scope_mismatch", { errors: [error] });
+        if (enforce) {
+            return {
+                ok: false,
+                status: 403,
+                code: "capability_invalid",
+                message: "Capability is invalid for this IntentOS endpoint",
+                details: {
+                    action: requirement.action,
+                    resource: requirement.resource,
+                    aud,
+                    errors: [error]
+                }
+            };
+        }
+        return { ok: true };
+    }
+    logDecision("ok");
+    return { ok: true };
+}
 function resolveIntentosUiBasePath(pathname) {
     if (typeof pathname !== "string" || pathname.length === 0) {
         return INTENTOS_UI_PATH;
@@ -647,6 +881,10 @@ if (recipientAllowlist.enabled) {
     }));
 }
 const intentosEnabled = String(process.env.INTENTOS || "").trim().toLowerCase() === "on";
+const intentosMode = normalizeIntentosMode(process.env.INTENTOS_MODE, "log");
+const capabilityMode = normalizeIntentosMode(process.env.AIMTP_CAP_MODE, "log");
+const intentosCapabilitiesEnabled = String(process.env.AIMTP_CAPABILITIES || "").trim().toLowerCase() === "on";
+const intentosCapabilityPublicKey = readOptionalPemEnv(process.env.AIMTP_CAP_PUBLIC_KEY);
 let intentosUiAssets = null;
 if (intentosEnabled) {
     try {
@@ -715,6 +953,19 @@ const server = http.createServer(async (req, res) => {
             sendError(res, 404, "not_found", "Not Found");
             return;
         }
+        const capabilityDecision = requireIntentosCapability(req, {
+            pathname: requestPath,
+            method,
+            relayPath,
+            intentosMode,
+            capabilityMode,
+            capabilitiesEnabled: intentosCapabilitiesEnabled,
+            publicKey: intentosCapabilityPublicKey
+        });
+        if (!capabilityDecision.ok) {
+            sendError(res, capabilityDecision.status, capabilityDecision.code, capabilityDecision.message, capabilityDecision.details);
+            return;
+        }
         if (method !== "GET") {
             sendError(res, 405, "method_not_allowed", "Method not allowed");
             return;
@@ -780,7 +1031,7 @@ const server = http.createServer(async (req, res) => {
         }
         setCorsHeaders(res, allowedOrigin);
         res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
-        res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,X-AIMTP-KEY");
+        res.setHeader("Access-Control-Allow-Headers", "Authorization,Content-Type,X-AIMTP-KEY,X-AIMTP-CAPABILITY");
         res.setHeader("Access-Control-Max-Age", "600");
         res.statusCode = 204;
         res.end();
