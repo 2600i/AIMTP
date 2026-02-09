@@ -53,8 +53,8 @@ function hasUpstream() {
 function shouldPushFromEnv(value) {
   if (!value) return null;
   const normalized = value.trim().toLowerCase();
-  if (["1", "true", "y", "yes"].includes(normalized)) return true;
-  if (["0", "false", "n", "no"].includes(normalized)) return false;
+  if (["1", "true"].includes(normalized)) return true;
+  if (["0", "false"].includes(normalized)) return false;
   return null;
 }
 
@@ -63,7 +63,7 @@ async function askToPush() {
   if (envChoice !== null) return envChoice;
 
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
-    console.log("Non-interactive shell detected; skipping push. Set SHIP_PUSH=yes to force.");
+    console.log("Non-interactive shell detected; skipping push. Set SHIP_PUSH=true to force.");
     return false;
   }
 
@@ -73,7 +73,7 @@ async function askToPush() {
   });
 
   const answer = await new Promise((resolve) => {
-    rl.question("Push commits and tags to origin? [y/N] ", (value) => resolve(value));
+    rl.question("Push commits and release tag to origin? [y/N] ", (value) => resolve(value));
   });
   rl.close();
 
@@ -122,7 +122,7 @@ async function main() {
   } else {
     run("git", ["push", "-u", "origin", branch]);
   }
-  run("git", ["push", "--tags"]);
+  run("git", ["push", "origin", tagName]);
 }
 
 main().catch((error) => {
