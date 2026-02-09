@@ -6,6 +6,7 @@
   "scripts": {
     "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js",
     "build": "tsc -p tsconfig.json",
+    "ship": "node scripts/ship.js",
     "demo": "npm run build && node dist/runtime/demo-run.js",
     "demo:web": "node examples/web-inbox/server.js",
     "cli:send": "node cli/aimtp-send.mjs",
