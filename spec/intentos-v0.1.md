@@ -141,6 +141,7 @@ Rules:
 Exact-match capability mapping for v0.1:
 
 - action: `intent.submit`, resource: `intentbox:<box_id>`
+- action: `task.list`, resource: `taskbox:<box_id>`
 - action: `task.claim`, resource: `task:<task_id>`
 - action: `task.result`, resource: `task:<task_id>`
 
@@ -185,3 +186,49 @@ Minimum vector classes:
 - valid task chain
 - unauthorized task claim
 - unauthorized task result
+
+## 10. v0.1.1 Additions
+
+v0.1.1 adds a minimal CLI usability layer without changing the core model.
+
+### 10.1 `GET /intentos/tasks`
+
+Query parameters:
+
+- `status` (optional)
+- `assigned_to` (optional)
+- `intent_id` (optional)
+- `limit` (optional; implementation-bounded)
+
+Success response:
+
+- `200 OK` with `{ "tasks": [...] }`
+
+Error responses:
+
+- `400` for invalid request syntax when applicable
+- `401` when `enforce` mode requires identity/proof or capability and they are missing
+- `403` when capability or identity verification fails under `enforce`
+- `404` when IntentOS is disabled or route is unavailable
+
+Authorization:
+
+- `INTENTOS_MODE=log`: requests MAY proceed without identity/capabilities; when auth material is present, implementations SHOULD verify and log.
+- `INTENTOS_MODE=enforce`: requests MUST require identity/proof and exact-match capability authorization for `action=task.list` and `resource=taskbox:<box_id>`.
+- `box_id` defaults to `default` when not provided.
+
+### 10.2 CLI: `tools/intentos-submit.js`
+
+- Submits an intent via `POST /intentos/intent`.
+- Usage:
+  - `node tools/intentos-submit.js --goal "..." [--box default] [--meta '{"k":"v"}']`
+- On success, prints the `intent_id` and a short confirmation line.
+
+### 10.3 CLI: `tools/intentos-watch.js`
+
+- Polls `GET /intentos/intent/:id` and prints incremental runlog events.
+- Usage:
+  - `node tools/intentos-watch.js --id <intent_id> [--interval 1000]`
+- Exit behavior:
+  - MUST exit `0` when intent reaches `completed`
+  - MUST exit `1` when intent reaches `failed`

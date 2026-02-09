@@ -113,6 +113,31 @@ function postJson(port, routePath, payload, headers = {}) {
   });
 }
 
+function getJson(port, routePath, headers = {}) {
+  return new Promise((resolve, reject) => {
+    const req = http.request(
+      {
+        hostname: "127.0.0.1",
+        port,
+        path: routePath,
+        method: "GET",
+        headers
+      },
+      (res) => {
+        const chunks = [];
+        res.on("data", (chunk) => chunks.push(chunk));
+        res.on("end", () => {
+          const raw = Buffer.concat(chunks).toString("utf8");
+          const parsed = raw ? JSON.parse(raw) : null;
+          resolve({ status: res.statusCode, body: parsed });
+        });
+      }
+    );
+    req.on("error", reject);
+    req.end();
+  });
+}
+
 function startServer(server) {
   return new Promise((resolve, reject) => {
     const onError = (err) => {
@@ -373,6 +398,39 @@ async function testEnforceModeRequiresValidIdentityAndCapabilities() {
       );
       assert.strictEqual(resultBad.status, 403);
       assert.strictEqual(resultBad.body.reason_code, "capability_scope_mismatch");
+
+      const listMissing = await getJson(
+        port,
+        "/intentos/tasks?limit=10",
+        authHeaders(ADMIN_KEY)
+      );
+      assert.strictEqual(listMissing.status, 401);
+      assert.strictEqual(listMissing.body.code, "unauthorized");
+      assert.strictEqual(listMissing.body.reason_code, "identity_required");
+
+      const listCapabilityDoc = makeCapabilityDoc(
+        {
+          id: "cap:list",
+          identity,
+          action: "task.list",
+          resource: "taskbox:default"
+        },
+        keys.privateKey
+      );
+      const listEnvelope = buildAuthEnvelope({
+        id: "env-good-list",
+        intent: "task.list",
+        identity,
+        capabilityDoc: listCapabilityDoc,
+        privateKey: keys.privateKey
+      });
+      const listAllowed = await getJson(
+        port,
+        `/intentos/tasks?limit=10&auth=${encodeURIComponent(JSON.stringify({ envelope: listEnvelope }))}`,
+        authHeaders(ADMIN_KEY)
+      );
+      assert.strictEqual(listAllowed.status, 200);
+      assert.ok(Array.isArray(listAllowed.body.tasks));
     }
   );
 

@@ -599,28 +599,29 @@ async function readJson(req, maxBytes) {
 }
 
 function extractIntentosAuthEnvelope(payload, defaults = {}) {
+  const source = isPlainObject(payload) ? payload : {};
   const envelope = {};
-  if (isPlainObject(payload && payload.envelope)) {
-    Object.assign(envelope, payload.envelope);
+  if (isPlainObject(source.envelope)) {
+    Object.assign(envelope, source.envelope);
   }
 
-  if (!Object.prototype.hasOwnProperty.call(envelope, "identity") && isPlainObject(payload && payload.identity)) {
-    envelope.identity = payload.identity;
+  if (!Object.prototype.hasOwnProperty.call(envelope, "identity") && isPlainObject(source.identity)) {
+    envelope.identity = source.identity;
   }
-  if (!Object.prototype.hasOwnProperty.call(envelope, "proof") && isPlainObject(payload && payload.proof)) {
-    envelope.proof = payload.proof;
+  if (!Object.prototype.hasOwnProperty.call(envelope, "proof") && isPlainObject(source.proof)) {
+    envelope.proof = source.proof;
   }
   if (
     !Object.prototype.hasOwnProperty.call(envelope, "capabilities") &&
-    isPlainObject(payload && payload.capabilities)
+    isPlainObject(source.capabilities)
   ) {
-    envelope.capabilities = payload.capabilities;
+    envelope.capabilities = source.capabilities;
   }
-  if (!Object.prototype.hasOwnProperty.call(envelope, "sender") && typeof payload.sender === "string") {
-    envelope.sender = payload.sender.trim();
+  if (!Object.prototype.hasOwnProperty.call(envelope, "sender") && typeof source.sender === "string") {
+    envelope.sender = source.sender.trim();
   }
-  if (!Object.prototype.hasOwnProperty.call(envelope, "id") && typeof payload.id === "string") {
-    envelope.id = payload.id.trim();
+  if (!Object.prototype.hasOwnProperty.call(envelope, "id") && typeof source.id === "string") {
+    envelope.id = source.id.trim();
   }
 
   if (!envelope.id && defaults.id) {
@@ -631,6 +632,51 @@ function extractIntentosAuthEnvelope(payload, defaults = {}) {
   }
 
   return envelope;
+}
+
+function tryParseJsonObject(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    return isPlainObject(parsed) ? parsed : null;
+  } catch (_err) {
+    return null;
+  }
+}
+
+function parseIntentosAuthHeader(value) {
+  const direct = tryParseJsonObject(value);
+  if (direct) {
+    return direct;
+  }
+  if (typeof value !== "string" || !value.trim()) {
+    return null;
+  }
+  try {
+    const decoded = Buffer.from(value.trim(), "base64").toString("utf8");
+    return tryParseJsonObject(decoded);
+  } catch (_err) {
+    return null;
+  }
+}
+
+function extractIntentosAuthFromRequest(req, url, defaults = {}) {
+  const headerValue = firstHeaderValue(req.headers["x-aimtp-auth"]);
+  const headerAuth = parseIntentosAuthHeader(headerValue);
+  if (headerAuth) {
+    return extractIntentosAuthEnvelope(headerAuth, defaults);
+  }
+  const queryAuth = tryParseJsonObject(url.searchParams.get("auth"));
+  if (queryAuth) {
+    return extractIntentosAuthEnvelope(queryAuth, defaults);
+  }
+  return extractIntentosAuthEnvelope({}, defaults);
 }
 
 function postJsonWithTimeout(endpoint, pathname, payload, options = {}) {
@@ -706,6 +752,7 @@ function createWebhookRelayServer(relay, options = {}) {
     DEFAULT_INTENTOS_PATH;
   const intentSubmitPath = `${intentosPath}/intent`;
   const intentListPath = `${intentosPath}/intents`;
+  const intentTasksListPath = `${intentosPath}/tasks`;
   const intentTaskPath = `${intentosPath}/task`;
   const healthPath =
     options.healthPath ||
@@ -1682,6 +1729,7 @@ function createWebhookRelayServer(relay, options = {}) {
     const isRelayPath = url.pathname === relayPath;
     const isIntentSubmitRoute = url.pathname === intentSubmitPath;
     const isIntentListRoute = url.pathname === intentListPath;
+    const isIntentTasksListRoute = url.pathname === intentTasksListPath;
     const isIntentDetailRoute = url.pathname.startsWith(`${intentSubmitPath}/`);
     const isIntentTaskCreateRoute = url.pathname === intentTaskPath;
     const isIntentTaskClaimRoute =
@@ -1691,6 +1739,7 @@ function createWebhookRelayServer(relay, options = {}) {
     const isIntentosRoute =
       isIntentSubmitRoute ||
       isIntentListRoute ||
+      isIntentTasksListRoute ||
       isIntentDetailRoute ||
       isIntentTaskCreateRoute ||
       isIntentTaskClaimRoute ||
@@ -1726,7 +1775,7 @@ function createWebhookRelayServer(relay, options = {}) {
       res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
       res.setHeader(
         "Access-Control-Allow-Headers",
-        "Authorization,Content-Type,X-AIMTP-KEY"
+        "Authorization,Content-Type,X-AIMTP-KEY,X-AIMTP-AUTH"
       );
       res.setHeader("Access-Control-Max-Age", "600");
       res.statusCode = 204;
@@ -1790,6 +1839,43 @@ function createWebhookRelayServer(relay, options = {}) {
         const intents = intentosStore.listIntents(statusFilter || "", limit);
         sendJson(res, 200, { intents });
         logIntentosRequest(200, { count: intents.length });
+        return;
+      }
+
+      if (isIntentTasksListRoute) {
+        if (req.method !== "GET") {
+          sendError(res, 405, "method_not_allowed", "Method not allowed");
+          logIntentosRequest(405);
+          return;
+        }
+
+        const authEnvelope = extractIntentosAuthFromRequest(req, url, {
+          intent: "task.list"
+        });
+        const authDecision = verifyIntentosAuthorization(
+          res,
+          "intentos_task_list",
+          { envelope: authEnvelope },
+          {
+            action: "task.list",
+            resource: `taskbox:${intentosBoxId}`
+          }
+        );
+        if (!authDecision.ok) {
+          logIntentosRequest(authDecision.statusCode || 403, {
+            reason_code: "authz_failed"
+          });
+          return;
+        }
+
+        const tasks = intentosStore.listTasks({
+          status: url.searchParams.get("status") || "",
+          assigned_to: url.searchParams.get("assigned_to") || "",
+          intent_id: url.searchParams.get("intent_id") || "",
+          limit: parseIntentosLimit(url.searchParams.get("limit"))
+        });
+        sendJson(res, 200, { tasks });
+        logIntentosRequest(200, { count: tasks.length });
         return;
       }
 

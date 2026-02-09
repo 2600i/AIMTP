@@ -381,10 +381,12 @@ class InMemoryIntentStore {
   }
 
   listTasks(options = {}) {
-    const status = normalizeString(options.status);
-    const intentId = normalizeString(options.intent_id);
-    const assignedTo = normalizeString(options.assigned_to);
-    const maxItems = normalizeLimit(options.limit, 50, 500);
+    // Task listings are a derived read model over append-only events/state.
+    const query = isPlainObject(options) ? options : {};
+    const status = normalizeString(query.status);
+    const intentId = normalizeString(query.intent_id);
+    const assignedTo = normalizeString(query.assigned_to);
+    const maxItems = normalizeLimit(query.limit, 50, 500);
     const items = [];
 
     for (let i = this.taskOrder.length - 1; i >= 0; i -= 1) {

@@ -305,7 +305,7 @@ async function main() {
         );
         assert.strictEqual(
           preflight.headers["access-control-allow-headers"],
-          "Authorization,Content-Type,X-AIMTP-KEY"
+          "Authorization,Content-Type,X-AIMTP-KEY,X-AIMTP-AUTH"
         );
 
         const peekPreflight = await optionsRequest(port, "/aimtp/peek?recipient=agent-b", {
