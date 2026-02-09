@@ -574,6 +574,9 @@ function normalizePathname(pathname, relayPath) {
   if (!cleanedRelayPath || cleanedRelayPath === "/") {
     return pathname;
   }
+  if (pathname === cleanedRelayPath) {
+    return "/";
+  }
   const relayPrefix = `${cleanedRelayPath}/`;
   if (!pathname.startsWith(relayPrefix)) {
     return pathname;
@@ -582,12 +585,14 @@ function normalizePathname(pathname, relayPath) {
 }
 
 function createWebhookRelayServer(relay, options = {}) {
-  const path =
+  const relayBasePath =
     options.path ||
     (process.env.AIMTP_RELAY_PATH && process.env.AIMTP_RELAY_PATH.trim()) ||
     DEFAULT_PATH;
   const relayPath =
-    path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+    relayBasePath.length > 1 && relayBasePath.endsWith("/")
+      ? relayBasePath.slice(0, -1)
+      : relayBasePath;
   const peekPath = `${relayPath}/peek`;
   const pollPath = `${relayPath}/poll`;
   const mailboxPath = `${relayPath}/mailbox`;
@@ -602,6 +607,15 @@ function createWebhookRelayServer(relay, options = {}) {
     options.readyPath ||
     (process.env.AIMTP_READY_PATH && process.env.AIMTP_READY_PATH.trim()) ||
     DEFAULT_READY_PATH;
+  const normalizedRelayPath = normalizePathname(relayPath, relayPath);
+  const normalizedPeekPath = normalizePathname(peekPath, relayPath);
+  const normalizedPollPath = normalizePathname(pollPath, relayPath);
+  const normalizedMailboxPath = normalizePathname(mailboxPath, relayPath);
+  const normalizedAckPath = normalizePathname(ackPath, relayPath);
+  const normalizedFailPath = normalizePathname(failPath, relayPath);
+  const normalizedDeadPath = normalizePathname(deadPath, relayPath);
+  const normalizedHealthPath = normalizePathname(healthPath, relayPath);
+  const normalizedReadyPath = normalizePathname(readyPath, relayPath);
   const maxBytes =
     typeof options.maxBytes === "number"
       ? options.maxBytes
@@ -742,9 +756,10 @@ function createWebhookRelayServer(relay, options = {}) {
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
-    const normalizedPathname = normalizePathname(url.pathname, relayPath);
+    const rawPath = url.pathname;
+    const requestPath = normalizePathname(rawPath, relayPath);
 
-    if (url.pathname === healthPath) {
+    if (requestPath === normalizedHealthPath) {
       if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
         return;
@@ -758,7 +773,7 @@ function createWebhookRelayServer(relay, options = {}) {
       });
       return;
     }
-    if (url.pathname === readyPath) {
+    if (requestPath === normalizedReadyPath) {
       if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
         return;
@@ -771,7 +786,7 @@ function createWebhookRelayServer(relay, options = {}) {
       return;
     }
 
-    if (isIntentosUiPath(normalizedPathname)) {
+    if (isIntentosUiPath(requestPath)) {
       if (!intentosEnabled) {
         sendError(res, 404, "not_found", "Not Found");
         return;
@@ -781,7 +796,7 @@ function createWebhookRelayServer(relay, options = {}) {
         return;
       }
       const asset = intentosUiAssets
-        ? resolveIntentosUiAsset(normalizedPathname, intentosUiAssets)
+        ? resolveIntentosUiAsset(requestPath, intentosUiAssets)
         : null;
       if (!asset) {
         sendError(res, 404, "not_found", "Not Found");
@@ -819,13 +834,13 @@ function createWebhookRelayServer(relay, options = {}) {
       console.log(JSON.stringify(record));
     };
 
-  const isPeek = url.pathname === peekPath;
-  const isPoll = url.pathname === pollPath;
-  const isDead = url.pathname === deadPath;
-  const isAck = url.pathname === ackPath;
-  const isFail = url.pathname === failPath;
-  const isMailboxPath = url.pathname === mailboxPath;
-  const isRelayPath = url.pathname === relayPath;
+  const isPeek = requestPath === normalizedPeekPath;
+  const isPoll = requestPath === normalizedPollPath;
+  const isDead = requestPath === normalizedDeadPath;
+  const isAck = requestPath === normalizedAckPath;
+  const isFail = requestPath === normalizedFailPath;
+  const isMailboxPath = requestPath === normalizedMailboxPath;
+  const isRelayPath = requestPath === normalizedRelayPath;
 
   if (!isPeek && !isPoll && !isDead && !isAck && !isFail && !isMailboxPath && !isRelayPath) {
     sendError(res, 404, "not_found", "Not Found");

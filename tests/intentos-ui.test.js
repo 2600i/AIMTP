@@ -159,6 +159,31 @@ async function main() {
     return;
   }
 
+  const ranOnTrailing = await withServer(
+    {
+      INTENTOS: "on",
+      INTENTOS_MODE: "log"
+    },
+    async (port) => {
+      const index = await getText(port, "/intentos/ui");
+      assert.strictEqual(index.status, 200);
+      assert.ok(index.body.includes("<title>IntentOS Inbox</title>"));
+
+      const baseIndex = await getText(port, "/aimtp/intentos/ui");
+      assert.strictEqual(baseIndex.status, 200);
+      assert.ok(baseIndex.body.includes("<title>IntentOS Inbox</title>"));
+
+      const baseApp = await getText(port, "/aimtp/intentos/ui/app.js");
+      assert.strictEqual(baseApp.status, 200);
+      assert.ok(baseApp.body.includes("const POLL_INTERVAL_MS"));
+    },
+    { path: "/aimtp/" }
+  );
+
+  if (!ranOnTrailing) {
+    return;
+  }
+
   const ranOff = await withServer(
     {
       INTENTOS: "off",
@@ -174,6 +199,25 @@ async function main() {
   );
 
   if (!ranOff) {
+    return;
+  }
+
+  const ranOffTrailing = await withServer(
+    {
+      INTENTOS: "off",
+      INTENTOS_MODE: "log"
+    },
+    async (port) => {
+      const index = await getText(port, "/intentos/ui");
+      assert.strictEqual(index.status, 404);
+
+      const baseIndex = await getText(port, "/aimtp/intentos/ui");
+      assert.strictEqual(baseIndex.status, 404);
+    },
+    { path: "/aimtp/" }
+  );
+
+  if (!ranOffTrailing) {
     return;
   }
 
