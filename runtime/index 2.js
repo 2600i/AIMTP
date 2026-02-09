@@ -12,7 +12,6 @@ const {
 } = require("./mailbox");
 const { createWebhookRelayServer } = require("./http");
 const { validateEnvelope, validateMessage, validateTask, SPEC_VERSION } = require("./validation");
-const federation = require("./federation");
 
 module.exports = {
   AgentRegistry,
@@ -25,7 +24,6 @@ module.exports = {
   createMailboxStore,
   parseMailboxStoreType,
   createWebhookRelayServer,
-  federation,
   validateEnvelope,
   validateMessage,
   validateTask,

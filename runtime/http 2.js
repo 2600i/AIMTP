@@ -1,7 +1,6 @@
 "use strict";
 
 const http = require("http");
-const https = require("https");
 const { RelayError } = require("./relay");
 const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
 const { validateEnvelope } = require("./validation");
@@ -9,16 +8,6 @@ const {
   createSignatureTrustConfig,
   evaluateEnvelopeSignaturePolicy
 } = require("./signature");
-const {
-  buildRelayDescriptor,
-  isTrustEntryExpired,
-  isLocalRecipient,
-  loadTrustPolicy,
-  parseFederationConfig,
-  resolveDestinationRelayId,
-  validateHopLimit,
-  verifyRelayDescriptor
-} = require("./federation");
 const packageJson = require("../package.json");
 
 const DEFAULT_PATH = "/aimtp";
@@ -526,69 +515,6 @@ function readRequestBody(req, maxBytes) {
   });
 }
 
-async function readJson(req, maxBytes) {
-  const raw = await readRequestBody(req, maxBytes);
-  try {
-    return JSON.parse(raw);
-  } catch (_err) {
-    throw new RelayError("invalid_json", "Invalid JSON payload");
-  }
-}
-
-function postJsonWithTimeout(endpoint, pathname, payload, options = {}) {
-  const url = new URL(pathname, endpoint);
-  const body = JSON.stringify(payload);
-  const timeoutMs =
-    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0 ? options.timeoutMs : 5000;
-  const transport = url.protocol === "https:" ? https : http;
-  const headers = Object.assign(
-    {
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(body)
-    },
-    options.headers || {}
-  );
-
-  return new Promise((resolve, reject) => {
-    const req = transport.request(
-      {
-        protocol: url.protocol,
-        hostname: url.hostname,
-        port: url.port || undefined,
-        path: `${url.pathname}${url.search}`,
-        method: "POST",
-        headers
-      },
-      (res) => {
-        const chunks = [];
-        res.on("data", (chunk) => chunks.push(chunk));
-        res.on("end", () => {
-          const raw = Buffer.concat(chunks).toString("utf8");
-          let parsedBody = null;
-          if (raw) {
-            try {
-              parsedBody = JSON.parse(raw);
-            } catch (_err) {
-              parsedBody = { raw };
-            }
-          }
-          resolve({
-            status: typeof res.statusCode === "number" ? res.statusCode : 502,
-            body: parsedBody
-          });
-        });
-      }
-    );
-
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error("timeout"));
-    });
-    req.on("error", reject);
-    req.write(body);
-    req.end();
-  });
-}
-
 function createWebhookRelayServer(relay, options = {}) {
   const path =
     options.path ||
@@ -632,31 +558,6 @@ function createWebhookRelayServer(relay, options = {}) {
     ...signatureOptions,
     logger: options.logger || console
   });
-  const testModeEnabled =
-    process.env.AIMTP_TEST_MODE === "on" || process.env.NODE_ENV === "test";
-  const federationConfig = parseFederationConfig({
-    enabled: options.federationEnabled,
-    relayId: options.relayId,
-    relayEndpoint: options.relayEndpoint,
-    trustedRelaysPath: options.trustedRelaysPath,
-    trustPolicyMode: options.trustPolicyMode,
-    descriptorTtlSec: options.descriptorTtlSec,
-    clockSkewSec: options.federationClockSkewSec,
-    forwardTimeoutMs: options.federationTimeoutMs,
-    localDomains: options.localDomains,
-    relayPublicKey: options.relayPublicKey,
-    relayPrivateKey: options.relayPrivateKey,
-    allowHttpEndpoints: options.allowInsecureFederation === true || testModeEnabled
-  });
-  if (federationConfig.enabled && federationConfig.errors.length > 0) {
-    throw new Error(`Federation config error: ${federationConfig.errors.join("; ")}`);
-  }
-  const descriptorPath = "/.well-known/aimtp-relay.json";
-  const federationEnvelopePath = "/federation/envelope";
-  const loadCurrentTrustPolicy = () =>
-    loadTrustPolicy(federationConfig.trustedRelaysPath, {
-      allowHttpEndpoints: federationConfig.allowHttpEndpoints
-    });
   const relayInstanceId = mailboxStoreOptions.relayInstanceId || `relay-${process.pid}`;
   const mailbox =
     options.mailbox ||
@@ -688,57 +589,6 @@ function createWebhookRelayServer(relay, options = {}) {
       now: options.now,
       logger: options.logger || console
     });
-  const summaryIntervalMs =
-    typeof options.logSummaryIntervalMs === "number"
-      ? options.logSummaryIntervalMs
-      : parseOptionalNonNegativeEnvInt(process.env.AIMTP_LOG_SUMMARY_INTERVAL_MS, undefined);
-  const counters = {
-    enqueue: 0,
-    poll: 0,
-    ack: 0,
-    fail: 0,
-    dead_letter: 0
-  };
-  const recordCounter = (name, value, fields) => {
-    if (!Number.isFinite(value) || value <= 0) {
-      return;
-    }
-    counters[name] += value;
-    const record = {
-      event: "counter",
-      name,
-      value,
-      relay_instance_id: relayInstanceId
-    };
-    if (fields && typeof fields === "object") {
-      Object.assign(record, fields);
-    }
-    console.log(JSON.stringify(record));
-  };
-  const logFederation = (event, fields) => {
-    const record = {
-      event,
-      relay_instance_id: relayInstanceId
-    };
-    if (fields && typeof fields === "object") {
-      Object.assign(record, fields);
-    }
-    console.log(JSON.stringify(record));
-  };
-  let summaryTimer = null;
-  if (summaryIntervalMs && summaryIntervalMs > 0) {
-    summaryTimer = setInterval(() => {
-      console.log(
-        JSON.stringify({
-          event: "summary",
-          relay_instance_id: relayInstanceId,
-          uptime_sec: Math.floor(process.uptime()),
-          counters: { ...counters }
-        })
-      );
-    }, summaryIntervalMs);
-    summaryTimer.unref();
-  }
   let cleanupTimer = null;
   const defaultHandler = (envelope, context) => ({
     __aimtpAccepted: true,
@@ -755,9 +605,7 @@ function createWebhookRelayServer(relay, options = {}) {
       key_count: recipientKeys.keyToRecipients.size,
       relay_instance_id: relayInstanceId,
       signature_policy: signatureConfig.policy,
-      trusted_key_count: signatureConfig.trustedKeys.size,
-      federation_enabled: federationConfig.enabled,
-      federation_trust_policy_mode: federationConfig.trustPolicyMode
+      trusted_key_count: signatureConfig.trustedKeys.size
     })
   );
 
@@ -777,10 +625,9 @@ function createWebhookRelayServer(relay, options = {}) {
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
-    const method = req.method || "GET";
 
     if (url.pathname === healthPath) {
-      if (method !== "GET") {
+      if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
         return;
       }
@@ -794,7 +641,7 @@ function createWebhookRelayServer(relay, options = {}) {
       return;
     }
     if (url.pathname === readyPath) {
-      if (method !== "GET") {
+      if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
         return;
       }
@@ -803,220 +650,6 @@ function createWebhookRelayServer(relay, options = {}) {
       } else {
         sendJson(res, 503, { status: "not_ready" });
       }
-      return;
-    }
-
-    if (url.pathname === descriptorPath) {
-      if (!federationConfig.enabled) {
-        sendError(res, 404, "not_found", "Not Found");
-        return;
-      }
-      if (method !== "GET") {
-        sendError(res, 405, "method_not_allowed", "Method not allowed");
-        return;
-      }
-      try {
-        const descriptor = buildRelayDescriptor(federationConfig);
-        res.setHeader("Cache-Control", `public, max-age=${federationConfig.descriptorTtlSec}`);
-        sendJson(res, 200, descriptor);
-        logFederation("federation_descriptor_served", {
-          endpoint: federationConfig.relayEndpoint,
-          outcome: "ok"
-        });
-      } catch (err) {
-        sendError(res, 500, "federation_unavailable", "Descriptor unavailable");
-        logFederation("federation_descriptor_served", {
-          endpoint: federationConfig.relayEndpoint,
-          outcome: "fail",
-          reason: err instanceof Error ? err.message : String(err)
-        });
-      }
-      return;
-    }
-
-    if (url.pathname === federationEnvelopePath) {
-      if (!federationConfig.enabled || federationConfig.trustPolicyMode === "off") {
-        sendError(res, 404, "not_found", "Not Found");
-        return;
-      }
-      if (method !== "POST") {
-        sendError(res, 405, "method_not_allowed", "Method not allowed");
-        return;
-      }
-
-      let payload;
-      try {
-        payload = await readJson(req, maxBytes);
-      } catch (err) {
-        if (err instanceof RelayError && err.code === "payload_too_large") {
-          sendError(res, 413, "payload_too_large", err.message);
-          return;
-        }
-        sendError(res, 400, "invalid_json", "Invalid JSON payload");
-        return;
-      }
-
-      const hopDecision = validateHopLimit(req.headers["x-aimtp-hop"], 1);
-      if (!hopDecision.ok) {
-        sendError(res, 403, "federation_hop_limit_exceeded", "Hop limit exceeded");
-        logFederation("federation_inbound_verify", {
-          src_relay_id: "-",
-          endpoint: "-",
-          outcome: "fail",
-          reason: hopDecision.reason
-        });
-        return;
-      }
-
-      if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
-        sendError(res, 400, "invalid_request", "Payload must be an object");
-        return;
-      }
-      const descriptor = payload.descriptor;
-      const envelope = payload.envelope;
-      if (!descriptor || typeof descriptor !== "object" || Array.isArray(descriptor)) {
-        sendError(res, 400, "invalid_request", "descriptor is required");
-        return;
-      }
-      if (!envelope || typeof envelope !== "object" || Array.isArray(envelope)) {
-        sendError(res, 400, "invalid_request", "envelope is required");
-        return;
-      }
-
-      let trustPolicy;
-      try {
-        trustPolicy = loadCurrentTrustPolicy();
-      } catch (err) {
-        sendError(res, 500, "federation_trust_policy_error", "Trust policy unavailable");
-        logFederation("federation_trust_decision", {
-          src_relay_id: descriptor.relay_id || "-",
-          endpoint: descriptor.endpoint || "-",
-          outcome: "untrusted",
-          policy_source: federationConfig.trustedRelaysPath,
-          reason: err instanceof Error ? err.message : String(err)
-        });
-        return;
-      }
-
-      const trustedEntry = trustPolicy.trustedRelays.get(descriptor.relay_id);
-      if (!trustedEntry) {
-        sendError(res, 403, "federation_untrusted_relay", "Relay is not trusted");
-        logFederation("federation_trust_decision", {
-          src_relay_id: descriptor.relay_id || "-",
-          endpoint: descriptor.endpoint || "-",
-          outcome: "untrusted",
-          policy_source: federationConfig.trustedRelaysPath,
-          reason: "relay_not_allowlisted"
-        });
-        logFederation("federation_inbound_verify", {
-          src_relay_id: descriptor.relay_id || "-",
-          endpoint: descriptor.endpoint || "-",
-          outcome: "fail",
-          reason: "relay_not_allowlisted"
-        });
-        return;
-      }
-
-      const verifyDecision = verifyRelayDescriptor(descriptor, trustedEntry, {
-        clockSkewSec: federationConfig.clockSkewSec
-      });
-      if (!verifyDecision.ok) {
-        sendError(
-          res,
-          verifyDecision.httpStatus || 403,
-          verifyDecision.code || "federation_verify_failed",
-          verifyDecision.message || "Descriptor verification failed",
-          verifyDecision.details
-        );
-        logFederation("federation_trust_decision", {
-          src_relay_id: descriptor.relay_id || "-",
-          endpoint: descriptor.endpoint || "-",
-          outcome: "untrusted",
-          policy_source: federationConfig.trustedRelaysPath,
-          reason: verifyDecision.code || "verify_failed"
-        });
-        logFederation("federation_inbound_verify", {
-          src_relay_id: descriptor.relay_id || "-",
-          endpoint: descriptor.endpoint || "-",
-          outcome: "fail",
-          reason: verifyDecision.code || "verify_failed"
-        });
-        return;
-      }
-      logFederation("federation_trust_decision", {
-        src_relay_id: descriptor.relay_id || "-",
-        endpoint: descriptor.endpoint || "-",
-        outcome: "trusted",
-        policy_source: federationConfig.trustedRelaysPath
-      });
-      logFederation("federation_inbound_verify", {
-        src_relay_id: descriptor.relay_id || "-",
-        endpoint: descriptor.endpoint || "-",
-        outcome: "ok"
-      });
-
-      const validationErrors = validateEnvelope(envelope);
-      if (validationErrors.length > 0) {
-        sendError(res, 400, "invalid_schema", "Envelope failed schema validation", {
-          errors: validationErrors
-        });
-        return;
-      }
-
-      const signatureDecision = evaluateEnvelopeSignaturePolicy(envelope, signatureConfig);
-      if (!signatureDecision.allowed && signatureDecision.error) {
-        sendError(
-          res,
-          signatureDecision.error.httpStatus || 403,
-          signatureDecision.error.code || "signature_invalid",
-          signatureDecision.error.message || "Signature validation failed",
-          signatureDecision.error.details
-        );
-        return;
-      }
-
-      const recipient = typeof envelope.recipient === "string" ? envelope.recipient.trim() : "";
-      if (!recipient) {
-        sendError(res, 400, "missing_recipient", "Recipient is required", { recipient: null });
-        return;
-      }
-      if (!isLocalRecipient(recipient, federationConfig)) {
-        sendError(res, 403, "federation_non_local_recipient", "Recipient is not local");
-        return;
-      }
-      if (senderAllowlist.enabled) {
-        const sender = typeof envelope.sender === "string" ? envelope.sender.trim() : "";
-        if (!senderAllowlist.set.has(sender)) {
-          sendError(res, 403, "unknown_sender", `Unknown sender: ${sender || "-"}`, { sender });
-          return;
-        }
-      }
-      if (recipientAllowlist.enabled) {
-        if (!recipientAllowlist.set.has(recipient)) {
-          sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, { recipient });
-          return;
-        }
-      } else {
-        const handler =
-          relay && relay.registry && typeof relay.registry.get === "function"
-            ? relay.registry.get(recipient)
-            : null;
-        if (!handler) {
-          sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, { recipient });
-          return;
-        }
-      }
-
-      const enqueueResult = mailbox.enqueue(recipient, envelope);
-      sendJson(res, 202, {
-        status: "accepted",
-        id: envelope.id,
-        recipient,
-        federated: true,
-        queued: true,
-        queue_depth: enqueueResult.queueDepth
-      });
-      recordCounter("enqueue", 1, { recipient, path: "federation" });
       return;
     }
 
@@ -1188,7 +821,6 @@ function createWebhookRelayServer(relay, options = {}) {
       }));
       sendJson(res, 200, response);
       logMailbox(200, recipient, items.length);
-      recordCounter("poll", items.length, { recipient });
       return;
     }
 
@@ -1262,7 +894,6 @@ function createWebhookRelayServer(relay, options = {}) {
         id
       });
       logRequest(200);
-      recordCounter("enqueue", 1, { recipient, path: "mailbox" });
       return;
     }
 
@@ -1339,9 +970,6 @@ function createWebhookRelayServer(relay, options = {}) {
         }
         sendJson(res, 200, { ok: true, status: "acknowledged" });
         logRequest(200);
-        if (result.ok) {
-          recordCounter("ack", 1, { recipient });
-        }
         return;
       }
 
@@ -1363,12 +991,6 @@ function createWebhookRelayServer(relay, options = {}) {
         retry_count: result.retryCount || 0
       });
       logRequest(200);
-      if (result.ok) {
-        recordCounter("fail", 1, { recipient, status: result.status });
-        if (result.status === "dead_lettered") {
-          recordCounter("dead_letter", 1, { recipient });
-        }
-      }
       return;
     }
 
@@ -1475,165 +1097,10 @@ function createWebhookRelayServer(relay, options = {}) {
           ? relay.registry.get(recipient)
           : null;
       if (!handler) {
-        const canFederateOutbound =
-          federationConfig.enabled &&
-          federationConfig.trustPolicyMode !== "off" &&
-          !isLocalRecipient(recipient, federationConfig);
-        if (!canFederateOutbound) {
-          sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
-            recipient
-          });
-          logRequest(404);
-          return;
-        }
-        if (!isRecipientAuthorized(authResult, recipient)) {
-          sendError(res, 403, "forbidden", "Recipient access denied", { recipient });
-          logRequest(403);
-          return;
-        }
-
-        let trustPolicy;
-        try {
-          trustPolicy = loadCurrentTrustPolicy();
-        } catch (err) {
-          sendError(res, 500, "federation_trust_policy_error", "Trust policy unavailable");
-          logRequest(500);
-          logFederation("federation_forward_attempt", {
-            dest_relay_id: "-",
-            endpoint: "-",
-            outcome: "fail",
-            reason: err instanceof Error ? err.message : String(err)
-          });
-          return;
-        }
-
-        const destRelayId = resolveDestinationRelayId(recipient, trustPolicy.domains);
-        const trustedEntry = trustPolicy.trustedRelays.get(destRelayId);
-        if (!trustedEntry) {
-          sendError(
-            res,
-            403,
-            "federation_untrusted_destination",
-            `Destination relay not trusted: ${destRelayId || "unknown"}`
-          );
-          logRequest(403);
-          logFederation("federation_trust_decision", {
-            dest_relay_id: destRelayId || "-",
-            endpoint: "-",
-            outcome: "untrusted",
-            policy_source: federationConfig.trustedRelaysPath,
-            reason: "destination_not_allowlisted"
-          });
-          logFederation("federation_forward_attempt", {
-            dest_relay_id: destRelayId || "-",
-            endpoint: "-",
-            outcome: "fail",
-            reason: "destination_not_allowlisted"
-          });
-          return;
-        }
-        if (isTrustEntryExpired(trustedEntry, Date.now(), federationConfig.clockSkewSec)) {
-          sendError(
-            res,
-            403,
-            "federation_untrusted_destination",
-            `Destination relay trust entry expired: ${destRelayId || "unknown"}`
-          );
-          logRequest(403);
-          logFederation("federation_trust_decision", {
-            dest_relay_id: destRelayId || "-",
-            endpoint: trustedEntry.endpoint || "-",
-            outcome: "untrusted",
-            policy_source: federationConfig.trustedRelaysPath,
-            reason: "destination_trust_expired"
-          });
-          logFederation("federation_forward_attempt", {
-            dest_relay_id: destRelayId || "-",
-            endpoint: trustedEntry.endpoint || "-",
-            outcome: "fail",
-            reason: "destination_trust_expired"
-          });
-          return;
-        }
-
-        logFederation("federation_trust_decision", {
-          dest_relay_id: trustedEntry.relay_id,
-          endpoint: trustedEntry.endpoint,
-          outcome: "trusted",
-          policy_source: federationConfig.trustedRelaysPath
+        sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
+          recipient
         });
-
-        let descriptor;
-        try {
-          descriptor = buildRelayDescriptor(federationConfig);
-        } catch (err) {
-          sendError(res, 500, "federation_unavailable", "Relay descriptor unavailable");
-          logRequest(500);
-          logFederation("federation_forward_attempt", {
-            dest_relay_id: trustedEntry.relay_id,
-            endpoint: trustedEntry.endpoint,
-            outcome: "fail",
-            reason: err instanceof Error ? err.message : String(err)
-          });
-          return;
-        }
-
-        let forwardResponse;
-        try {
-          forwardResponse = await postJsonWithTimeout(
-            trustedEntry.endpoint,
-            federationEnvelopePath,
-            { descriptor, envelope: payload },
-            {
-              timeoutMs: federationConfig.forwardTimeoutMs,
-              headers: { "x-aimtp-hop": "1" }
-            }
-          );
-        } catch (err) {
-          sendError(res, 502, "federation_forward_failed", "Federated forward failed", {
-            dest_relay_id: trustedEntry.relay_id,
-            endpoint: trustedEntry.endpoint
-          });
-          logRequest(502);
-          logFederation("federation_forward_attempt", {
-            dest_relay_id: trustedEntry.relay_id,
-            endpoint: trustedEntry.endpoint,
-            outcome: "fail",
-            reason: err instanceof Error ? err.message : String(err)
-          });
-          return;
-        }
-
-        if (forwardResponse.status < 200 || forwardResponse.status >= 300) {
-          sendError(res, 502, "federation_forward_failed", "Federated forward rejected", {
-            dest_relay_id: trustedEntry.relay_id,
-            endpoint: trustedEntry.endpoint,
-            remote_status: forwardResponse.status
-          });
-          logRequest(502);
-          logFederation("federation_forward_attempt", {
-            dest_relay_id: trustedEntry.relay_id,
-            endpoint: trustedEntry.endpoint,
-            outcome: "fail",
-            reason: `remote_status_${forwardResponse.status}`
-          });
-          return;
-        }
-
-        sendJson(res, 202, {
-          status: "forwarded",
-          id: payload.id,
-          recipient,
-          queued: false,
-          dest_relay_id: trustedEntry.relay_id,
-          endpoint: trustedEntry.endpoint
-        });
-        logRequest(202);
-        logFederation("federation_forward_attempt", {
-          dest_relay_id: trustedEntry.relay_id,
-          endpoint: trustedEntry.endpoint,
-          outcome: "ok"
-        });
+        logRequest(404);
         return;
       }
     }
@@ -1653,7 +1120,6 @@ function createWebhookRelayServer(relay, options = {}) {
       queue_depth: enqueueResult.queueDepth
     });
     logRequest(202);
-    recordCounter("enqueue", 1, { recipient, path: "relay" });
   });
 
   trackedServers.add(server);
@@ -1679,10 +1145,6 @@ function createWebhookRelayServer(relay, options = {}) {
     if (cleanupTimer) {
       clearInterval(cleanupTimer);
       cleanupTimer = null;
-    }
-    if (summaryTimer) {
-      clearInterval(summaryTimer);
-      summaryTimer = null;
     }
     if (mailbox && typeof mailbox.close === "function") {
       mailbox.close();

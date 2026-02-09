@@ -1,0 +1,17 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "aaaaaaaa-bbbb-cccc-dddd-ffffffffffff",
+  "timestamp": "2026-02-06T00:00:00Z",
+  "sender": "client-a",
+  "recipient": "service-b",
+  "message": {
+    "id": "99999999-1111-2222-3333-444444444444",
+    "role": "assistant",
+    "content": "Legacy signature fields"
+  },
+  "signature": {
+    "alg": "ed25519",
+    "key_id": "client-a-key-legacy",
+    "signature": "QUJDRA=="
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "name": "descriptor-valid-placeholder",
+  "descriptor": {
+    "relay_id": "relay.partner.example",
+    "endpoint": "https://relay.partner.example",
+    "alg": "ed25519",
+    "public_key": "BASE64_OR_PEM_PUBLIC_KEY",
+    "issued_at": "2026-02-06T00:00:00Z",
+    "expires_at": "2026-02-06T01:00:00Z",
+    "signature": {
+      "alg": "ed25519",
+      "kid": "relay.partner.example",
+      "sig": "BASE64_SIGNATURE"
+    }
+  },
+  "trust_entry": {
+    "relay_id": "relay.partner.example",
+    "endpoint": "https://relay.partner.example",
+    "public_key": "BASE64_OR_PEM_PUBLIC_KEY",
+    "alg": "ed25519"
+  },
+  "expected": {
+    "ok": true,
+    "code": "federation_descriptor_verified"
+  }
+}

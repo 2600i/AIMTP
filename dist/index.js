@@ -20,3 +20,4 @@ __exportStar(require("./protocol/task"), exports);
 __exportStar(require("./runtime/registry"), exports);
 __exportStar(require("./runtime/router"), exports);
 __exportStar(require("./runtime/demo"), exports);
+__exportStar(require("./runtime/federation"), exports);

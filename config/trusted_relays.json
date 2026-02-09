@@ -1,0 +1,14 @@
+{
+  "trusted_relays": [
+    {
+      "relay_id": "relay.partner.example",
+      "endpoint": "https://relay.partner.example",
+      "public_key": "BASE64_OR_PEM_PUBLIC_KEY",
+      "alg": "ed25519",
+      "expires_at": "2027-01-01T00:00:00Z"
+    }
+  ],
+  "domains": {
+    "partner.example": "relay.partner.example"
+  }
+}

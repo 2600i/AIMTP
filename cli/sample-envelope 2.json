@@ -1,0 +1,16 @@
+{
+  "spec": "aimtp/0.1",
+  "id": "env_example_001",
+  "timestamp": "2026-02-04T00:00:00Z",
+  "sender": "demo-client",
+  "recipient": "aimtp-relay",
+  "intent": "message.send",
+  "message": {
+    "id": "msg_example_001",
+    "role": "user",
+    "content": "Hello from AIMTP CLI"
+  },
+  "metadata": {
+    "source": "aimtp-cli"
+  }
+}

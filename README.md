@@ -87,6 +87,37 @@ curl "http://127.0.0.1:8787/aimtp/dead?recipient=agent-b&max=1" \
   -H "X-AIMTP-KEY: dev-key"
 ```
 
+## Federation (Phase 7)
+
+Federation is explicit-allowlist and disabled by default.
+
+**Required when federation is enabled**
+- `AIMTP_FEDERATION=on`
+- `AIMTP_RELAY_ID=<stable-relay-id>`
+- `AIMTP_RELAY_ENDPOINT=https://relay.example`
+- `AIMTP_TRUSTED_RELAYS_PATH=./config/trusted_relays.json`
+- `AIMTP_RELAY_PUBLIC_KEY=<PEM-or-base64-spki>`
+- `AIMTP_RELAY_PRIVATE_KEY=<PEM-or-base64-pkcs8>`
+
+**Optional**
+- `AIMTP_TRUST_POLICY_MODE=explicit|off` (default `explicit` when enabled)
+
+**Serve local descriptor**
+```sh
+curl "http://127.0.0.1:8787/.well-known/aimtp-relay.json"
+```
+
+**Inbound federated envelope**
+```sh
+curl -X POST "http://127.0.0.1:8787/federation/envelope" \
+  -H "Content-Type: application/json" \
+  -H "x-aimtp-hop: 1" \
+  -d '{"descriptor":{...},"envelope":{...}}'
+```
+
+Trust entries and domain routing map shape are defined in
+`/Users/solo446/Documents/AIMTP/spec/aimtp-v0.2-federation.md`.
+
 For full request/response schemas and error codes, see
 `/Users/solo446/Documents/AIMTP/docs/runtime.md`.
 
@@ -95,6 +126,7 @@ For full request/response schemas and error codes, see
 - System architecture: `/Users/solo446/Documents/AIMTP/docs/architecture.md`
 - Security model: `/Users/solo446/Documents/AIMTP/docs/security.md`
 - Protocol spec: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.1.md`
+- Federation spec: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.2-federation.md`
 
 ## Operations
 For deployment, environment configuration, and recovery guidance, see
