@@ -978,6 +978,9 @@ function createWebhookRelayServer(relay, options = {}) {
     };
 
     if (!capabilityPresentation) {
+      if (!capabilityEnforce) {
+        return { ok: true, statusCode: 0 };
+      }
       const missingDecision = {
         allow: false,
         reason_code: "capability_missing",
@@ -985,9 +988,6 @@ function createWebhookRelayServer(relay, options = {}) {
         details: { chain_verified: false, subject: request.subject || "-" }
       };
       logCapabilityResult(missingDecision);
-      if (!capabilityEnforce) {
-        return { ok: true, statusCode: 0 };
-      }
       sendUnauthorized(res, 401, missingDecision.reason_code, missingDecision.message);
       return { ok: false, statusCode: 401 };
     }

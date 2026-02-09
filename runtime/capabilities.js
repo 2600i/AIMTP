@@ -275,21 +275,8 @@ function verifyCapDoc(doc, identityVerifier, options = {}) {
   });
 }
 
-function matchesPattern(pattern, value) {
-  if (pattern === "*" || pattern === value) {
-    return true;
-  }
-  if (typeof pattern === "string" && pattern.endsWith("*")) {
-    return value.startsWith(pattern.slice(0, -1));
-  }
-  return false;
-}
-
 function scopeMatches(scope, request) {
-  return (
-    matchesPattern(scope.action, request.action) &&
-    matchesPattern(scope.resource, request.resource)
-  );
+  return scope.action === request.action && scope.resource === request.resource;
 }
 
 function normalizeCapabilityChain(chain) {
@@ -303,6 +290,56 @@ function normalizeCapabilityChain(chain) {
     };
   }
   return { docs: null, requested: null };
+}
+
+function validateCapChain(chain, options = {}) {
+  const normalized = normalizeCapabilityChain(chain);
+  const docs = normalized.docs;
+  const nowMs = Number.isFinite(options.nowMs) ? Math.floor(options.nowMs) : Date.now();
+  const clockSkewSec = parseClockSkewSec(options.clockSkewSec, 0);
+
+  if (!Array.isArray(docs) || docs.length === 0) {
+    return verifyResult(false, "capability_chain_missing", "capability chain is required");
+  }
+
+  for (let i = 0; i < docs.length; i += 1) {
+    const docValidation = validateCapDoc(docs[i], { nowMs, clockSkewSec });
+    if (!docValidation.ok) {
+      return verifyResult(false, docValidation.code, docValidation.message, { cap_index: i });
+    }
+  }
+
+  for (let i = 0; i < docs.length - 1; i += 1) {
+    if (docs[i].subject !== docs[i + 1].issuer) {
+      return verifyResult(false, "capability_chain_discontinuity", "capability chain is not contiguous", {
+        cap_index: i
+      });
+    }
+  }
+
+  if (docs.length > 1) {
+    for (let i = 0; i < docs.length - 1; i += 1) {
+      const delegation = isPlainObject(docs[i].delegation) ? docs[i].delegation : null;
+      if (!delegation || delegation.allowed !== true) {
+        return verifyResult(false, "capability_delegation_not_allowed", "delegation is not allowed", {
+          cap_index: i
+        });
+      }
+      if (Number.isInteger(delegation.max_depth)) {
+        const remainingDepth = docs.length - i - 1;
+        if (remainingDepth > delegation.max_depth) {
+          return verifyResult(
+            false,
+            "capability_delegation_depth_exceeded",
+            "delegation depth exceeded",
+            { cap_index: i }
+          );
+        }
+      }
+    }
+  }
+
+  return verifyResult(true, "capability_chain_valid", "capability chain is valid");
 }
 
 function evaluateCapability(chain, request, options = {}) {
@@ -347,6 +384,17 @@ function evaluateCapability(chain, request, options = {}) {
     }
   }
 
+  const chainValidation = validateCapChain(docs, { nowMs, clockSkewSec });
+  if (!chainValidation.ok) {
+    return authorizationDecision(false, chainValidation.code, chainValidation.message, {
+      chain_verified: false,
+      cap_index:
+        chainValidation.details && Number.isInteger(chainValidation.details.cap_index)
+          ? chainValidation.details.cap_index
+          : undefined
+    });
+  }
+
   for (let i = 0; i < docs.length; i += 1) {
     const verifyDocResult = verifyCapDoc(docs[i], identityVerifier, {
       ...options,
@@ -358,38 +406,6 @@ function evaluateCapability(chain, request, options = {}) {
         chain_verified: false,
         cap_index: i
       });
-    }
-  }
-
-  for (let i = 0; i < docs.length - 1; i += 1) {
-    if (docs[i].subject !== docs[i + 1].issuer) {
-      return authorizationDecision(false, "capability_chain_discontinuity", "capability chain is not contiguous", {
-        chain_verified: false,
-        cap_index: i
-      });
-    }
-  }
-
-  if (docs.length > 1) {
-    for (let i = 0; i < docs.length - 1; i += 1) {
-      const delegation = isPlainObject(docs[i].delegation) ? docs[i].delegation : null;
-      if (!delegation || delegation.allowed !== true) {
-        return authorizationDecision(false, "capability_delegation_not_allowed", "delegation is not allowed", {
-          chain_verified: false,
-          cap_index: i
-        });
-      }
-      if (Number.isInteger(delegation.max_depth)) {
-        const remainingDepth = docs.length - i - 1;
-        if (remainingDepth > delegation.max_depth) {
-          return authorizationDecision(
-            false,
-            "capability_delegation_depth_exceeded",
-            "delegation depth exceeded",
-            { chain_verified: false, cap_index: i }
-          );
-        }
-      }
     }
   }
 
@@ -453,6 +469,7 @@ function evaluateCapability(chain, request, options = {}) {
 
 module.exports = {
   evaluateCapability,
+  validateCapChain,
   validateCapDoc,
   verifyCapDoc
 };

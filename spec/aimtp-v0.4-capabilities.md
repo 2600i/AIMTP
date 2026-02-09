@@ -73,6 +73,7 @@ Rules:
 - Each scope MUST include `action` and `resource` as non-empty strings.
 - `issued_at` and `expires_at` MUST be RFC3339 when present.
 - `proof` MUST be present and MUST be valid for the CapDoc payload.
+- The verified signer identity MUST match `issuer`; issuer/signature mismatches MUST be rejected.
 
 ## 4. Capability Grant Semantics
 
@@ -114,10 +115,12 @@ A verifier MUST perform the following steps in order:
 3. Resolve issuer identity from local context only.
    Verifiers MUST NOT perform external discovery or global resolution in Phase 9.
 4. Verify CapDoc proof signature against issuer identity keys.
+   The identity used for verification MUST have `id == issuer`.
 5. Validate CapChain continuity (`subject -> issuer` linking).
 6. Enforce delegation rules (`allowed`, `max_depth`).
 7. Enforce constraints (at minimum `audience` and `max_hops` when present).
 8. Evaluate scope match for requested action/resource.
+   Scope matching MUST be exact for both `action` and `resource` in Phase 9.
 9. Return an explicit allow/deny decision with stable reason code.
 
 ## 8. Runtime Integration
@@ -157,6 +160,7 @@ Capabilities are additive to existing trust controls and MUST NOT bypass Phase 7
 
 - Replay remains possible inside validity windows without nonce registries.
 - Implementations MUST prevent confused-deputy behavior by checking `audience` when supplied.
+- If `constraints.audience` is present, request audience MUST exactly match one listed audience entry.
 - Scope evaluation MUST default to deny for unknown or mismatched scopes.
 - Delegation chains MUST be contiguous; broken chains MUST be denied.
 - Revocation lists are out of scope for Phase 9; short expiry windows SHOULD be used.

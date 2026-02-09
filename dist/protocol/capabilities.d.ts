@@ -41,11 +41,12 @@ export interface AuthorizationRequest {
     audience?: string;
     hops?: number;
 }
-export interface CapabilityChain {
+export interface CapabilityPresentation {
     chain: CapabilityDocument[];
     purpose?: string;
     requested?: AuthorizationRequest;
 }
+export type CapabilityChain = CapabilityPresentation;
 export interface AuthorizationDecision {
     allow: boolean;
     reason_code: string;
