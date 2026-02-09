@@ -6,6 +6,9 @@
  * - Commits changes
  * - Tags release
  * - Optionally pushes
+ *
+ * Usage:
+ *   SHIP_MESSAGE="feat: Phase 9 capabilities & delegation" npm run ship
  */
 
 const { execSync } = require("child_process");
@@ -20,6 +23,10 @@ function run(cmd, opts = {}) {
 
 function output(cmd) {
   return execSync(cmd, { encoding: "utf8" }).trim();
+}
+
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
 }
 
 function runPush(cmd) {
@@ -110,8 +117,14 @@ if (!spec.includes("AIMTP_RELAY_PUBLIC_KEY")) {
 
 const remaining = output("git status --porcelain");
 if (remaining) {
+  const featureCommitMessage = process.env.SHIP_MESSAGE
+    ? process.env.SHIP_MESSAGE.trim()
+    : "feat: ship changes";
+  if (!featureCommitMessage) {
+    fail("SHIP_MESSAGE cannot be empty");
+  }
   run("git add .");
-  run(`git commit -m "feat: Phase 7 federation & trust (implementation + smoke test)"`);
+  run(`git commit -m ${shellQuote(featureCommitMessage)}`);
 }
 
 /* ----------------------------------------------------- */
