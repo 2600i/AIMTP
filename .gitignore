@@ -7,3 +7,7 @@ node_modules/
 node_modules/* 2
 
 .codex/
+
+# Runtime artifacts
+runtime/*.sqlite
+runtime/*.db
