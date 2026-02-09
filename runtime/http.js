@@ -1,6 +1,8 @@
 "use strict";
 
+const fs = require("fs");
 const http = require("http");
+const path = require("path");
 const { RelayError } = require("./relay");
 const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
 const { validateEnvelope } = require("./validation");
@@ -21,6 +23,9 @@ const DEFAULT_CORS_ORIGINS = [
   "http://127.0.0.1:8080"
 ];
 const RECIPIENT_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
+const INTENTOS_UI_PATH = "/intentos/ui";
+const INTENTOS_UI_APP_PATH = "/intentos/ui/app.js";
+const INTENTOS_UI_STYLES_PATH = "/intentos/ui/styles.css";
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -515,6 +520,37 @@ function readRequestBody(req, maxBytes) {
   });
 }
 
+function loadIntentosUiAssets() {
+  const base = path.join(__dirname, "static", "intentos");
+  return {
+    index: {
+      contentType: "text/html; charset=utf-8",
+      body: fs.readFileSync(path.join(base, "index.html"))
+    },
+    app: {
+      contentType: "application/javascript; charset=utf-8",
+      body: fs.readFileSync(path.join(base, "app.js"))
+    },
+    styles: {
+      contentType: "text/css; charset=utf-8",
+      body: fs.readFileSync(path.join(base, "styles.css"))
+    }
+  };
+}
+
+function resolveIntentosUiAsset(pathname, assets) {
+  if (pathname === INTENTOS_UI_PATH || pathname === `${INTENTOS_UI_PATH}/`) {
+    return assets.index;
+  }
+  if (pathname === INTENTOS_UI_APP_PATH) {
+    return assets.app;
+  }
+  if (pathname === INTENTOS_UI_STYLES_PATH) {
+    return assets.styles;
+  }
+  return null;
+}
+
 function createWebhookRelayServer(relay, options = {}) {
   const path =
     options.path ||
@@ -664,6 +700,16 @@ function createWebhookRelayServer(relay, options = {}) {
     );
   }
 
+  const intentosEnabled = process.env.INTENTOS === "on";
+  let intentosUiAssets = null;
+  if (intentosEnabled) {
+    try {
+      intentosUiAssets = loadIntentosUiAssets();
+    } catch (_err) {
+      intentosUiAssets = null;
+    }
+  }
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
 
@@ -691,6 +737,34 @@ function createWebhookRelayServer(relay, options = {}) {
       } else {
         sendJson(res, 503, { status: "not_ready" });
       }
+      return;
+    }
+
+    const intentosUiPath =
+      url.pathname === INTENTOS_UI_PATH ||
+      url.pathname === `${INTENTOS_UI_PATH}/` ||
+      url.pathname === INTENTOS_UI_APP_PATH ||
+      url.pathname === INTENTOS_UI_STYLES_PATH;
+    if (intentosUiPath) {
+      if (!intentosEnabled) {
+        sendError(res, 404, "not_found", "Not Found");
+        return;
+      }
+      if (req.method !== "GET") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        return;
+      }
+      const asset = intentosUiAssets
+        ? resolveIntentosUiAsset(url.pathname, intentosUiAssets)
+        : null;
+      if (!asset) {
+        sendError(res, 500, "intentos_ui_unavailable", "IntentOS UI assets are unavailable");
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", asset.contentType);
+      res.setHeader("Content-Length", asset.body.length);
+      res.end(asset.body);
       return;
     }
 

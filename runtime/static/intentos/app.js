@@ -1,0 +1,354 @@
+"use strict";
+
+const POLL_INTERVAL_MS = 2000;
+
+const state = {
+  intents: [],
+  tasks: [],
+  selectedIntentId: null,
+  selectedIntent: null,
+  events: [],
+  inFlight: false,
+  timer: null
+};
+
+function $(id) {
+  return document.getElementById(id);
+}
+
+function setText(id, text) {
+  const node = $(id);
+  if (node) {
+    node.textContent = text;
+  }
+}
+
+function setVisible(id, visible) {
+  const node = $(id);
+  if (!node) return;
+  node.hidden = !visible;
+}
+
+function formatTime(value) {
+  if (!value) return "-";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function truncate(value, max) {
+  const text = value == null ? "" : String(value);
+  if (text.length <= max) return text;
+  return `${text.slice(0, max)}...`;
+}
+
+function queryValue(id, fallback = "") {
+  const node = $(id);
+  if (!node) return fallback;
+  const value = typeof node.value === "string" ? node.value.trim() : "";
+  return value || fallback;
+}
+
+function readIntentsFilters() {
+  const status = queryValue("intents-status", "all");
+  const rawLimit = queryValue("intents-limit", "50");
+  const parsedLimit = Number.parseInt(rawLimit, 10);
+  const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
+  return { status, limit };
+}
+
+function readTasksFilters() {
+  return {
+    status: queryValue("tasks-status", "all"),
+    assigned_to: queryValue("tasks-assigned", ""),
+    intent_id: queryValue("tasks-intent-id", "")
+  };
+}
+
+async function fetchJson(path, params = {}) {
+  const url = new URL(path, window.location.origin);
+  Object.keys(params).forEach((key) => {
+    const value = params[key];
+    if (value !== undefined && value !== null && value !== "" && value !== "all") {
+      url.searchParams.set(key, String(value));
+    }
+  });
+
+  const response = await fetch(url.toString(), {
+    method: "GET",
+    headers: {
+      Accept: "application/json"
+    }
+  });
+
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (_err) {
+    payload = null;
+  }
+
+  if (!response.ok) {
+    const code = payload && payload.code ? `${payload.code}: ` : "";
+    const message =
+      payload && payload.message
+        ? payload.message
+        : `Request failed with status ${response.status}`;
+    throw new Error(`${code}${message}`);
+  }
+
+  return payload;
+}
+
+function normalizeIntents(payload) {
+  if (payload && Array.isArray(payload.intents)) return payload.intents;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function normalizeTasks(payload) {
+  if (payload && Array.isArray(payload.tasks)) return payload.tasks;
+  if (Array.isArray(payload)) return payload;
+  return [];
+}
+
+function normalizeIntentDetail(payload) {
+  const intent =
+    payload && payload.intent && typeof payload.intent === "object"
+      ? payload.intent
+      : payload && typeof payload === "object"
+      ? payload
+      : null;
+  const events =
+    payload && Array.isArray(payload.events)
+      ? payload.events
+      : payload && Array.isArray(payload.runlog)
+      ? payload.runlog
+      : intent && Array.isArray(intent.events)
+      ? intent.events
+      : [];
+  return { intent, events };
+}
+
+function renderIntents() {
+  const list = $("intents-list");
+  if (!list) return;
+  list.textContent = "";
+
+  state.intents.forEach((intent) => {
+    const id = intent && intent.id ? String(intent.id) : "(missing-id)";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = state.selectedIntentId === id ? "active" : "";
+    button.addEventListener("click", () => {
+      state.selectedIntentId = id;
+      void loadSelectedIntent();
+      renderIntents();
+    });
+
+    const top = document.createElement("div");
+    top.className = "mono";
+    top.textContent = id;
+    const mid = document.createElement("div");
+    mid.textContent = `${intent.status || "-"} • ${formatTime(intent.created_at)}`;
+    const goal = document.createElement("div");
+    goal.textContent = truncate(intent.goal || "", 120);
+
+    button.appendChild(top);
+    button.appendChild(mid);
+    button.appendChild(goal);
+    list.appendChild(button);
+  });
+}
+
+function renderIntentDetail() {
+  const detail = $("intent-detail");
+  const eventsList = $("events-list");
+  if (!detail || !eventsList) return;
+
+  detail.textContent = "";
+  eventsList.textContent = "";
+
+  if (!state.selectedIntent) {
+    detail.textContent = "No intent selected.";
+    return;
+  }
+
+  const intent = state.selectedIntent;
+
+  const dl = document.createElement("dl");
+  dl.className = "detail-grid";
+
+  const rows = [
+    ["intent_id", intent.id || "-"],
+    ["status", intent.status || "-"],
+    ["created_at", formatTime(intent.created_at)],
+    ["goal", truncate(intent.goal || "", 300)]
+  ];
+
+  rows.forEach(([label, value]) => {
+    const dt = document.createElement("dt");
+    dt.textContent = label;
+    const dd = document.createElement("dd");
+    if (label === "intent_id") {
+      dd.className = "mono";
+    }
+    dd.textContent = value;
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  });
+  detail.appendChild(dl);
+
+  state.events.forEach((event, index) => {
+    const item = document.createElement("li");
+    const eventType =
+      event && (event.type || event.event || event.name || event.kind)
+        ? String(event.type || event.event || event.name || event.kind)
+        : "event";
+    const eventTime = formatTime(event && (event.created_at || event.timestamp || event.at));
+    const eventStatus = event && event.status ? ` • ${event.status}` : "";
+    const summarySource =
+      event &&
+      (event.message || event.reason || event.note || event.description || event.detail || event.code);
+    const summary = truncate(summarySource || "", 180);
+
+    const head = document.createElement("div");
+    head.className = "mono";
+    head.textContent = `${index + 1}. ${eventType} • ${eventTime}${eventStatus}`;
+    item.appendChild(head);
+
+    if (summary) {
+      const body = document.createElement("div");
+      body.textContent = summary;
+      item.appendChild(body);
+    }
+    eventsList.appendChild(item);
+  });
+}
+
+function renderTasks() {
+  const tbody = $("tasks-body");
+  if (!tbody) return;
+  tbody.textContent = "";
+
+  state.tasks.forEach((task) => {
+    const tr = document.createElement("tr");
+    const cells = [
+      task.id || "-",
+      task.intent_id || "-",
+      task.type || "-",
+      task.status || "-",
+      task.assigned_to || "-",
+      formatTime(task.created_at)
+    ];
+    cells.forEach((value, idx) => {
+      const td = document.createElement("td");
+      if (idx === 0 || idx === 1) {
+        td.className = "mono";
+      }
+      td.textContent = value;
+      tr.appendChild(td);
+    });
+    tbody.appendChild(tr);
+  });
+}
+
+async function loadIntents() {
+  setVisible("intents-loading", true);
+  setVisible("intents-error", false);
+  const filters = readIntentsFilters();
+  try {
+    const payload = await fetchJson("/intentos/intents", filters);
+    state.intents = normalizeIntents(payload);
+    if (!state.selectedIntentId && state.intents.length > 0) {
+      state.selectedIntentId = String(state.intents[0].id || "");
+    }
+    if (
+      state.selectedIntentId &&
+      !state.intents.some((intent) => String(intent.id || "") === state.selectedIntentId)
+    ) {
+      state.selectedIntentId = state.intents.length > 0 ? String(state.intents[0].id || "") : null;
+    }
+    renderIntents();
+  } catch (err) {
+    setText("intents-error", err.message || "Failed to load intents");
+    setVisible("intents-error", true);
+  } finally {
+    setVisible("intents-loading", false);
+  }
+}
+
+async function loadSelectedIntent() {
+  if (!state.selectedIntentId) {
+    state.selectedIntent = null;
+    state.events = [];
+    renderIntentDetail();
+    return;
+  }
+  setVisible("detail-loading", true);
+  setVisible("detail-error", false);
+  try {
+    const payload = await fetchJson(`/intentos/intent/${encodeURIComponent(state.selectedIntentId)}`);
+    const normalized = normalizeIntentDetail(payload);
+    state.selectedIntent = normalized.intent;
+    state.events = normalized.events;
+    renderIntentDetail();
+  } catch (err) {
+    state.selectedIntent = null;
+    state.events = [];
+    renderIntentDetail();
+    setText("detail-error", err.message || "Failed to load intent detail");
+    setVisible("detail-error", true);
+  } finally {
+    setVisible("detail-loading", false);
+  }
+}
+
+async function loadTasks() {
+  setVisible("tasks-loading", true);
+  setVisible("tasks-error", false);
+  const filters = readTasksFilters();
+  try {
+    const payload = await fetchJson("/intentos/tasks", filters);
+    state.tasks = normalizeTasks(payload);
+    renderTasks();
+  } catch (err) {
+    state.tasks = [];
+    renderTasks();
+    setText("tasks-error", err.message || "Failed to load tasks");
+    setVisible("tasks-error", true);
+  } finally {
+    setVisible("tasks-loading", false);
+  }
+}
+
+async function refresh() {
+  if (state.inFlight) return;
+  state.inFlight = true;
+  try {
+    await Promise.all([loadIntents(), loadTasks()]);
+    await loadSelectedIntent();
+    setText("last-updated", `Last updated: ${new Date().toLocaleTimeString()}`);
+  } finally {
+    state.inFlight = false;
+  }
+}
+
+function init() {
+  const triggerRefresh = () => {
+    void refresh();
+  };
+  $("refresh-all").addEventListener("click", triggerRefresh);
+  $("intents-status").addEventListener("change", triggerRefresh);
+  $("intents-limit").addEventListener("change", triggerRefresh);
+  $("tasks-status").addEventListener("change", triggerRefresh);
+  $("tasks-assigned").addEventListener("change", triggerRefresh);
+  $("tasks-intent-id").addEventListener("change", triggerRefresh);
+
+  void refresh();
+  state.timer = setInterval(() => {
+    void refresh();
+  }, POLL_INTERVAL_MS);
+}
+
+window.addEventListener("DOMContentLoaded", init);
