@@ -1,6 +1,6 @@
 {
   "name": "aimtp",
-  "version": "0.1.14",
+  "version": "0.2.0",
   "private": true,
   "type": "commonjs",
   "scripts": {
@@ -12,7 +12,6 @@
     "cli:send": "node cli/aimtp-send.mjs",
     "verify:dist": "node -e \"const fs=require('fs'); const s=fs.readFileSync('dist/runtime/relay.js','utf8'); const required=['AIMTP_ALLOWED_RECIPIENTS','AIMTP_RECIPIENT_KEYS','AIMTP_CORS_ORIGINS','/peek']; for (const token of required) { if (!s.includes(token)) { console.error('missing', token); process.exit(1); } }\"",
     "ship": "node scripts/ship.js"
-
   },
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
