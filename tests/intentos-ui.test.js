@@ -3,6 +3,7 @@
 const assert = require("assert");
 const http = require("http");
 const { WebhookRelay, createWebhookRelayServer } = require("../runtime");
+const { deriveIntentosApiBase } = require("../runtime/static/intentos/app.js");
 
 function startServer(server) {
   return new Promise((resolve, reject) => {
@@ -103,6 +104,13 @@ async function withServer(env, fn, serverOptions = {}) {
 }
 
 async function main() {
+  assert.strictEqual(deriveIntentosApiBase("/intentos/ui"), "/intentos");
+  assert.strictEqual(deriveIntentosApiBase("/intentos/ui/"), "/intentos");
+  assert.strictEqual(deriveIntentosApiBase("/intentos/ui/app.js"), "/intentos");
+  assert.strictEqual(deriveIntentosApiBase("/aimtp/intentos/ui"), "/aimtp/intentos");
+  assert.strictEqual(deriveIntentosApiBase("/aimtp/intentos/ui/"), "/aimtp/intentos");
+  assert.strictEqual(deriveIntentosApiBase("/aimtp/intentos/ui/app.js"), "/aimtp/intentos");
+
   const ranOn = await withServer(
     {
       INTENTOS: "on",
@@ -112,6 +120,8 @@ async function main() {
       const index = await getText(port, "/intentos/ui");
       assert.strictEqual(index.status, 200);
       assert.ok(index.body.includes("<title>IntentOS Inbox</title>"));
+      assert.ok(index.body.includes('href="/intentos/ui/styles.css"'));
+      assert.ok(index.body.includes('src="/intentos/ui/app.js"'));
       assert.ok(
         String(index.headers["content-type"] || "").startsWith("text/html"),
         "expected html content-type"
@@ -124,6 +134,7 @@ async function main() {
       const app = await getText(port, "/intentos/ui/app.js");
       assert.strictEqual(app.status, 200);
       assert.ok(app.body.includes("const POLL_INTERVAL_MS"));
+      assert.ok(app.body.includes("const INTENTOS_API_BASE = deriveIntentosApiBase"));
       assert.ok(
         String(app.headers["content-type"] || "").startsWith("application/javascript"),
         "expected javascript content-type"
@@ -139,6 +150,8 @@ async function main() {
       const baseIndex = await getText(port, "/aimtp/intentos/ui");
       assert.strictEqual(baseIndex.status, 200);
       assert.ok(baseIndex.body.includes("<title>IntentOS Inbox</title>"));
+      assert.ok(baseIndex.body.includes('href="/aimtp/intentos/ui/styles.css"'));
+      assert.ok(baseIndex.body.includes('src="/aimtp/intentos/ui/app.js"'));
 
       const baseIndexSlash = await getText(port, "/aimtp/intentos/ui/");
       assert.strictEqual(baseIndexSlash.status, 200);
@@ -147,6 +160,7 @@ async function main() {
       const baseApp = await getText(port, "/aimtp/intentos/ui/app.js");
       assert.strictEqual(baseApp.status, 200);
       assert.ok(baseApp.body.includes("const POLL_INTERVAL_MS"));
+      assert.ok(baseApp.body.includes("const INTENTOS_API_BASE = deriveIntentosApiBase"));
 
       const baseStyles = await getText(port, "/aimtp/intentos/ui/styles.css");
       assert.strictEqual(baseStyles.status, 200);
@@ -168,10 +182,14 @@ async function main() {
       const index = await getText(port, "/intentos/ui");
       assert.strictEqual(index.status, 200);
       assert.ok(index.body.includes("<title>IntentOS Inbox</title>"));
+      assert.ok(index.body.includes('href="/intentos/ui/styles.css"'));
+      assert.ok(index.body.includes('src="/intentos/ui/app.js"'));
 
       const baseIndex = await getText(port, "/aimtp/intentos/ui");
       assert.strictEqual(baseIndex.status, 200);
       assert.ok(baseIndex.body.includes("<title>IntentOS Inbox</title>"));
+      assert.ok(baseIndex.body.includes('href="/aimtp/intentos/ui/styles.css"'));
+      assert.ok(baseIndex.body.includes('src="/aimtp/intentos/ui/app.js"'));
 
       const baseApp = await getText(port, "/aimtp/intentos/ui/app.js");
       assert.strictEqual(baseApp.status, 200);

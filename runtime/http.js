@@ -26,6 +26,7 @@ const RECIPIENT_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
 const INTENTOS_UI_PATH = "/intentos/ui";
 const INTENTOS_UI_APP_PATH = "/intentos/ui/app.js";
 const INTENTOS_UI_STYLES_PATH = "/intentos/ui/styles.css";
+const INTENTOS_UI_BASE_PLACEHOLDER = "__INTENTOS_UI_BASE_PATH__";
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -523,10 +524,7 @@ function readRequestBody(req, maxBytes) {
 function loadIntentosUiAssets() {
   const base = path.join(__dirname, "static", "intentos");
   return {
-    index: {
-      contentType: "text/html; charset=utf-8",
-      body: fs.readFileSync(path.join(base, "index.html"))
-    },
+    indexTemplate: fs.readFileSync(path.join(base, "index.html"), "utf-8"),
     app: {
       contentType: "application/javascript; charset=utf-8",
       body: fs.readFileSync(path.join(base, "app.js"))
@@ -538,13 +536,56 @@ function loadIntentosUiAssets() {
   };
 }
 
-function resolveIntentosUiAsset(pathname, assets) {
+function trimTrailingSlash(pathname) {
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    return pathname.slice(0, -1);
+  }
+  return pathname;
+}
+
+function resolveIntentosUiBasePath(pathname) {
+  if (typeof pathname !== "string" || pathname.length === 0) {
+    return INTENTOS_UI_PATH;
+  }
+  let basePath = pathname;
+  const indexSuffix = "/index.html";
+  const appSuffix = "/app.js";
+  const stylesSuffix = "/styles.css";
+  if (basePath.endsWith(indexSuffix)) {
+    basePath = basePath.slice(0, -indexSuffix.length);
+  } else if (basePath.endsWith(appSuffix)) {
+    basePath = basePath.slice(0, -appSuffix.length);
+  } else if (basePath.endsWith(stylesSuffix)) {
+    basePath = basePath.slice(0, -stylesSuffix.length);
+  }
+  basePath = trimTrailingSlash(basePath);
+  if (!basePath.endsWith(INTENTOS_UI_PATH)) {
+    return INTENTOS_UI_PATH;
+  }
+  return basePath;
+}
+
+function renderIntentosUiIndex(template, basePath) {
+  const safeBasePath = trimTrailingSlash(basePath || INTENTOS_UI_PATH);
+  return Buffer.from(
+    template.split(INTENTOS_UI_BASE_PLACEHOLDER).join(safeBasePath),
+    "utf-8"
+  );
+}
+
+function resolveIntentosUiAsset(pathname, rawPath, assets) {
   if (
     pathname === INTENTOS_UI_PATH ||
     pathname === `${INTENTOS_UI_PATH}/` ||
     pathname === `${INTENTOS_UI_PATH}/index.html`
   ) {
-    return assets.index;
+    return {
+      contentType: "text/html; charset=utf-8",
+      body: renderIntentosUiIndex(
+        assets.indexTemplate,
+        resolveIntentosUiBasePath(rawPath)
+      )
+    };
   }
   if (pathname === INTENTOS_UI_APP_PATH) {
     return assets.app;
@@ -796,7 +837,7 @@ function createWebhookRelayServer(relay, options = {}) {
         return;
       }
       const asset = intentosUiAssets
-        ? resolveIntentosUiAsset(requestPath, intentosUiAssets)
+        ? resolveIntentosUiAsset(requestPath, rawPath, intentosUiAssets)
         : null;
       if (!asset) {
         sendError(res, 404, "not_found", "Not Found");

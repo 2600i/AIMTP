@@ -1,6 +1,28 @@
 "use strict";
 
 const POLL_INTERVAL_MS = 2000;
+const INTENTOS_UI_SEGMENT = "/intentos/ui";
+const UI_SUFFIX = "/ui";
+
+function deriveIntentosApiBase(pathname) {
+  if (typeof pathname !== "string" || pathname.length === 0) {
+    return "";
+  }
+  const uiIndex = pathname.indexOf(INTENTOS_UI_SEGMENT);
+  if (uiIndex === -1) {
+    return "";
+  }
+  const uiPath = pathname.slice(0, uiIndex + INTENTOS_UI_SEGMENT.length);
+  return uiPath.endsWith(UI_SUFFIX) ? uiPath.slice(0, -UI_SUFFIX.length) : uiPath;
+}
+
+const CURRENT_PATHNAME =
+  typeof window !== "undefined" && window.location ? window.location.pathname : "";
+const INTENTOS_API_BASE = deriveIntentosApiBase(CURRENT_PATHNAME);
+
+function apiPath(resourcePath) {
+  return `${INTENTOS_API_BASE}${resourcePath}`;
+}
 
 const state = {
   intents: [],
@@ -258,7 +280,7 @@ async function loadIntents() {
   setVisible("intents-error", false);
   const filters = readIntentsFilters();
   try {
-    const payload = await fetchJson("/intentos/intents", filters);
+    const payload = await fetchJson(apiPath("/intents"), filters);
     state.intents = normalizeIntents(payload);
     if (!state.selectedIntentId && state.intents.length > 0) {
       state.selectedIntentId = String(state.intents[0].id || "");
@@ -288,7 +310,7 @@ async function loadSelectedIntent() {
   setVisible("detail-loading", true);
   setVisible("detail-error", false);
   try {
-    const payload = await fetchJson(`/intentos/intent/${encodeURIComponent(state.selectedIntentId)}`);
+    const payload = await fetchJson(apiPath(`/intent/${encodeURIComponent(state.selectedIntentId)}`));
     const normalized = normalizeIntentDetail(payload);
     state.selectedIntent = normalized.intent;
     state.events = normalized.events;
@@ -309,7 +331,7 @@ async function loadTasks() {
   setVisible("tasks-error", false);
   const filters = readTasksFilters();
   try {
-    const payload = await fetchJson("/intentos/tasks", filters);
+    const payload = await fetchJson(apiPath("/tasks"), filters);
     state.tasks = normalizeTasks(payload);
     renderTasks();
   } catch (err) {
@@ -351,4 +373,12 @@ function init() {
   }, POLL_INTERVAL_MS);
 }
 
-window.addEventListener("DOMContentLoaded", init);
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("DOMContentLoaded", init);
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    deriveIntentosApiBase
+  };
+}

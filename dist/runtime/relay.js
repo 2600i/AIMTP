@@ -34,6 +34,8 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 const http = __importStar(require("http"));
+const fs = __importStar(require("fs"));
+const path = __importStar(require("path"));
 const mailbox_1 = require("./mailbox");
 const { WebhookRelay, RelayError } = require("../../runtime/relay");
 const { validateEnvelope } = require("../../runtime/validation");
@@ -49,6 +51,10 @@ const DEFAULT_POLL_MAX = 1;
 const MAX_POLL_LIMIT = 50;
 const DEFAULT_CORS_ORIGINS = ["http://localhost:8080", "http://127.0.0.1:8080"];
 const RECIPIENT_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
+const INTENTOS_UI_PATH = "/intentos/ui";
+const INTENTOS_UI_APP_PATH = "/intentos/ui/app.js";
+const INTENTOS_UI_STYLES_PATH = "/intentos/ui/styles.css";
+const INTENTOS_UI_BASE_PLACEHOLDER = "__INTENTOS_UI_BASE_PATH__";
 function parseEnvInt(value, fallback) {
     if (!value) {
         return fallback;
@@ -352,6 +358,106 @@ function readRequestBody(req, maxBytes) {
         req.on("error", onError);
     });
 }
+function resolveIntentosUiDir() {
+    const candidates = [
+        path.join(__dirname, "static", "intentos"),
+        path.join(__dirname, "../../runtime/static/intentos"),
+        path.join(process.cwd(), "runtime", "static", "intentos")
+    ];
+    for (const candidate of candidates) {
+        const indexPath = path.join(candidate, "index.html");
+        if (fs.existsSync(indexPath)) {
+            return candidate;
+        }
+    }
+    throw new Error("IntentOS UI assets not found");
+}
+function loadIntentosUiAssets() {
+    const base = resolveIntentosUiDir();
+    return {
+        indexTemplate: fs.readFileSync(path.join(base, "index.html"), "utf-8"),
+        app: {
+            contentType: "application/javascript; charset=utf-8",
+            body: fs.readFileSync(path.join(base, "app.js"))
+        },
+        styles: {
+            contentType: "text/css; charset=utf-8",
+            body: fs.readFileSync(path.join(base, "styles.css"))
+        }
+    };
+}
+function trimTrailingSlash(pathname) {
+    if (pathname.length > 1 && pathname.endsWith("/")) {
+        return pathname.slice(0, -1);
+    }
+    return pathname;
+}
+function normalizePathname(pathname, relayPathInput) {
+    if (typeof pathname !== "string" || pathname.length === 0) {
+        return "/";
+    }
+    const cleanedRelayPath = trimTrailingSlash(relayPathInput);
+    if (!cleanedRelayPath || cleanedRelayPath === "/") {
+        return pathname;
+    }
+    if (pathname === cleanedRelayPath) {
+        return "/";
+    }
+    const relayPrefix = `${cleanedRelayPath}/`;
+    if (!pathname.startsWith(relayPrefix)) {
+        return pathname;
+    }
+    return `/${pathname.slice(relayPrefix.length)}`;
+}
+function resolveIntentosUiBasePath(pathname) {
+    if (typeof pathname !== "string" || pathname.length === 0) {
+        return INTENTOS_UI_PATH;
+    }
+    let basePath = pathname;
+    const indexSuffix = "/index.html";
+    const appSuffix = "/app.js";
+    const stylesSuffix = "/styles.css";
+    if (basePath.endsWith(indexSuffix)) {
+        basePath = basePath.slice(0, -indexSuffix.length);
+    }
+    else if (basePath.endsWith(appSuffix)) {
+        basePath = basePath.slice(0, -appSuffix.length);
+    }
+    else if (basePath.endsWith(stylesSuffix)) {
+        basePath = basePath.slice(0, -stylesSuffix.length);
+    }
+    basePath = trimTrailingSlash(basePath);
+    if (!basePath.endsWith(INTENTOS_UI_PATH)) {
+        return INTENTOS_UI_PATH;
+    }
+    return basePath;
+}
+function renderIntentosUiIndex(template, basePath) {
+    const safeBasePath = trimTrailingSlash(basePath || INTENTOS_UI_PATH);
+    return Buffer.from(template.split(INTENTOS_UI_BASE_PLACEHOLDER).join(safeBasePath), "utf-8");
+}
+function isIntentosUiPath(pathname) {
+    return (pathname === INTENTOS_UI_PATH ||
+        pathname === `${INTENTOS_UI_PATH}/` ||
+        pathname.startsWith(`${INTENTOS_UI_PATH}/`));
+}
+function resolveIntentosUiAsset(pathname, rawPath, assets) {
+    if (pathname === INTENTOS_UI_PATH ||
+        pathname === `${INTENTOS_UI_PATH}/` ||
+        pathname === `${INTENTOS_UI_PATH}/index.html`) {
+        return {
+            contentType: "text/html; charset=utf-8",
+            body: renderIntentosUiIndex(assets.indexTemplate, resolveIntentosUiBasePath(rawPath))
+        };
+    }
+    if (pathname === INTENTOS_UI_APP_PATH) {
+        return assets.app;
+    }
+    if (pathname === INTENTOS_UI_STYLES_PATH) {
+        return assets.styles;
+    }
+    return null;
+}
 function isRelayError(err) {
     if (!err || typeof err !== "object") {
         return false;
@@ -394,6 +500,8 @@ const deadPath = `${relayPath}/dead`;
 const healthPath = envPath("AIMTP_HEALTH_PATH", DEFAULT_HEALTH_PATH) || DEFAULT_HEALTH_PATH;
 const readyPath = envPath("AIMTP_READY_PATH", DEFAULT_READY_PATH);
 const readyEnabled = readyPath !== "";
+const normalizedHealthPath = normalizePathname(healthPath, relayPath);
+const normalizedReadyPath = normalizePathname(readyPath, relayPath);
 const maxBytes = parseEnvInt(process.env.AIMTP_MAX_BODY_BYTES, DEFAULT_MAX_BYTES);
 const apiKey = process.env.AIMTP_API_KEY ? process.env.AIMTP_API_KEY.trim() : "";
 const legacyRecipientKeys = parseRecipientKeys(process.env.AIMTP_RECIPIENT_KEYS);
@@ -530,10 +638,22 @@ if (recipientAllowlist.enabled) {
         count: recipientAllowlist.set.size
     }));
 }
+const intentosEnabled = String(process.env.INTENTOS || "").trim().toLowerCase() === "on";
+let intentosUiAssets = null;
+if (intentosEnabled) {
+    try {
+        intentosUiAssets = loadIntentosUiAssets();
+    }
+    catch (_err) {
+        intentosUiAssets = null;
+    }
+}
 const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
+    const rawPath = url.pathname;
+    const requestPath = normalizePathname(rawPath, relayPath);
     const method = req.method || "GET";
-    if (url.pathname === healthPath) {
+    if (requestPath === normalizedHealthPath) {
         if (method !== "GET") {
             sendError(res, 405, "method_not_allowed", "Method not allowed");
             return;
@@ -547,7 +667,7 @@ const server = http.createServer(async (req, res) => {
         });
         return;
     }
-    if (readyEnabled && url.pathname === readyPath) {
+    if (readyEnabled && requestPath === normalizedReadyPath) {
         if (method !== "GET") {
             sendError(res, 405, "method_not_allowed", "Method not allowed");
             return;
@@ -558,6 +678,28 @@ const server = http.createServer(async (req, res) => {
         else {
             sendJson(res, 503, { status: "not_ready" });
         }
+        return;
+    }
+    if (isIntentosUiPath(requestPath)) {
+        if (!intentosEnabled) {
+            sendError(res, 404, "not_found", "Not Found");
+            return;
+        }
+        if (method !== "GET") {
+            sendError(res, 405, "method_not_allowed", "Method not allowed");
+            return;
+        }
+        const asset = intentosUiAssets
+            ? resolveIntentosUiAsset(requestPath, rawPath, intentosUiAssets)
+            : null;
+        if (!asset) {
+            sendError(res, 404, "not_found", "Not Found");
+            return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", asset.contentType);
+        res.setHeader("Content-Length", asset.body.length);
+        res.end(asset.body);
         return;
     }
     const authResult = evaluateAuth(req, authConfig);
