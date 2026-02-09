@@ -5,6 +5,11 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { execFileSync, spawnSync } = require("node:child_process");
 
+function fail(message) {
+  console.error(message);
+  process.exit(1);
+}
+
 function run(command, args) {
   console.log(`$ ${command} ${args.join(" ")}`);
   const result = spawnSync(command, args, {
@@ -64,25 +69,23 @@ function ensureSafeMainShipping() {
   }
 
   if (!upstream) {
-    throw new Error(
-      "Refusing to ship from main without upstream tracking. Sync main or ship from a release branch."
-    );
+    fail("Refusing to ship from main without upstream tracking. Sync main or ship from a release branch.");
   }
 
   const rawCounts = readCommand("git", ["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
   const parts = rawCounts.split(/\s+/).filter(Boolean);
   if (parts.length < 2) {
-    throw new Error("Refusing to ship from main: unable to determine divergence against upstream.");
+    fail("Refusing to ship from main: unable to determine divergence against upstream.");
   }
 
   const ahead = Number(parts[0]);
   const behind = Number(parts[1]);
   if (!Number.isInteger(ahead) || !Number.isInteger(behind)) {
-    throw new Error("Refusing to ship from main: invalid divergence data from git.");
+    fail("Refusing to ship from main: invalid divergence data from git.");
   }
 
   if (ahead !== 0 || behind !== 0) {
-    throw new Error(
+    fail(
       `Refusing to ship from diverged main (ahead ${ahead}, behind ${behind}). Create a release branch or sync main with origin.`
     );
   }
