@@ -108,6 +108,22 @@ compatible aliases `key_id` and `signature` are also accepted. The protocol is
 chain-agnostic and does not mandate a specific blockchain. Signature validation
 behavior is runtime policy-driven (`off`, `warn`, `enforce`).
 
+## Capability Enforce Mode (Dev)
+
+1. Enable capability checks in your relay environment:
+   `AIMTP_CAPABILITIES=on` and `AIMTP_CAP_MODE=enforce`.
+2. Set signing keys in env vars:
+   `AIMTP_CAP_PRIVATE_KEY` and `AIMTP_CAP_PUBLIC_KEY`.
+3. Mint a capability with exact audience including base path:
+   `node tools/aimtp-cap.mjs mint --issuer orchestrator.local --subject agent.demo --aud http://localhost:8787/aimtp --actions intentos.read --resources intentos:intents --out /tmp/agent-cap.json`.
+4. Run `node tools/aimtp-cap.mjs verify --file /tmp/agent-cap.json --aud http://localhost:8787/aimtp`.
+5. Attach the capability presentation to runtime requests.
+6. JSON embedding option: include the presentation in request envelope metadata.
+7. Header helper option: use `--as-header` to print `X-AIMTP-CAPABILITY: <base64>`.
+8. Repeat minting for orchestrator, agent, and optional read-only viewer roles.
+9. Keep capabilities short-lived (15–60 minutes) and exact-scope only.
+10. Open IntentOS UI at `/aimtp/intentos/ui` and validate read-only behavior.
+
 ## System Architecture
 
 AIMTP separates protocol semantics from transport. The reference relay accepts

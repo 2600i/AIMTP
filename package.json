@@ -4,12 +4,14 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js && node tests/intentos-ui.test.js",
+    "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/cap-mint.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js && node tests/intentos-ui.test.js",
     "build": "tsc -p tsconfig.json",
     "ship": "node scripts/ship.js",
     "demo": "npm run build && node dist/runtime/demo-run.js",
     "demo:web": "node examples/web-inbox/server.js",
     "cli:send": "node cli/aimtp-send.mjs",
+    "cap:mint": "node tools/aimtp-cap.mjs mint --help",
+    "cap:inspect": "node tools/aimtp-cap.mjs inspect --help",
     "verify:dist": "node -e \"const fs=require('fs'); const s=fs.readFileSync('dist/runtime/relay.js','utf8'); const required=['AIMTP_ALLOWED_RECIPIENTS','AIMTP_RECIPIENT_KEYS','AIMTP_CORS_ORIGINS','/peek']; for (const token of required) { if (!s.includes(token)) { console.error('missing', token); process.exit(1); } }\""
   },
   "main": "dist/index.js",
