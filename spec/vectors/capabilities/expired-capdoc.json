@@ -1,0 +1,11 @@
+{
+  "name": "expired-capdoc",
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capdoc_expired"
+  }
+}

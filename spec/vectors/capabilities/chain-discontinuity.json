@@ -1,0 +1,11 @@
+{
+  "name": "chain-discontinuity",
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capability_chain_discontinuity"
+  }
+}

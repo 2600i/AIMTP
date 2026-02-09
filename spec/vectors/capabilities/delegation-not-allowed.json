@@ -1,0 +1,11 @@
+{
+  "name": "delegation-not-allowed",
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capability_delegation_not_allowed"
+  }
+}

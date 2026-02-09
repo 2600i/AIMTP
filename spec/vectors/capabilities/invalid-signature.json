@@ -1,0 +1,11 @@
+{
+  "name": "invalid-signature",
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capdoc_proof_invalid"
+  }
+}

@@ -223,6 +223,23 @@ function signEnvelope(envelope, privateKey, alg, kid, extraSignature = {}) {
   });
 }
 
+function makeIdentityDocument(id, publicKey) {
+  return {
+    id,
+    role: "agent",
+    keys: [
+      {
+        kid: `${id}#k1`,
+        alg: "ed25519",
+        public_key: publicKey,
+        purposes: ["assertion"]
+      }
+    ],
+    issued_at: "2026-01-01T00:00:00Z",
+    expires_at: "2029-01-01T00:00:00Z"
+  };
+}
+
 async function withServer(relay, options, fn) {
   const server = createWebhookRelayServer(relay, options);
 
@@ -578,6 +595,154 @@ async function main() {
 
         const ok = await postJson(port, "/aimtp", validEnvelope, authHeaders(ADMIN_KEY));
         assert.strictEqual(ok.status, 202);
+      })
+  );
+
+  const capabilityIdentity = makeIdentityDocument("did:aimtp:agent-a", identityPublicKeyBase64);
+  const attachIdentityProof = (envelope) => {
+    const withIdentity = Object.assign({}, envelope, { identity: capabilityIdentity });
+    withIdentity.proof = createProof(withIdentity, identityPrivateKeyBase64, {
+      kid: capabilityIdentity.keys[0].kid,
+      createdAt: "2026-01-01T00:00:00Z",
+      expiresAt: "2028-01-01T00:00:00Z"
+    });
+    return withIdentity;
+  };
+  const attachCapabilityPresentation = (envelope, options = {}) => {
+    const capDoc = {
+      id: options.capId || "cap:runtime-relay",
+      type: "aimtp.capability",
+      issuer: capabilityIdentity.id,
+      subject: capabilityIdentity.id,
+      scopes: [{ action: "mailbox.enqueue", resource: "mailbox:agent-b" }],
+      constraints: { max_hops: 1, audience: ["did:aimtp:relay.local"] },
+      delegation: { allowed: false, max_depth: 0 },
+      issued_at: "2026-01-01T00:00:00Z",
+      expires_at: "2028-01-01T00:00:00Z"
+    };
+    capDoc.proof = createProof(capDoc, identityPrivateKeyBase64, {
+      kid: capabilityIdentity.keys[0].kid,
+      createdAt: "2026-01-01T00:00:00Z",
+      expiresAt: "2028-01-01T00:00:00Z"
+    });
+    if (options.tamperScope === true) {
+      capDoc.scopes = [{ action: "mailbox.poll", resource: "mailbox:agent-b" }];
+    }
+    return Object.assign({}, envelope, {
+      capabilities: {
+        chain: [capDoc],
+        purpose: "authorize",
+        requested: { action: "mailbox.enqueue", resource: "mailbox:agent-b" },
+        identities: {
+          [capabilityIdentity.id]: capabilityIdentity
+        }
+      }
+    });
+  };
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory",
+      AIMTP_SIGNATURE_POLICY: "off",
+      AIMTP_CAPABILITIES: "on",
+      AIMTP_CAP_MODE: "log",
+      AIMTP_CAP_AUDIENCE: "did:aimtp:relay.local",
+      AIMTP_IDENTITY: undefined,
+      AIMTP_IDENTITY_MODE: undefined
+    },
+    async () =>
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const noCapabilities = await postJson(
+          port,
+          "/aimtp",
+          buildRequestEnvelope("agent-b", "cap-log-none"),
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(noCapabilities.status, 202);
+
+        const invalidCapability = attachCapabilityPresentation(
+          buildRequestEnvelope("agent-b", "cap-log-invalid"),
+          { tamperScope: true, capId: "cap:log-invalid" }
+        );
+        const invalidResult = await postJson(
+          port,
+          "/aimtp",
+          attachIdentityProof(invalidCapability),
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(invalidResult.status, 202);
+      })
+  );
+
+  await withEnv(
+    {
+      AIMTP_RELAY_PATH: undefined,
+      AIMTP_HEALTH_PATH: undefined,
+      AIMTP_READY_PATH: undefined,
+      AIMTP_API_KEY: ADMIN_KEY,
+      AIMTP_RECIPIENT_KEYS: undefined,
+      AIMTP_CORS_ORIGINS: undefined,
+      AIMTP_ALLOWED_RECIPIENTS: "agent-b",
+      AIMTP_ALLOWED_SENDERS: "agent-a",
+      AIMTP_STORE: "memory",
+      AIMTP_SIGNATURE_POLICY: "off",
+      AIMTP_CAPABILITIES: "on",
+      AIMTP_CAP_MODE: "enforce",
+      AIMTP_CAP_AUDIENCE: "did:aimtp:relay.local",
+      AIMTP_IDENTITY: undefined,
+      AIMTP_IDENTITY_MODE: undefined
+    },
+    async () =>
+      withServer(new WebhookRelay({ emitResponses: true }), {}, async (port) => {
+        const missingCapabilities = await postJson(
+          port,
+          "/aimtp",
+          buildRequestEnvelope("agent-b", "cap-enforce-missing"),
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(missingCapabilities.status, 401);
+        assert.strictEqual(missingCapabilities.body.code, "unauthorized");
+        assert.strictEqual(missingCapabilities.body.reason_code, "capability_missing");
+
+        const identityNoCaps = attachIdentityProof(buildRequestEnvelope("agent-b", "cap-enforce-identity"));
+        const identityNoCapsResult = await postJson(port, "/aimtp", identityNoCaps, authHeaders(ADMIN_KEY));
+        assert.strictEqual(identityNoCapsResult.status, 401);
+        assert.strictEqual(identityNoCapsResult.body.code, "unauthorized");
+        assert.strictEqual(identityNoCapsResult.body.reason_code, "capability_missing");
+
+        const invalidCapability = attachCapabilityPresentation(
+          buildRequestEnvelope("agent-b", "cap-enforce-invalid"),
+          { tamperScope: true, capId: "cap:enforce-invalid" }
+        );
+        const invalidResult = await postJson(
+          port,
+          "/aimtp",
+          attachIdentityProof(invalidCapability),
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(invalidResult.status, 403);
+        assert.strictEqual(invalidResult.body.code, "unauthorized");
+        assert.strictEqual(invalidResult.body.reason_code, "capdoc_proof_invalid");
+
+        const validCapability = attachCapabilityPresentation(
+          buildRequestEnvelope("agent-b", "cap-enforce-valid"),
+          { capId: "cap:enforce-valid" }
+        );
+        const validResult = await postJson(
+          port,
+          "/aimtp",
+          attachIdentityProof(validCapability),
+          authHeaders(ADMIN_KEY)
+        );
+        assert.strictEqual(validResult.status, 202);
       })
   );
 

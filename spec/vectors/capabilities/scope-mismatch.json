@@ -1,0 +1,11 @@
+{
+  "name": "scope-mismatch",
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capability_scope_mismatch"
+  }
+}

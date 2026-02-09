@@ -1,0 +1,12 @@
+{
+  "name": "audience-mismatch",
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123",
+    "audience": "did:aimtp:relay.beta"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capability_audience_mismatch"
+  }
+}

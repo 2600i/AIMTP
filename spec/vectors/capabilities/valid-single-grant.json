@@ -1,0 +1,32 @@
+{
+  "name": "valid-single-grant",
+  "capabilities": {
+    "chain": [
+      {
+        "id": "cap:valid-1",
+        "type": "aimtp.capability",
+        "issuer": "did:aimtp:agent.issuer",
+        "subject": "did:aimtp:agent.subject",
+        "scopes": [
+          {
+            "action": "mailbox.enqueue",
+            "resource": "mailbox:user123"
+          }
+        ],
+        "proof": {
+          "alg": "ed25519",
+          "kid": "did:aimtp:agent.issuer#k1",
+          "sig": "VECTOR_SIGNATURE"
+        }
+      }
+    ]
+  },
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123"
+  },
+  "expected": {
+    "allow": true,
+    "reason_code": "capability_authorized"
+  }
+}

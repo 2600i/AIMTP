@@ -1,0 +1,11 @@
+{
+  "name": "delegation-depth-exceeded",
+  "request": {
+    "action": "mailbox.enqueue",
+    "resource": "mailbox:user123"
+  },
+  "expected": {
+    "allow": false,
+    "reason_code": "capability_delegation_depth_exceeded"
+  }
+}

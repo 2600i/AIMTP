@@ -11,6 +11,7 @@ const {
   evaluateEnvelopeSignaturePolicy
 } = require("./signature");
 const { createIdentityVerifier } = require("./identity");
+const { evaluateCapability } = require("./capabilities");
 const {
   buildRelayDescriptor,
   isTrustEntryExpired,
@@ -113,6 +114,20 @@ function parseOptionalNonNegativeEnvInt(value, fallback) {
 }
 
 function parseIdentityMode(value, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "log") {
+    return "log";
+  }
+  if (normalized === "enforce") {
+    return "enforce";
+  }
+  return fallback;
+}
+
+function parseCapabilityMode(value, fallback) {
   if (typeof value !== "string") {
     return fallback;
   }
@@ -658,6 +673,27 @@ function createWebhookRelayServer(relay, options = {}) {
     : "off";
   const identityEnforce = identityEnabled && identityMode === "enforce";
   const identityVerifier = identityEnabled ? createIdentityVerifier() : null;
+  const capabilitiesEnabled = process.env.AIMTP_CAPABILITIES === "on";
+  const capabilityMode = capabilitiesEnabled
+    ? parseCapabilityMode(
+      typeof options.capabilityMode === "string" ? options.capabilityMode : process.env.AIMTP_CAP_MODE,
+      "log"
+    )
+    : "off";
+  const capabilityEnforce = capabilitiesEnabled && capabilityMode === "enforce";
+  const capabilityClockSkewSec =
+    typeof options.capabilityClockSkewSec === "number"
+      ? options.capabilityClockSkewSec
+      : parseOptionalNonNegativeEnvInt(process.env.AIMTP_CAP_CLOCK_SKEW_SEC, 0);
+  const capabilityAudience =
+    typeof options.capabilityAudience === "string" && options.capabilityAudience.trim()
+      ? options.capabilityAudience.trim()
+      : process.env.AIMTP_CAP_AUDIENCE && process.env.AIMTP_CAP_AUDIENCE.trim()
+        ? process.env.AIMTP_CAP_AUDIENCE.trim()
+        : "";
+  const capabilityIdentityVerifier = capabilitiesEnabled
+    ? createIdentityVerifier({ clockSkewSec: capabilityClockSkewSec })
+    : null;
   const testModeEnabled =
     process.env.AIMTP_TEST_MODE === "on" || process.env.NODE_ENV === "test";
   const federationConfig = parseFederationConfig({
@@ -750,6 +786,34 @@ function createWebhookRelayServer(relay, options = {}) {
       Object.assign(record, fields);
     }
     console.log(JSON.stringify(record));
+  };
+  const logCapability = (event, fields) => {
+    const record = {
+      event,
+      relay_instance_id: relayInstanceId
+    };
+    if (fields && typeof fields === "object") {
+      Object.assign(record, fields);
+    }
+    console.log(JSON.stringify(record));
+  };
+  const sendUnauthorized = (res, statusCode, reasonCode, message) => {
+    sendJson(res, statusCode, {
+      code: "unauthorized",
+      reason_code: reasonCode,
+      message
+    });
+  };
+  const parseHopCount = (value) => {
+    const headerValue = firstHeaderValue(value);
+    if (typeof headerValue !== "string" || !headerValue.trim()) {
+      return 0;
+    }
+    const parsed = Number.parseInt(headerValue.trim(), 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return 0;
+    }
+    return parsed;
   };
   const logIdentityVerification = (source, envelope, result) => {
     if (!identityEnabled || !result) {
@@ -844,6 +908,189 @@ function createWebhookRelayServer(relay, options = {}) {
     }
     return { ok: true, statusCode: 0 };
   };
+  const verifyCapabilitiesEnvelope = (res, source, envelope, context = {}) => {
+    if (!capabilitiesEnabled) {
+      return { ok: true, statusCode: 0 };
+    }
+    const isObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+    const capabilityPresentation =
+      envelope && isObject(envelope.capabilities) ? envelope.capabilities : null;
+    const recipient =
+      typeof context.recipient === "string" && context.recipient.trim()
+        ? context.recipient.trim()
+        : envelope && typeof envelope.recipient === "string"
+          ? envelope.recipient.trim()
+          : "";
+    const envelopeIdentity = envelope && isObject(envelope.identity) ? envelope.identity : null;
+    const request = {
+      action: "mailbox.enqueue",
+      resource: recipient ? `mailbox:${recipient}` : "mailbox:*",
+      hops: Number.isFinite(context.hops) ? Math.max(0, Math.floor(context.hops)) : 0
+    };
+    if (envelopeIdentity && typeof envelopeIdentity.id === "string" && envelopeIdentity.id.trim()) {
+      request.subject = envelopeIdentity.id.trim();
+    }
+    if (capabilityAudience) {
+      request.audience = capabilityAudience;
+    }
+
+    const capIds =
+      capabilityPresentation && Array.isArray(capabilityPresentation.chain)
+        ? capabilityPresentation.chain.map((doc) =>
+          doc && typeof doc.id === "string" && doc.id.trim() ? doc.id.trim() : "-"
+        )
+        : [];
+
+    const logCapabilityResult = (decision) => {
+      const details = decision && isObject(decision.details) ? decision.details : {};
+      const issuer =
+        typeof details.issuer === "string" && details.issuer
+          ? details.issuer
+          : capabilityPresentation &&
+              Array.isArray(capabilityPresentation.chain) &&
+              capabilityPresentation.chain[0] &&
+              typeof capabilityPresentation.chain[0].issuer === "string"
+            ? capabilityPresentation.chain[0].issuer
+            : "-";
+      const subject =
+        typeof details.subject === "string" && details.subject
+          ? details.subject
+          : request.subject || "-";
+      const chainVerified = details.chain_verified === true;
+      logCapability("capability_chain_verify", {
+        source,
+        outcome: chainVerified ? "ok" : "fail",
+        reason_code: decision.reason_code,
+        issuer,
+        subject,
+        cap_ids: capIds
+      });
+      logCapability("capability_authorization", {
+        source,
+        outcome: decision.allow ? "allow" : "deny",
+        reason_code: decision.reason_code,
+        request_action: request.action,
+        request_resource: request.resource,
+        issuer,
+        subject,
+        cap_ids: capIds
+      });
+    };
+
+    if (!capabilityPresentation) {
+      const missingDecision = {
+        allow: false,
+        reason_code: "capability_missing",
+        message: "capability presentation is required",
+        details: { chain_verified: false, subject: request.subject || "-" }
+      };
+      logCapabilityResult(missingDecision);
+      if (!capabilityEnforce) {
+        return { ok: true, statusCode: 0 };
+      }
+      sendUnauthorized(res, 401, missingDecision.reason_code, missingDecision.message);
+      return { ok: false, statusCode: 401 };
+    }
+
+    if (!Array.isArray(capabilityPresentation.chain) || capabilityPresentation.chain.length === 0) {
+      const chainMissing = {
+        allow: false,
+        reason_code: "capability_chain_missing",
+        message: "capability chain is required",
+        details: { chain_verified: false, subject: request.subject || "-" }
+      };
+      logCapabilityResult(chainMissing);
+      if (!capabilityEnforce) {
+        return { ok: true, statusCode: 0 };
+      }
+      sendUnauthorized(res, 401, chainMissing.reason_code, chainMissing.message);
+      return { ok: false, statusCode: 401 };
+    }
+
+    const requested =
+      isObject(capabilityPresentation.requested) ? capabilityPresentation.requested : null;
+    if (requested) {
+      const actionMismatch =
+        typeof requested.action === "string" && requested.action !== request.action;
+      const resourceMismatch =
+        typeof requested.resource === "string" && requested.resource !== request.resource;
+      if (actionMismatch || resourceMismatch) {
+        const requestedMismatch = {
+          allow: false,
+          reason_code: "capability_requested_mismatch",
+          message: "capability requested action/resource does not match endpoint request",
+          details: { chain_verified: false, subject: request.subject || "-" }
+        };
+        logCapabilityResult(requestedMismatch);
+        if (!capabilityEnforce) {
+          return { ok: true, statusCode: 0 };
+        }
+        sendUnauthorized(res, 403, requestedMismatch.reason_code, requestedMismatch.message);
+        return { ok: false, statusCode: 403 };
+      }
+    }
+
+    if (capabilityEnforce) {
+      const identityResult = capabilityIdentityVerifier.verifyEnvelopeIdentity(envelope);
+      if (!identityEnabled) {
+        logIdentityVerification(source, envelope, identityResult);
+      }
+      if (!identityResult.ok) {
+        const missingIdentity =
+          identityResult.code === "identity_not_present" ||
+          identityResult.code === "identity_missing" ||
+          identityResult.code === "identity_proof_missing";
+        const reasonCode = missingIdentity ? "identity_required" : "identity_verification_failed";
+        const identityDecision = {
+          allow: false,
+          reason_code: reasonCode,
+          message: missingIdentity
+            ? "identity and proof are required for capability enforcement"
+            : "identity verification failed for capability enforcement",
+          details: { chain_verified: false, subject: request.subject || "-" }
+        };
+        logCapabilityResult(identityDecision);
+        sendUnauthorized(res, missingIdentity ? 401 : 403, identityDecision.reason_code, identityDecision.message);
+        return { ok: false, statusCode: missingIdentity ? 401 : 403 };
+      }
+    }
+
+    const capabilityDecision = evaluateCapability(capabilityPresentation, request, {
+      nowMs: Date.now(),
+      clockSkewSec: capabilityClockSkewSec,
+      identityVerifier: capabilityIdentityVerifier,
+      lookupIdentity: (issuer, doc) => {
+        if (
+          capabilityPresentation &&
+          isObject(capabilityPresentation.identities) &&
+          isObject(capabilityPresentation.identities[issuer])
+        ) {
+          return capabilityPresentation.identities[issuer];
+        }
+        if (doc && isObject(doc.issuer_identity)) {
+          return doc.issuer_identity;
+        }
+        if (
+          envelopeIdentity &&
+          typeof envelopeIdentity.id === "string" &&
+          envelopeIdentity.id === issuer
+        ) {
+          return envelopeIdentity;
+        }
+        return null;
+      }
+    });
+    logCapabilityResult(capabilityDecision);
+
+    if (!capabilityEnforce) {
+      return { ok: true, statusCode: 0 };
+    }
+    if (!capabilityDecision.allow) {
+      sendUnauthorized(res, 403, capabilityDecision.reason_code, capabilityDecision.message);
+      return { ok: false, statusCode: 403 };
+    }
+    return { ok: true, statusCode: 0 };
+  };
   let summaryTimer = null;
   if (summaryIntervalMs && summaryIntervalMs > 0) {
     summaryTimer = setInterval(() => {
@@ -877,6 +1124,8 @@ function createWebhookRelayServer(relay, options = {}) {
       trusted_key_count: signatureConfig.trustedKeys.size,
       identity_enabled: identityEnabled,
       identity_mode: identityMode,
+      capabilities_enabled: capabilitiesEnabled,
+      capability_mode: capabilityMode,
       federation_enabled: federationConfig.enabled,
       federation_trust_policy_mode: federationConfig.trustPolicyMode
     })
@@ -1109,6 +1358,18 @@ function createWebhookRelayServer(relay, options = {}) {
       }
       if (!isLocalRecipient(recipient, federationConfig)) {
         sendError(res, 403, "federation_non_local_recipient", "Recipient is not local");
+        return;
+      }
+      const capabilityInboundDecision = verifyCapabilitiesEnvelope(
+        res,
+        "federation_inbound",
+        envelope,
+        {
+          recipient,
+          hops: parseHopCount(req.headers["x-aimtp-hop"])
+        }
+      );
+      if (!capabilityInboundDecision.ok) {
         return;
       }
       if (senderAllowlist.enabled) {
@@ -1576,6 +1837,14 @@ function createWebhookRelayServer(relay, options = {}) {
         recipient: null
       });
       logRequest(400);
+      return;
+    }
+    const capabilityDecision = verifyCapabilitiesEnvelope(res, "relay_inbound", payload, {
+      recipient,
+      hops: parseHopCount(req.headers["x-aimtp-hop"])
+    });
+    if (!capabilityDecision.ok) {
+      logRequest(capabilityDecision.statusCode || 403);
       return;
     }
 
