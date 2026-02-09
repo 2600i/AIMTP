@@ -5,17 +5,8 @@ const path = require("node:path");
 const readline = require("node:readline");
 const { execFileSync, spawnSync } = require("node:child_process");
 
-function output(message) {
-  console.log(message);
-}
-
-function fail(message) {
-  console.error(message);
-  process.exit(1);
-}
-
 function run(command, args) {
-  output(`$ ${command} ${args.join(" ")}`);
+  console.log(`$ ${command} ${args.join(" ")}`);
   const result = spawnSync(command, args, {
     stdio: "inherit"
   });
@@ -59,39 +50,39 @@ function hasUpstream() {
   }
 }
 
-function readUpstreamOrNull() {
-  try {
-    return readCommand("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
-  } catch {
-    return null;
-  }
-}
-
 function ensureSafeMainShipping() {
   const branch = readCommand("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
   if (branch !== "main") {
     return;
   }
 
-  const upstream = readUpstreamOrNull();
+  let upstream = null;
+  try {
+    upstream = readCommand("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  } catch {
+    upstream = null;
+  }
+
   if (!upstream) {
-    fail("Refusing to ship from main without upstream tracking. Sync main or ship from a release branch.");
+    throw new Error(
+      "Refusing to ship from main without upstream tracking. Sync main or ship from a release branch."
+    );
   }
 
   const rawCounts = readCommand("git", ["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
   const parts = rawCounts.split(/\s+/).filter(Boolean);
   if (parts.length < 2) {
-    fail("Refusing to ship from main: unable to determine divergence against upstream.");
+    throw new Error("Refusing to ship from main: unable to determine divergence against upstream.");
   }
 
   const ahead = Number(parts[0]);
   const behind = Number(parts[1]);
   if (!Number.isInteger(ahead) || !Number.isInteger(behind)) {
-    fail("Refusing to ship from main: invalid divergence data from git.");
+    throw new Error("Refusing to ship from main: invalid divergence data from git.");
   }
 
   if (ahead !== 0 || behind !== 0) {
-    fail(
+    throw new Error(
       `Refusing to ship from diverged main (ahead ${ahead}, behind ${behind}). Create a release branch or sync main with origin.`
     );
   }
@@ -146,7 +137,7 @@ async function main() {
     run("git", ["add", "-A"]);
     run("git", ["commit", "-m", commitMessage]);
   } else {
-    output("No changes to commit before version bump.");
+    console.log("No changes to commit before version bump.");
   }
 
   writePackageVersion(packagePath, nextVersion);
@@ -161,7 +152,7 @@ async function main() {
 
   const shouldPush = await askToPush();
   if (!shouldPush) {
-    output("Push skipped.");
+    console.log("Push skipped.");
     return;
   }
 
@@ -176,6 +167,6 @@ async function main() {
 
 main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
-  fail(message);
+  console.error(message);
   process.exit(1);
 });
