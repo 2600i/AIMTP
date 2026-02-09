@@ -27,6 +27,9 @@ const INTENTOS_UI_PATH = "/intentos/ui";
 const INTENTOS_UI_APP_PATH = "/intentos/ui/app.js";
 const INTENTOS_UI_STYLES_PATH = "/intentos/ui/styles.css";
 const INTENTOS_UI_BASE_PLACEHOLDER = "__INTENTOS_UI_BASE_PATH__";
+const INTENTOS_INTENTS_PATH = "/intentos/intents";
+const INTENTOS_TASKS_PATH = "/intentos/tasks";
+const INTENTOS_INTENT_PREFIX = "/intentos/intent/";
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -604,6 +607,14 @@ function isIntentosUiPath(pathname) {
   );
 }
 
+function isIntentosApiPath(pathname) {
+  return (
+    pathname === INTENTOS_INTENTS_PATH ||
+    pathname === INTENTOS_TASKS_PATH ||
+    pathname.startsWith(INTENTOS_INTENT_PREFIX)
+  );
+}
+
 function normalizePathname(pathname, relayPath) {
   if (typeof pathname !== "string" || pathname.length === 0) {
     return "/";
@@ -847,6 +858,27 @@ function createWebhookRelayServer(relay, options = {}) {
       res.setHeader("Content-Type", asset.contentType);
       res.setHeader("Content-Length", asset.body.length);
       res.end(asset.body);
+      return;
+    }
+
+    if (isIntentosApiPath(requestPath)) {
+      if (!intentosEnabled) {
+        sendError(res, 404, "not_found", "Not Found");
+        return;
+      }
+      if (req.method !== "GET") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        return;
+      }
+      if (requestPath === INTENTOS_INTENTS_PATH) {
+        sendJson(res, 200, { intents: [] });
+        return;
+      }
+      if (requestPath === INTENTOS_TASKS_PATH) {
+        sendJson(res, 200, { tasks: [] });
+        return;
+      }
+      sendError(res, 404, "not_found", "Intent not found");
       return;
     }
 

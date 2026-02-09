@@ -165,6 +165,22 @@ async function main() {
       const baseStyles = await getText(port, "/aimtp/intentos/ui/styles.css");
       assert.strictEqual(baseStyles.status, 200);
       assert.ok(baseStyles.body.includes(":root"));
+
+      const intents = await getText(port, "/intentos/intents");
+      assert.strictEqual(intents.status, 200);
+      assert.ok(Array.isArray(JSON.parse(intents.body).intents));
+
+      const tasks = await getText(port, "/intentos/tasks");
+      assert.strictEqual(tasks.status, 200);
+      assert.ok(Array.isArray(JSON.parse(tasks.body).tasks));
+
+      const baseIntents = await getText(port, "/aimtp/intentos/intents");
+      assert.strictEqual(baseIntents.status, 200);
+      assert.ok(Array.isArray(JSON.parse(baseIntents.body).intents));
+
+      const baseTasks = await getText(port, "/aimtp/intentos/tasks");
+      assert.strictEqual(baseTasks.status, 200);
+      assert.ok(Array.isArray(JSON.parse(baseTasks.body).tasks));
     },
     { path: "/aimtp" }
   );
@@ -194,6 +210,14 @@ async function main() {
       const baseApp = await getText(port, "/aimtp/intentos/ui/app.js");
       assert.strictEqual(baseApp.status, 200);
       assert.ok(baseApp.body.includes("const POLL_INTERVAL_MS"));
+
+      const baseIntents = await getText(port, "/aimtp/intentos/intents");
+      assert.strictEqual(baseIntents.status, 200);
+      assert.ok(Array.isArray(JSON.parse(baseIntents.body).intents));
+
+      const baseTasks = await getText(port, "/aimtp/intentos/tasks");
+      assert.strictEqual(baseTasks.status, 200);
+      assert.ok(Array.isArray(JSON.parse(baseTasks.body).tasks));
     },
     { path: "/aimtp/" }
   );
@@ -212,6 +236,10 @@ async function main() {
       assert.strictEqual(index.status, 404);
       const baseIndex = await getText(port, "/aimtp/intentos/ui");
       assert.strictEqual(baseIndex.status, 404);
+      const baseIntents = await getText(port, "/aimtp/intentos/intents");
+      assert.strictEqual(baseIntents.status, 404);
+      const baseTasks = await getText(port, "/aimtp/intentos/tasks");
+      assert.strictEqual(baseTasks.status, 404);
     },
     { path: "/aimtp" }
   );
@@ -231,6 +259,10 @@ async function main() {
 
       const baseIndex = await getText(port, "/aimtp/intentos/ui");
       assert.strictEqual(baseIndex.status, 404);
+      const baseIntents = await getText(port, "/aimtp/intentos/intents");
+      assert.strictEqual(baseIntents.status, 404);
+      const baseTasks = await getText(port, "/aimtp/intentos/tasks");
+      assert.strictEqual(baseTasks.status, 404);
     },
     { path: "/aimtp/" }
   );

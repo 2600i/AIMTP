@@ -55,6 +55,9 @@ const INTENTOS_UI_PATH = "/intentos/ui";
 const INTENTOS_UI_APP_PATH = "/intentos/ui/app.js";
 const INTENTOS_UI_STYLES_PATH = "/intentos/ui/styles.css";
 const INTENTOS_UI_BASE_PLACEHOLDER = "__INTENTOS_UI_BASE_PATH__";
+const INTENTOS_INTENTS_PATH = "/intentos/intents";
+const INTENTOS_TASKS_PATH = "/intentos/tasks";
+const INTENTOS_INTENT_PREFIX = "/intentos/intent/";
 function parseEnvInt(value, fallback) {
     if (!value) {
         return fallback;
@@ -441,6 +444,11 @@ function isIntentosUiPath(pathname) {
         pathname === `${INTENTOS_UI_PATH}/` ||
         pathname.startsWith(`${INTENTOS_UI_PATH}/`));
 }
+function isIntentosApiPath(pathname) {
+    return (pathname === INTENTOS_INTENTS_PATH ||
+        pathname === INTENTOS_TASKS_PATH ||
+        pathname.startsWith(INTENTOS_INTENT_PREFIX));
+}
 function resolveIntentosUiAsset(pathname, rawPath, assets) {
     if (pathname === INTENTOS_UI_PATH ||
         pathname === `${INTENTOS_UI_PATH}/` ||
@@ -700,6 +708,26 @@ const server = http.createServer(async (req, res) => {
         res.setHeader("Content-Type", asset.contentType);
         res.setHeader("Content-Length", asset.body.length);
         res.end(asset.body);
+        return;
+    }
+    if (isIntentosApiPath(requestPath)) {
+        if (!intentosEnabled) {
+            sendError(res, 404, "not_found", "Not Found");
+            return;
+        }
+        if (method !== "GET") {
+            sendError(res, 405, "method_not_allowed", "Method not allowed");
+            return;
+        }
+        if (requestPath === INTENTOS_INTENTS_PATH) {
+            sendJson(res, 200, { intents: [] });
+            return;
+        }
+        if (requestPath === INTENTOS_TASKS_PATH) {
+            sendJson(res, 200, { tasks: [] });
+            return;
+        }
+        sendError(res, 404, "not_found", "Intent not found");
         return;
     }
     const authResult = evaluateAuth(req, authConfig);
