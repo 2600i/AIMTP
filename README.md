@@ -123,6 +123,10 @@ behavior is runtime policy-driven (`off`, `warn`, `enforce`).
 8. Repeat minting for orchestrator, agent, and optional read-only viewer roles.
 9. Keep capabilities short-lived (15–60 minutes) and exact-scope only.
 10. Open IntentOS UI at `/aimtp/intentos/ui` and validate read-only behavior.
+11. In enforce mode, the UI requires a capability loaded into the "IntentOS Capability (JSON)" box.
+12. Minimal mint command for UI reads:
+    `node tools/aimtp-cap.mjs mint --issuer local-admin --subject demo-ui --aud http://localhost:8787/aimtp --ttl 900 --actions intentos.read --resources intentos:intents,intentos:tasks --out /tmp/demo-ui-cap.json`.
+13. Paste the JSON from `/tmp/demo-ui-cap.json` into the UI and click `Load Capability`.
 
 ## System Architecture
 

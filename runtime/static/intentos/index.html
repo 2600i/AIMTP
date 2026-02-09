@@ -15,6 +15,22 @@
       </div>
     </header>
 
+    <section class="panel panel-capability">
+      <h2>Capability</h2>
+      <label for="capability-input">IntentOS Capability (JSON)</label>
+      <textarea
+        id="capability-input"
+        rows="5"
+        spellcheck="false"
+        placeholder='{"chain":[...],"signature":{...}}'
+      ></textarea>
+      <div class="capability-actions">
+        <button id="capability-load" type="button">Load Capability</button>
+      </div>
+      <div id="capability-status" class="hint">No capability loaded</div>
+      <div id="capability-error" class="error" hidden></div>
+    </section>
+
     <main class="layout">
       <section class="panel panel-intents">
         <h2>Intents</h2>

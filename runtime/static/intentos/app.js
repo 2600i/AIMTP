@@ -34,7 +34,13 @@ const state = {
   timer: null
 };
 
+let currentCapability = null;
+let currentCapabilityHeaderValue = "";
+
 function $(id) {
+  if (typeof document === "undefined" || !document || typeof document.getElementById !== "function") {
+    return null;
+  }
   return document.getElementById(id);
 }
 
@@ -71,6 +77,143 @@ function queryValue(id, fallback = "") {
   return value || fallback;
 }
 
+function canonicalizeJsonValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(canonicalizeJsonValue);
+  }
+  if (value && typeof value === "object") {
+    const sorted = {};
+    Object.keys(value)
+      .sort()
+      .forEach((key) => {
+        sorted[key] = canonicalizeJsonValue(value[key]);
+      });
+    return sorted;
+  }
+  return value;
+}
+
+function isFiniteUnixTimestamp(value) {
+  return Number.isFinite(value) && value > 0;
+}
+
+function validateCapabilityShape(capability) {
+  if (!capability || typeof capability !== "object" || Array.isArray(capability)) {
+    return { ok: false, error: "Capability must be a JSON object." };
+  }
+  if (!Array.isArray(capability.chain) || capability.chain.length === 0) {
+    return { ok: false, error: "Capability must include a non-empty chain array." };
+  }
+  if (
+    !capability.signature ||
+    typeof capability.signature !== "object" ||
+    Array.isArray(capability.signature)
+  ) {
+    return { ok: false, error: "Capability must include a signature object." };
+  }
+  return { ok: true, error: "" };
+}
+
+function getCapabilityLeaf(capability) {
+  if (!capability || !Array.isArray(capability.chain) || capability.chain.length === 0) {
+    return null;
+  }
+  const leaf = capability.chain[capability.chain.length - 1];
+  return leaf && typeof leaf === "object" && !Array.isArray(leaf) ? leaf : null;
+}
+
+function formatCapabilityExp(expUnix) {
+  if (!isFiniteUnixTimestamp(expUnix)) {
+    return "?";
+  }
+  return formatTime(new Date(expUnix * 1000).toISOString());
+}
+
+function updateCapabilityStatus(extraMessage) {
+  const statusNode = $("capability-status");
+  if (!statusNode) {
+    return;
+  }
+  if (!currentCapability) {
+    statusNode.textContent = "No capability loaded";
+    return;
+  }
+  const leaf = getCapabilityLeaf(currentCapability);
+  const subject = leaf && leaf.subject ? String(leaf.subject) : "?";
+  const exp = leaf ? formatCapabilityExp(Number(leaf.exp)) : "?";
+  const suffix = extraMessage ? ` (${extraMessage})` : "";
+  statusNode.textContent = `Capability loaded (subject=${subject}, exp=${exp})${suffix}`;
+}
+
+function setCapabilityError(message) {
+  setText("capability-error", message);
+  setVisible("capability-error", true);
+}
+
+function clearCapabilityError() {
+  setVisible("capability-error", false);
+}
+
+function loadCapabilityFromInput(rawText) {
+  const trimmed = typeof rawText === "string" ? rawText.trim() : "";
+  if (!trimmed) {
+    currentCapability = null;
+    currentCapabilityHeaderValue = "";
+    clearCapabilityError();
+    updateCapabilityStatus();
+    return { ok: true, error: "" };
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch (_err) {
+    return { ok: false, error: "Capability is not valid JSON." };
+  }
+  const validation = validateCapabilityShape(parsed);
+  if (!validation.ok) {
+    return validation;
+  }
+  const canonical = canonicalizeJsonValue(parsed);
+  currentCapability = canonical;
+  currentCapabilityHeaderValue = JSON.stringify(canonical);
+  clearCapabilityError();
+  updateCapabilityStatus();
+  return { ok: true, error: "" };
+}
+
+function buildIntentosRequestHeaders() {
+  const headers = {
+    Accept: "application/json"
+  };
+  if (currentCapabilityHeaderValue) {
+    headers["X-AIMTP-Capability"] = currentCapabilityHeaderValue;
+  }
+  return headers;
+}
+
+function handleCapabilityResponseError(payload) {
+  if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (payload.code === "capability_required") {
+    updateCapabilityStatus("required by relay");
+    setCapabilityError("Capability required. Load a valid capability JSON.");
+    return;
+  }
+  if (payload.code === "capability_invalid") {
+    const details = payload.details && typeof payload.details === "object" ? payload.details : null;
+    const errors = details && Array.isArray(details.errors) ? details.errors : [];
+    const expired = errors.some((entry) => String(entry).toLowerCase().includes("expired"));
+    if (expired) {
+      updateCapabilityStatus("expired");
+      setCapabilityError("Loaded capability is expired. Mint and load a fresh capability.");
+      return;
+    }
+    updateCapabilityStatus("invalid");
+    setCapabilityError("Loaded capability is invalid for this endpoint.");
+  }
+}
+
 function readIntentsFilters() {
   const status = queryValue("intents-status", "all");
   const rawLimit = queryValue("intents-limit", "50");
@@ -98,9 +241,7 @@ async function fetchJson(path, params = {}) {
 
   const response = await fetch(url.toString(), {
     method: "GET",
-    headers: {
-      Accept: "application/json"
-    }
+    headers: buildIntentosRequestHeaders()
   });
 
   let payload = null;
@@ -111,6 +252,7 @@ async function fetchJson(path, params = {}) {
   }
 
   if (!response.ok) {
+    handleCapabilityResponseError(payload);
     const code = payload && payload.code ? `${payload.code}: ` : "";
     const message =
       payload && payload.message
@@ -360,6 +502,17 @@ function init() {
   const triggerRefresh = () => {
     void refresh();
   };
+  const loadCapability = () => {
+    const raw = queryValue("capability-input", "");
+    const result = loadCapabilityFromInput(raw);
+    if (!result.ok) {
+      setCapabilityError(result.error || "Capability failed validation.");
+      return;
+    }
+    void refresh();
+  };
+  updateCapabilityStatus();
+  $("capability-load").addEventListener("click", loadCapability);
   $("refresh-all").addEventListener("click", triggerRefresh);
   $("intents-status").addEventListener("change", triggerRefresh);
   $("intents-limit").addEventListener("change", triggerRefresh);
@@ -379,6 +532,10 @@ if (typeof window !== "undefined" && typeof window.addEventListener === "functio
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
-    deriveIntentosApiBase
+    deriveIntentosApiBase,
+    canonicalizeJsonValue,
+    validateCapabilityShape,
+    loadCapabilityFromInput,
+    buildIntentosRequestHeaders
   };
 }

@@ -55,6 +55,27 @@ body {
   padding: 12px;
 }
 
+.panel-capability {
+  margin: 12px 12px 0;
+}
+
+.panel-capability textarea {
+  width: 100%;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  background: #fff;
+  resize: vertical;
+}
+
+.capability-actions {
+  display: flex;
+  gap: 10px;
+  margin: 8px 0;
+}
+
 .panel h2,
 .panel h3 {
   margin: 0 0 10px;

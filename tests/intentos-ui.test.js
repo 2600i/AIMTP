@@ -5,7 +5,13 @@ const crypto = require("crypto");
 const http = require("http");
 const { WebhookRelay, createWebhookRelayServer } = require("../runtime");
 const { signCapabilityPresentation } = require("../runtime/capabilities");
-const { deriveIntentosApiBase } = require("../runtime/static/intentos/app.js");
+const {
+  deriveIntentosApiBase,
+  canonicalizeJsonValue,
+  validateCapabilityShape,
+  loadCapabilityFromInput,
+  buildIntentosRequestHeaders
+} = require("../runtime/static/intentos/app.js");
 
 function startServer(server) {
   return new Promise((resolve, reject) => {
@@ -142,6 +148,36 @@ async function main() {
   assert.strictEqual(deriveIntentosApiBase("/aimtp/intentos/ui"), "/aimtp/intentos");
   assert.strictEqual(deriveIntentosApiBase("/aimtp/intentos/ui/"), "/aimtp/intentos");
   assert.strictEqual(deriveIntentosApiBase("/aimtp/intentos/ui/app.js"), "/aimtp/intentos");
+  const sampleCapability = {
+    chain: [
+      {
+        issuer: "local-admin",
+        subject: "demo-ui",
+        aud: "http://localhost:8787/aimtp",
+        iat: 1,
+        exp: 2,
+        scopes: [{ action: "intentos.read", resource: "intentos:intents" }]
+      }
+    ],
+    signature: {
+      alg: "ed25519",
+      kid: "local-admin",
+      sig: "ZmFrZQ=="
+    }
+  };
+  assert.deepStrictEqual(validateCapabilityShape(sampleCapability), { ok: true, error: "" });
+  assert.strictEqual(
+    loadCapabilityFromInput(JSON.stringify(sampleCapability)).ok,
+    true
+  );
+  const loadedHeaders = buildIntentosRequestHeaders();
+  assert.strictEqual(
+    loadedHeaders["X-AIMTP-Capability"],
+    JSON.stringify(canonicalizeJsonValue(sampleCapability))
+  );
+  assert.strictEqual(loadCapabilityFromInput("").ok, true);
+  const clearedHeaders = buildIntentosRequestHeaders();
+  assert.strictEqual(clearedHeaders["X-AIMTP-Capability"], undefined);
 
   const ranOn = await withServer(
     {
