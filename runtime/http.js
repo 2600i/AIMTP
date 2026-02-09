@@ -539,7 +539,11 @@ function loadIntentosUiAssets() {
 }
 
 function resolveIntentosUiAsset(pathname, assets) {
-  if (pathname === INTENTOS_UI_PATH || pathname === `${INTENTOS_UI_PATH}/`) {
+  if (
+    pathname === INTENTOS_UI_PATH ||
+    pathname === `${INTENTOS_UI_PATH}/` ||
+    pathname === `${INTENTOS_UI_PATH}/index.html`
+  ) {
     return assets.index;
   }
   if (pathname === INTENTOS_UI_APP_PATH) {
@@ -549,6 +553,14 @@ function resolveIntentosUiAsset(pathname, assets) {
     return assets.styles;
   }
   return null;
+}
+
+function isIntentosUiPath(pathname) {
+  return (
+    pathname === INTENTOS_UI_PATH ||
+    pathname === `${INTENTOS_UI_PATH}/` ||
+    pathname.startsWith(`${INTENTOS_UI_PATH}/`)
+  );
 }
 
 function createWebhookRelayServer(relay, options = {}) {
@@ -700,7 +712,7 @@ function createWebhookRelayServer(relay, options = {}) {
     );
   }
 
-  const intentosEnabled = process.env.INTENTOS === "on";
+  const intentosEnabled = String(process.env.INTENTOS || "").trim().toLowerCase() === "on";
   let intentosUiAssets = null;
   if (intentosEnabled) {
     try {
@@ -740,12 +752,7 @@ function createWebhookRelayServer(relay, options = {}) {
       return;
     }
 
-    const intentosUiPath =
-      url.pathname === INTENTOS_UI_PATH ||
-      url.pathname === `${INTENTOS_UI_PATH}/` ||
-      url.pathname === INTENTOS_UI_APP_PATH ||
-      url.pathname === INTENTOS_UI_STYLES_PATH;
-    if (intentosUiPath) {
+    if (isIntentosUiPath(url.pathname)) {
       if (!intentosEnabled) {
         sendError(res, 404, "not_found", "Not Found");
         return;
@@ -758,7 +765,7 @@ function createWebhookRelayServer(relay, options = {}) {
         ? resolveIntentosUiAsset(url.pathname, intentosUiAssets)
         : null;
       if (!asset) {
-        sendError(res, 500, "intentos_ui_unavailable", "IntentOS UI assets are unavailable");
+        sendError(res, 404, "not_found", "Not Found");
         return;
       }
       res.statusCode = 200;
