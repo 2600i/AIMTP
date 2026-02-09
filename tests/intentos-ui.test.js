@@ -71,12 +71,18 @@ async function withEnv(values, fn) {
   }
 }
 
-async function withServer(env, fn) {
+async function withServer(env, fn, serverOptions = {}) {
   return withEnv(env, async () => {
     const relay = new WebhookRelay({ emitResponses: true });
-    const server = createWebhookRelayServer(relay, {
-      mailboxStoreType: "memory"
-    });
+    const server = createWebhookRelayServer(
+      relay,
+      Object.assign(
+        {
+          mailboxStoreType: "memory"
+        },
+        serverOptions
+      )
+    );
     try {
       await startServer(server);
     } catch (err) {
@@ -130,7 +136,23 @@ async function main() {
         String(styles.headers["content-type"] || "").startsWith("text/css"),
         "expected css content-type"
       );
-    }
+      const baseIndex = await getText(port, "/aimtp/intentos/ui");
+      assert.strictEqual(baseIndex.status, 200);
+      assert.ok(baseIndex.body.includes("<title>IntentOS Inbox</title>"));
+
+      const baseIndexSlash = await getText(port, "/aimtp/intentos/ui/");
+      assert.strictEqual(baseIndexSlash.status, 200);
+      assert.ok(baseIndexSlash.body.includes("<title>IntentOS Inbox</title>"));
+
+      const baseApp = await getText(port, "/aimtp/intentos/ui/app.js");
+      assert.strictEqual(baseApp.status, 200);
+      assert.ok(baseApp.body.includes("const POLL_INTERVAL_MS"));
+
+      const baseStyles = await getText(port, "/aimtp/intentos/ui/styles.css");
+      assert.strictEqual(baseStyles.status, 200);
+      assert.ok(baseStyles.body.includes(":root"));
+    },
+    { path: "/aimtp" }
   );
 
   if (!ranOn) {
@@ -145,7 +167,10 @@ async function main() {
     async (port) => {
       const index = await getText(port, "/intentos/ui");
       assert.strictEqual(index.status, 404);
-    }
+      const baseIndex = await getText(port, "/aimtp/intentos/ui");
+      assert.strictEqual(baseIndex.status, 404);
+    },
+    { path: "/aimtp" }
   );
 
   if (!ranOff) {

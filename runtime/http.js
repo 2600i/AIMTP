@@ -563,6 +563,24 @@ function isIntentosUiPath(pathname) {
   );
 }
 
+function normalizePathname(pathname, relayPath) {
+  if (typeof pathname !== "string" || pathname.length === 0) {
+    return "/";
+  }
+  const cleanedRelayPath =
+    relayPath && relayPath.length > 1 && relayPath.endsWith("/")
+      ? relayPath.slice(0, -1)
+      : relayPath;
+  if (!cleanedRelayPath || cleanedRelayPath === "/") {
+    return pathname;
+  }
+  const relayPrefix = `${cleanedRelayPath}/`;
+  if (!pathname.startsWith(relayPrefix)) {
+    return pathname;
+  }
+  return `/${pathname.slice(relayPrefix.length)}`;
+}
+
 function createWebhookRelayServer(relay, options = {}) {
   const path =
     options.path ||
@@ -724,6 +742,7 @@ function createWebhookRelayServer(relay, options = {}) {
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
+    const normalizedPathname = normalizePathname(url.pathname, relayPath);
 
     if (url.pathname === healthPath) {
       if (req.method !== "GET") {
@@ -752,7 +771,7 @@ function createWebhookRelayServer(relay, options = {}) {
       return;
     }
 
-    if (isIntentosUiPath(url.pathname)) {
+    if (isIntentosUiPath(normalizedPathname)) {
       if (!intentosEnabled) {
         sendError(res, 404, "not_found", "Not Found");
         return;
@@ -762,7 +781,7 @@ function createWebhookRelayServer(relay, options = {}) {
         return;
       }
       const asset = intentosUiAssets
-        ? resolveIntentosUiAsset(url.pathname, intentosUiAssets)
+        ? resolveIntentosUiAsset(normalizedPathname, intentosUiAssets)
         : null;
       if (!asset) {
         sendError(res, 404, "not_found", "Not Found");
