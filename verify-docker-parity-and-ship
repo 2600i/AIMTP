@@ -373,7 +373,7 @@ async function main() {
   }
 
   createdTag = newTags[0];
-  commitHash = read("git", ["rev-parse", "HEAD"]);
+  commitHash = read("git", ["rev-list", "-n", "1", createdTag]);
   versionNumber = read("node", ["-p", "require('./package.json').version"]);
 
   const remoteTagCheck = run("git", ["ls-remote", "--tags", "origin", createdTag], {
@@ -383,13 +383,12 @@ async function main() {
   if (remoteTagCheck.status !== 0) {
     stopAndAsk(`unable to verify whether tag '${createdTag}' exists on origin`);
   }
-  if (remoteTagCheck.stdout.trim().length > 0) {
-    stopAndAsk(`tag '${createdTag}' already exists on origin; refusing to push/re-ship`);
+  if (remoteTagCheck.stdout.trim().length === 0) {
+    stopAndAsk(`tag '${createdTag}' does not exist on origin after ship; expected ship to push tags`);
   }
 
-  log("Step 5/5: Pushing current branch and only the created tag...");
+  log("Step 5/5: Pushing current branch...");
   run("git", ["push", "origin", currentBranch]);
-  run("git", ["push", "origin", createdTag]);
   pushOccurred = true;
 
   printSummary();
