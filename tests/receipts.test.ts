@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Envelope } from "../src/protocol/intentos-execution";
-import type { Receipt } from "../src/protocol/intentos-receipts";
+import { verifyReceipt, type Receipt } from "../src/protocol/intentos-receipts";
 import type { MailboxStore } from "../src/runtime/mailbox";
 
 type IntentosExecutionModule = typeof import("../src/protocol/intentos-execution");
@@ -73,6 +73,9 @@ function expectCoreReceiptFields(receipt: Receipt, env: Envelope): void {
 afterEach(() => {
   delete process.env.INTENTOS_RECEIPTS_PATH;
   delete process.env.INTENTOS_RECEIPTS_DELIVER;
+  delete process.env.INTENTOS_RECEIPTS_SIGN;
+  delete process.env.INTENTOS_RECEIPTS_ISSUER;
+  delete process.env.INTENTOS_RECEIPTS_PRIVATE_KEY;
   delete process.env.AIMTP_STORE;
   delete process.env.AIMTP_MAILBOX_SQLITE_PATH;
   jest.resetModules();
@@ -101,6 +104,37 @@ describe("IntentOS v2 receipts", () => {
     expectCoreReceiptFields(receipt, env);
     expect(receipt.metadata).toEqual({});
     expect(Object.keys(receipt.metadata)).toEqual([]);
+  });
+
+  test("signs emitted receipts when receipt signing flag is enabled", () => {
+    const sinkPath = makeSinkPath();
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const issuer = "relay://receipt-signer";
+    process.env.INTENTOS_RECEIPTS_SIGN = "on";
+    process.env.INTENTOS_RECEIPTS_ISSUER = issuer;
+    process.env.INTENTOS_RECEIPTS_PRIVATE_KEY = privateKey
+      .export({ type: "pkcs8", format: "pem" })
+      .toString();
+    const runtime = loadExecutionModule(sinkPath);
+    const env = buildValidEnvelope("env-signed-1", "intent-signed-1");
+
+    const record = runtime.fireAdmission(env, env.intent);
+    expect(record.state).toBe("Admitted");
+
+    const receipts = readJsonlReceipts(sinkPath);
+    expect(receipts).toHaveLength(1);
+
+    const receipt = receipts[0];
+    expect(receipt.issuer).toBe(issuer);
+    expect(receipt.sigAlg).toBe("ed25519");
+    expect(typeof receipt.signature).toBe("string");
+    expect((receipt.signature || "").length).toBeGreaterThan(0);
+
+    const trustedKeys = {
+      [issuer]: publicKey.export({ type: "spki", format: "pem" }).toString()
+    };
+    const verification = verifyReceipt(receipt, trustedKeys);
+    expect(verification).toEqual({ verified: true, reason: "signature valid" });
   });
 
   test("writes denied receipt with { reason } metadata", () => {
