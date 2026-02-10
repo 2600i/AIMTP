@@ -18,6 +18,7 @@ Options:
   --record <path>         Optional. ExecutionRecord JSON file
   --receipt-jsonl <path>  Optional. JSONL receipt sink to scan
   --id <envelopeId>       Optional. Envelope id override for lookup
+  --strict                Optional. Exit non-zero when observed receipts mismatch expectations
   --json                  Optional. Emit JSON summary
   --help                  Show this help
 `;
@@ -46,7 +47,7 @@ function parseArgs(argv) {
     }
 
     const key = token.slice(2);
-    if (key === "json" || key === "help") {
+    if (key === "json" || key === "help" || key === "strict") {
       options[key] = true;
       continue;
     }
@@ -210,6 +211,9 @@ async function main() {
   if (!options.envelope) {
     fail(`--envelope is required\n\n${HELP}`);
   }
+  if (options.strict && !options["receipt-jsonl"]) {
+    fail("--strict requires --receipt-jsonl");
+  }
 
   const { canAdmit, canDispatch } = loadIntentosExecutionModule();
 
@@ -280,12 +284,34 @@ async function main() {
     warnings
   };
 
+  let strictFailure = null;
+  if (options.strict) {
+    if (!observed) {
+      strictFailure = "Strict mode requires observed receipts.";
+    } else if (!observed.comparison.match) {
+      const details = [];
+      if (observed.comparison.missing.length > 0) {
+        details.push(`missing expected: ${observed.comparison.missing.join(", ")}`);
+      }
+      if (observed.comparison.extra.length > 0) {
+        details.push(`unexpected observed: ${observed.comparison.extra.join(", ")}`);
+      }
+      strictFailure = `Observed receipts mismatch expected receipts (${details.join("; ") || "unknown mismatch"})`;
+    }
+  }
+
   if (options.json) {
     console.log(JSON.stringify(summary, null, 2));
+    if (strictFailure) {
+      fail(strictFailure);
+    }
     return;
   }
 
   printHumanSummary(summary);
+  if (strictFailure) {
+    fail(strictFailure);
+  }
 }
 
 main().catch((error) => {

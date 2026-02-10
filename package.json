@@ -10,7 +10,7 @@
     "ship": "node scripts/ship.js",
     "demo": "npm run build && node dist/runtime/demo-run.js",
     "demo:web": "node examples/web-inbox/server.js",
-    "replay:intentos": "node tools/intentos-replay.mjs",
+    "replay:intentos": "node tools/intentos-replay.mjs --envelope tests/fixtures/intentos-envelope-valid.json --receipt-jsonl tests/fixtures/intentos-receipts-valid.jsonl --strict && node tools/intentos-replay.mjs --envelope tests/fixtures/intentos-envelope-denied.json --receipt-jsonl tests/fixtures/intentos-receipts-denied.jsonl --strict",
     "cli:send": "node cli/aimtp-send.mjs",
     "cap:mint": "node tools/aimtp-cap.mjs mint --help",
     "cap:inspect": "node tools/aimtp-cap.mjs inspect --help",
