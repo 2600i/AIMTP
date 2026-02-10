@@ -103,6 +103,14 @@ For full request/response schemas and error codes, see
 For deployment, environment configuration, and recovery guidance, see
 `/Users/solo446/Documents/AIMTP/docs/operations.md`.
 
+## Operator Recipe: Enable v2 Trust
+Set `INTENTOS_TRUST_VERSION=v2` and `INTENTOS_RECEIPT_POLICY=enforce`.
+Set `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON='{"relay://X":"<PUBLIC_KEY_PEM>"}'`.
+Optional hardening: `INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC=300`.
+Recommended rollout: start with `INTENTOS_RECEIPT_POLICY=warn`, then switch to `enforce`.
+Execution semantics do not change; only receipt trust acceptance changes.
+Details: [`/Users/solo446/Documents/AIMTP/docs/ops-v2-trust.md`](/Users/solo446/Documents/AIMTP/docs/ops-v2-trust.md).
+
 ## Authentication and Signatures
 
 AIMTP envelopes can include an optional `signature` object with
