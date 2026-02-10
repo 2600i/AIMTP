@@ -7,7 +7,8 @@ import {
   createJsonlReceiptEmitter,
   createReceiptMessage,
   createReceipt,
-  hashOutput
+  hashOutput,
+  signReceipt
 } from "./intentos-receipts";
 
 /* ============================================================================
@@ -159,6 +160,29 @@ function isReceiptDeliveryEnabled(): boolean {
   return String(process.env.INTENTOS_RECEIPTS_DELIVER || "off").trim().toLowerCase() === "on";
 }
 
+function isReceiptSigningEnabled(): boolean {
+  return String(process.env.INTENTOS_RECEIPTS_SIGN || "off").trim().toLowerCase() === "on";
+}
+
+function signReceiptIfEnabled(receipt: Receipt): Receipt {
+  if (!isReceiptSigningEnabled()) {
+    return receipt;
+  }
+
+  const issuer = process.env.INTENTOS_RECEIPTS_ISSUER;
+  const privateKeyPem = process.env.INTENTOS_RECEIPTS_PRIVATE_KEY;
+  if (!issuer || !issuer.trim() || !privateKeyPem || !privateKeyPem.trim()) {
+    return receipt;
+  }
+
+  try {
+    return signReceipt(receipt, privateKeyPem, issuer);
+  } catch {
+    // Receipt signing failures are best-effort and must not affect execution.
+    return receipt;
+  }
+}
+
 function parseIdentity(value: unknown): string | null {
   if (typeof value !== "string") {
     return null;
@@ -242,10 +266,11 @@ function toReceipt(record: ExecutionRecord): Receipt | null {
 }
 
 function emitReceipt(record: ExecutionRecord, env: Envelope, hooks?: RuleHooks): void {
-  const receipt = toReceipt(record);
-  if (!receipt) {
+  const unsigned = toReceipt(record);
+  if (!unsigned) {
     return;
   }
+  const receipt = signReceiptIfEnabled(unsigned);
   hooks?.onReceipt?.(receipt);
   try {
     getReceiptEmitter().emit(receipt);
