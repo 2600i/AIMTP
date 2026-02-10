@@ -54,3 +54,79 @@ Spoofing prevention requirements:
   - federation mode: unsigned receipts rejected
 - Any canonicalization/signature profile must be versioned and frozen before broad federation rollout.
 
+## Runtime Receipt Policy (Opt-In)
+- `INTENTOS_RECEIPT_POLICY=off|warn|enforce` (default `off`)
+- `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` (existing): JSON object mapping `issuer -> PEM public key`
+
+Policy behavior when a receipt envelope is processed:
+- `off`: receipt processing continues even if receipt verification fails or signature/issuer is missing.
+- `warn`: processing continues, and runtime emits a structured warning event (`event=intentos_receipt_policy_warning`).
+- `enforce`: unverified receipts are rejected from trusted receipt processing; runtime continues running and does not crash.
+
+Verified receipts are marked trusted and accepted in all modes.
+
+## IntentOS v1 Trust Semantics (Frozen)
+**FROZEN v1:** This section is normative for IntentOS v1 trust behavior. Changes to these rules MUST be versioned explicitly in a future IntentOS trust-semantics revision.
+
+### 1) Receipt Trust Model (v1)
+- A receipt is **trusted** only when local verification succeeds (`verified=true`) against a locally configured trusted issuer key set.
+- A trusted receipt MUST include:
+  - `issuer` (issuer identity string)
+  - `sigAlg` (signature algorithm)
+  - `signature` (base64 signature bytes)
+- In v1, `sigAlg` MUST be `ed25519` for a receipt to verify as trusted.
+- The signing payload MUST be canonicalized from receipt fields:
+  - `receiptId`, `envelopeId`, `intentId`, `type`, `timestamp`, `metadata`, `issuer`, `sigAlg`
+- The `signature` field MUST be excluded from signing payload canonicalization.
+- Canonicalization MUST be deterministic:
+  - object keys are sorted lexicographically
+  - `undefined` object members are omitted
+  - equivalent receipt content yields byte-identical canonical payload
+- Receipts without valid trust proof MAY still exist as protocol artifacts, but MUST NOT be treated as trusted.
+
+### 2) Verification Semantics (v1)
+- `verifyReceipt(receipt, trustedKeys)` MUST return a result object with:
+  - `verified` (`true` or `false`)
+  - `reason` (human-readable reason)
+- `verified=true` means the signature is cryptographically valid for a trusted issuer key.
+- `verified=false` means the receipt is not trusted in local verification context.
+- `verified=false` covers both:
+  - **unverified**: trust checks ran and failed (for example invalid signature)
+  - **unverifiable**: required trust inputs are missing/unsupported (for example missing signature or unknown issuer)
+- Trust keys are local and explicit:
+  - `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` MUST be a JSON object mapping `issuer -> PEM public key`
+  - invalid or missing entries MUST NOT produce trusted verification
+- v1 failure modes include (non-exhaustive reason strings):
+  - missing signature
+  - missing issuer
+  - missing sigAlg
+  - unsupported sigAlg
+  - untrusted issuer
+  - invalid signature
+  - verification error
+
+### 3) Policy Semantics (v1)
+- `INTENTOS_RECEIPT_POLICY` supports `off|warn|enforce`.
+- Default mode MUST be `off` for backward compatibility and non-breaking behavior.
+- `off`:
+  - receipt processing MUST continue even when receipt trust verification fails
+  - unverified receipts MAY be processed as artifacts, but are not trusted
+- `warn`:
+  - receipt processing MUST continue when verification fails
+  - runtime SHOULD emit a structured warning event for unverified/unverifiable receipts
+- `enforce`:
+  - unverified/unverifiable receipts MUST be rejected from trusted receipt acceptance
+  - runtime execution MUST continue; policy enforcement MUST NOT crash the relay/process
+- Policy enforcement applies to receipt acceptance semantics only. It MUST NOT modify IntentOS execution semantics (`admit/deny/dispatch/complete/fail`).
+
+### 4) Non-Goals / Explicit Exclusions (v1)
+- v1 trust semantics do NOT grant cross-relay execution authority.
+- v1 trust semantics do NOT define automatic trust propagation between relays/domains.
+- v1 trust semantics do NOT define receipt-key revocation, expiry, or rotation semantics.
+- v1 trust semantics do NOT guarantee global ordering or replay prevention beyond deterministic canonicalization and signature verification.
+
+### 5) Compatibility Guarantees (v1)
+- Unsigned receipts remain valid protocol artifacts in v1.
+- Signed receipts are optional in v1.
+- v1 receipt verification is local and best-effort, based on local trust configuration.
+- Future versions that alter trust behavior MUST introduce explicit versioned trust semantics and MUST NOT silently reinterpret v1 behavior.

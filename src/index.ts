@@ -7,3 +7,4 @@ export * from "./protocol/intentos-receipts";
 export * from "./runtime/registry";
 export * from "./runtime/router";
 export * from "./runtime/demo";
+export * from "./runtime/intentos/receipt-policy";
