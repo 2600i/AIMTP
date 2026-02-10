@@ -94,6 +94,7 @@ For full request/response schemas and error codes, see
 - Runtime + API reference: `/Users/solo446/Documents/AIMTP/docs/runtime.md`
 - IntentOS v2.1 receipts contract (frozen): `/Users/solo446/Documents/AIMTP/docs/intentos-receipts.md`
 - IntentOS federation trust boundaries (receipts): `/Users/solo446/Documents/AIMTP/docs/intentos-federation.md`
+- IntentOS v1 trust semantics (frozen): [`/Users/solo446/Documents/AIMTP/docs/intentos-federation.md#intentos-v1-trust-semantics-frozen`](/Users/solo446/Documents/AIMTP/docs/intentos-federation.md#intentos-v1-trust-semantics-frozen)
 - System architecture: `/Users/solo446/Documents/AIMTP/docs/architecture.md`
 - Security model: `/Users/solo446/Documents/AIMTP/docs/security.md`
 - Protocol spec: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.1.md`
