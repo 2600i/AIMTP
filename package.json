@@ -1,6 +1,6 @@
 {
   "name": "aimtp",
-  "version": "0.1.35",
+  "version": "0.1.36",
   "private": true,
   "type": "commonjs",
   "scripts": {
@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "ship": "node scripts/ship.js",
     "demo": "npm run build && node dist/runtime/demo-run.js",
+    "demo:federation": "sh -c 'docker compose -f docker-compose.federation.yml up --build -d && node tools/federation-demo.mjs; status=$?; docker compose -f docker-compose.federation.yml down --remove-orphans; exit $status'",
     "demo:web": "node examples/web-inbox/server.js",
     "replay:intentos": "node tools/intentos-replay.mjs --envelope tests/fixtures/intentos-envelope-valid.json --receipt-jsonl tests/fixtures/intentos-receipts-valid.jsonl --strict && node tools/intentos-replay.mjs --envelope tests/fixtures/intentos-envelope-denied.json --receipt-jsonl tests/fixtures/intentos-receipts-denied.jsonl --strict",
     "verify:receipt:intentos": "node tools/intentos-receipt-verify.mjs",
