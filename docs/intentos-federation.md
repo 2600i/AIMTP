@@ -54,3 +54,13 @@ Spoofing prevention requirements:
   - federation mode: unsigned receipts rejected
 - Any canonicalization/signature profile must be versioned and frozen before broad federation rollout.
 
+## Runtime Receipt Policy (Opt-In)
+- `INTENTOS_RECEIPT_POLICY=off|warn|enforce` (default `off`)
+- `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` (existing): JSON object mapping `issuer -> PEM public key`
+
+Policy behavior when a receipt envelope is processed:
+- `off`: receipt processing continues even if receipt verification fails or signature/issuer is missing.
+- `warn`: processing continues, and runtime emits a structured warning event (`event=intentos_receipt_policy_warning`).
+- `enforce`: unverified receipts are rejected from trusted receipt processing; runtime continues running and does not crash.
+
+Verified receipts are marked trusted and accepted in all modes.

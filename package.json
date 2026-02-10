@@ -5,7 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/cap-mint.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js && node tests/intentos-ui.test.js",
-    "test:receipts": "jest --config jest.config.cjs --runInBand tests/receipts.test.ts tests/receipt-signing.test.ts",
+    "test:receipts": "jest --config jest.config.cjs --runInBand tests/receipts.test.ts tests/receipt-signing.test.ts tests/receipt-policy.test.ts",
     "build": "tsc -p tsconfig.json",
     "ship": "node scripts/ship.js",
     "demo": "npm run build && node dist/runtime/demo-run.js",

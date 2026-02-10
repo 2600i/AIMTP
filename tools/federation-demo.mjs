@@ -4,9 +4,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 
 const COMPOSE_FILE = "docker-compose.federation.yml";
+const require = createRequire(import.meta.url);
+
+function loadReceiptPolicyModule() {
+  const distPath = path.resolve(process.cwd(), "dist/runtime/intentos/receipt-policy.js");
+  if (!fs.existsSync(distPath)) {
+    throw new Error("Missing dist/runtime/intentos/receipt-policy.js. Run: npm run build");
+  }
+  return require(distPath);
+}
+
+const { processReceiptEnvelope } = loadReceiptPolicyModule();
 
 const RELAY_CONFIG = Object.freeze({
   "relay-a": {
@@ -174,6 +186,62 @@ function verifyReceiptInRelay(service, receipt) {
   }
 }
 
+function enforceReceiptPolicy(service, receipt) {
+  const result = processReceiptEnvelope({
+    id: `receipt-msg-${service}-${receipt.receiptId || "unknown"}`,
+    receipt
+  });
+  if (!result.accepted) {
+    throw new Error(`receipt policy rejected in ${service}: ${result.reason}`);
+  }
+  return result;
+}
+
+function runTamperedPolicyPreview(receipt) {
+  const tampered = {
+    ...receipt,
+    metadata: {
+      ...(receipt && typeof receipt.metadata === "object" ? receipt.metadata : {}),
+      outputHash: "tampered-demo-output-hash"
+    }
+  };
+
+  const warnEvents = [];
+  const warnResult = processReceiptEnvelope(
+    {
+      id: `receipt-msg-preview-warn-${tampered.receiptId || "unknown"}`,
+      receipt: tampered
+    },
+    {
+      mode: "warn",
+      logger: {
+        warn(event) {
+          warnEvents.push(event);
+        }
+      }
+    }
+  );
+
+  const enforceResult = processReceiptEnvelope(
+    {
+      id: `receipt-msg-preview-enforce-${tampered.receiptId || "unknown"}`,
+      receipt: tampered
+    },
+    { mode: "enforce" }
+  );
+
+  console.log(
+    `DEMO POLICY PREVIEW: tampered mode=warn accepted=${String(warnResult.accepted)} trusted=${String(
+      warnResult.trusted
+    )} reason=${warnResult.reason} warnings=${warnEvents.length}`
+  );
+  console.log(
+    `DEMO POLICY PREVIEW: tampered mode=enforce accepted=${String(
+      enforceResult.accepted
+    )} trusted=${String(enforceResult.trusted)} reason=${enforceResult.reason}`
+  );
+}
+
 async function main() {
   const relayA = "relay-a";
   const relayB = "relay-b";
@@ -200,9 +268,19 @@ async function main() {
     throw new Error("missing completed receipt for relay-b");
   }
 
+  const relayAPolicy = enforceReceiptPolicy(relayA, relayACompleted);
+  const relayBPolicy = enforceReceiptPolicy(relayB, relayBCompleted);
+
   verifyReceiptInRelay(relayB, relayACompleted);
   verifyReceiptInRelay(relayA, relayBCompleted);
 
+  console.log(
+    `DEMO POLICY: ${relayA} mode=${relayAPolicy.mode} trusted=${String(relayAPolicy.trusted)}`
+  );
+  console.log(
+    `DEMO POLICY: ${relayB} mode=${relayBPolicy.mode} trusted=${String(relayBPolicy.trusted)}`
+  );
+  runTamperedPolicyPreview(relayACompleted);
   console.log("DEMO OK: relay-a receipt verified by relay-b trust store");
   console.log("DEMO OK: relay-b receipt verified by relay-a trust store");
 }
