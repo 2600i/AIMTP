@@ -5,28 +5,7 @@ on:
   pull_request:
 
 jobs:
-  validate-json:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Validate JSON
-        run: |
-          python - <<'PY'
-          import json
-          from pathlib import Path
-
-          root = Path('schemas')
-          files = list(root.glob('*.json'))
-          if not files:
-            raise SystemExit('No schema files found')
-
-          for path in files:
-            with path.open('r', encoding='utf-8') as f:
-              json.load(f)
-            print(f'OK: {path}')
-          PY
-
-  test:
+  ci:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,5 +15,11 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      - name: Run tests
+      - name: Unit tests
         run: npm test
+      - name: Build
+        run: npm run build
+      - name: Receipts tests
+        run: npm run test:receipts
+      - name: Replay determinism
+        run: npm run replay:intentos

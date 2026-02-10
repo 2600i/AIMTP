@@ -1,0 +1,400 @@
+#!/usr/bin/env node
+"use strict";
+
+const readline = require("node:readline");
+const http = require("node:http");
+const https = require("node:https");
+const { spawnSync, execFileSync } = require("node:child_process");
+
+let currentBranch = "";
+let versionNumber = "";
+let createdTag = "";
+let commitHash = "";
+let pushOccurred = false;
+
+function log(message) {
+  process.stdout.write(`[verify-ship] ${message}\n`);
+}
+
+function err(message) {
+  process.stderr.write(`[verify-ship] ERROR: ${message}\n`);
+}
+
+function fail(message, code = 1) {
+  err(message);
+  process.exit(code);
+}
+
+function stopAndAsk(message) {
+  err(`STOP: ${message}`);
+  err("Please tell me how to proceed.");
+  process.exit(1);
+}
+
+function run(command, args, options = {}) {
+  const {
+    allowFailure = false,
+    capture = false,
+    env = process.env
+  } = options;
+
+  log(`$ ${command} ${args.join(" ")}`);
+  const result = spawnSync(command, args, {
+    stdio: capture ? "pipe" : "inherit",
+    encoding: "utf8",
+    env
+  });
+
+  if (result.error) {
+    throw result.error;
+  }
+
+  const status = result.status ?? 1;
+  if (!allowFailure && status !== 0) {
+    throw new Error(`${command} ${args.join(" ")} exited with status ${status}`);
+  }
+
+  return {
+    status,
+    stdout: result.stdout || "",
+    stderr: result.stderr || ""
+  };
+}
+
+function read(command, args) {
+  return execFileSync(command, args, { encoding: "utf8" }).trim();
+}
+
+function requireCommand(command) {
+  const result = spawnSync(command, ["--version"], { stdio: "ignore" });
+  if (result.error || result.status !== 0) {
+    fail(`Missing required command: ${command}`);
+  }
+}
+
+function getTagSet() {
+  const tags = read("git", ["tag", "--list"]);
+  return new Set(
+    tags
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean)
+  );
+}
+
+function chooseParityService() {
+  const services = listComposeServices();
+
+  if (services.length === 0) {
+    fail("No services found in docker compose config --services");
+  }
+
+  if (services.includes("relay")) {
+    return "relay";
+  }
+  return services[0];
+}
+
+function listComposeServices() {
+  const raw = read("docker", ["compose", "config", "--services"]);
+  return raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function parseComposePsRows(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return [];
+
+  try {
+    const parsed = JSON.parse(text);
+    if (Array.isArray(parsed)) return parsed;
+    if (parsed && typeof parsed === "object") return [parsed];
+  } catch {
+    // Continue with line-by-line JSON parsing.
+  }
+
+  const rows = [];
+  for (const line of text.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    try {
+      rows.push(JSON.parse(trimmed));
+    } catch {
+      // Ignore malformed rows.
+    }
+  }
+  return rows;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function probeHttpReady(urlString) {
+  return new Promise((resolve) => {
+    const url = new URL(urlString);
+    const client = url.protocol === "https:" ? https : http;
+    const req = client.request(
+      {
+        protocol: url.protocol,
+        hostname: url.hostname,
+        port: url.port,
+        path: url.pathname + url.search,
+        method: "GET",
+        timeout: 1500
+      },
+      (res) => {
+        const code = Number(res.statusCode || 0);
+        res.resume();
+        resolve(code >= 200 && code <= 499);
+      }
+    );
+    req.on("error", () => resolve(false));
+    req.on("timeout", () => {
+      req.destroy();
+      resolve(false);
+    });
+    req.end();
+  });
+}
+
+async function verifyDockerParity() {
+  log("Step 1/5: Verifying Docker parity...");
+  run("docker", ["compose", "config"]);
+
+  const services = listComposeServices();
+  const parityService = chooseParityService();
+  log(`Using service '${parityService}' for --exit-code-from parity gate.`);
+
+  try {
+    run("docker", ["compose", "up", "-d", "--build"]);
+
+    const deadline = Date.now() + 60_000;
+    const relayPresent = services.includes("relay");
+    let ready = false;
+
+    while (Date.now() < deadline) {
+      const ps = run("docker", ["compose", "ps", "--format", "json"], {
+        capture: true,
+        allowFailure: true
+      });
+
+      const rows = parseComposePsRows(ps.stdout);
+      const parityRow = rows.find((row) => {
+        const serviceName = String(row.Service || row.Name || "").trim();
+        return serviceName === parityService;
+      });
+
+      const healthRaw = parityRow ? String(parityRow.Health || "").trim().toLowerCase() : "";
+      if (healthRaw) {
+        if (healthRaw.includes("unhealthy")) {
+          run("docker", ["compose", "logs", "--tail", "200", "--no-color"], {
+            allowFailure: true
+          });
+          fail(`Docker parity failed: service '${parityService}' became unhealthy.`);
+        }
+        if (healthRaw.includes("healthy")) {
+          ready = true;
+          break;
+        }
+      } else if (relayPresent) {
+        const ok = await probeHttpReady("http://localhost:8787/aimtp");
+        if (ok) {
+          ready = true;
+          break;
+        }
+      }
+
+      await sleep(1500);
+    }
+
+    if (!ready) {
+      run("docker", ["compose", "logs", "--tail", "200", "--no-color"], {
+        allowFailure: true
+      });
+      fail("Docker parity failed: readiness timeout after 60 seconds.");
+    }
+  } finally {
+    log("Tearing down compose stack...");
+    run("docker", ["compose", "down", "--remove-orphans"], { allowFailure: true });
+  }
+
+  log("Docker parity passed.");
+}
+
+function checkGitSafety() {
+  log("Step 2/5: Checking git safety...");
+
+  try {
+    run("git", ["fetch", "--prune", "--quiet"]);
+  } catch {
+    stopAndAsk("unable to refresh remote refs; git state is unclear");
+  }
+
+  try {
+    currentBranch = read("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+  } catch {
+    stopAndAsk("unable to determine current branch");
+  }
+
+  if (!currentBranch || currentBranch === "HEAD") {
+    stopAndAsk("detached HEAD or unknown branch state");
+  }
+
+  if (currentBranch === "main") {
+    stopAndAsk("current branch is main; direct shipping/pushing to origin/main is blocked");
+  }
+
+  if (!currentBranch.startsWith("codex/")) {
+    stopAndAsk(`current branch '${currentBranch}' is not in codex/<feature> format`);
+  }
+
+  let statusPorcelain = "";
+  try {
+    statusPorcelain = read("git", ["status", "--porcelain"]);
+  } catch {
+    stopAndAsk("unable to read working tree status");
+  }
+  if (statusPorcelain.length > 0) {
+    stopAndAsk("working tree is not clean");
+  }
+
+  let upstream = "";
+  try {
+    upstream = read("git", ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"]);
+  } catch {
+    stopAndAsk(`missing upstream for branch '${currentBranch}'`);
+  }
+  if (!upstream) {
+    stopAndAsk(`upstream is unclear for branch '${currentBranch}'`);
+  }
+  if (upstream === "origin/main") {
+    stopAndAsk(`branch '${currentBranch}' tracks origin/main; state is unsafe for feature-branch shipping`);
+  }
+
+  let counts = "";
+  try {
+    counts = read("git", ["rev-list", "--left-right", "--count", "HEAD...@{u}"]);
+  } catch {
+    stopAndAsk(`unable to determine divergence vs upstream '${upstream}'`);
+  }
+
+  const parts = counts.split(/\s+/).filter(Boolean);
+  if (parts.length < 2) {
+    stopAndAsk(`invalid divergence output: '${counts}'`);
+  }
+
+  const ahead = Number.parseInt(parts[0], 10);
+  const behind = Number.parseInt(parts[1], 10);
+  if (!Number.isInteger(ahead) || !Number.isInteger(behind)) {
+    stopAndAsk(`invalid divergence data (ahead='${parts[0]}', behind='${parts[1]}')`);
+  }
+
+  if (ahead > 0 && behind > 0) {
+    stopAndAsk(`branch diverged from upstream '${upstream}' (ahead=${ahead}, behind=${behind})`);
+  }
+
+  if (behind > 0) {
+    stopAndAsk(`branch is behind upstream '${upstream}' by ${behind} commit(s); rebase required`);
+  }
+
+  log(`Git safety passed: branch=${currentBranch}, upstream=${upstream}, ahead=${ahead}, behind=${behind}`);
+}
+
+function promptShipMessage() {
+  const envMessage = String(process.env.SHIP_MESSAGE || "").trim();
+  if (envMessage.length > 0) {
+    return Promise.resolve(envMessage);
+  }
+
+  return new Promise((resolve, reject) => {
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      reject(new Error("interactive terminal required to prompt for ship message"));
+      return;
+    }
+
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    });
+
+    rl.question("Enter SHIP_MESSAGE: ", (answer) => {
+      rl.close();
+      const message = String(answer || "").trim();
+      if (!message) {
+        reject(new Error("SHIP_MESSAGE cannot be empty"));
+        return;
+      }
+      resolve(message);
+    });
+  });
+}
+
+function printSummary() {
+  log("Final summary:");
+  log(`  Version number: ${versionNumber || "unknown"}`);
+  log(`  Tag name: ${createdTag || "unknown"}`);
+  log(`  Commit hash: ${commitHash || "unknown"}`);
+  log(`  Push occurred: ${pushOccurred ? "yes" : "no"}`);
+}
+
+async function main() {
+  requireCommand("docker");
+  requireCommand("git");
+  requireCommand("npm");
+  requireCommand("node");
+
+  await verifyDockerParity();
+  checkGitSafety();
+
+  log("Step 3/5: Running ship flow prerequisites...");
+  run("npm", ["test"]);
+  run("npm", ["run", "build"]);
+
+  const shipMessage = await promptShipMessage();
+  const tagsBefore = getTagSet();
+
+  log("Running ship script...");
+  run("npm", ["run", "ship"], {
+    env: {
+      ...process.env,
+      SHIP_MESSAGE: shipMessage
+    }
+  });
+
+  log("Step 4/5: Resolving version/tag/commit after ship...");
+  const tagsAfter = getTagSet();
+  const newTags = [...tagsAfter].filter((tag) => !tagsBefore.has(tag));
+
+  if (newTags.length !== 1) {
+    stopAndAsk(`expected exactly one new tag from ship, found ${newTags.length}`);
+  }
+
+  createdTag = newTags[0];
+  commitHash = read("git", ["rev-list", "-n", "1", createdTag]);
+  versionNumber = read("node", ["-p", "require('./package.json').version"]);
+
+  const remoteTagCheck = run("git", ["ls-remote", "--tags", "origin", createdTag], {
+    capture: true,
+    allowFailure: true
+  });
+  if (remoteTagCheck.status !== 0) {
+    stopAndAsk(`unable to verify whether tag '${createdTag}' exists on origin`);
+  }
+  if (remoteTagCheck.stdout.trim().length === 0) {
+    stopAndAsk(`tag '${createdTag}' does not exist on origin after ship; expected ship to push tags`);
+  }
+
+  log("Step 5/5: Pushing current branch...");
+  run("git", ["push", "origin", currentBranch]);
+  pushOccurred = true;
+
+  printSummary();
+}
+
+main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  fail(message);
+});

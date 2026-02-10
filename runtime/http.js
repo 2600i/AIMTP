@@ -1,9 +1,12 @@
 "use strict";
 
+const fs = require("fs");
 const http = require("http");
+const path = require("path");
 const { RelayError } = require("./relay");
 const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
 const { validateEnvelope } = require("./validation");
+const { validateCapabilityPresentation } = require("./capabilities");
 const {
   createSignatureTrustConfig,
   evaluateEnvelopeSignaturePolicy
@@ -21,6 +24,15 @@ const DEFAULT_CORS_ORIGINS = [
   "http://127.0.0.1:8080"
 ];
 const RECIPIENT_PATTERN = /^[a-zA-Z0-9._:-]{1,128}$/;
+const INTENTOS_UI_PATH = "/intentos/ui";
+const INTENTOS_UI_APP_PATH = "/intentos/ui/app.js";
+const INTENTOS_UI_STYLES_PATH = "/intentos/ui/styles.css";
+const INTENTOS_UI_BASE_PLACEHOLDER = "__INTENTOS_UI_BASE_PATH__";
+const INTENTOS_INTENTS_PATH = "/intentos/intents";
+const INTENTOS_TASKS_PATH = "/intentos/tasks";
+const INTENTOS_INTENT_PREFIX = "/intentos/intent/";
+const INTENTOS_TASK_PREFIX = "/intentos/task/";
+const INTENTOS_CAPABILITY_HEADER = "x-aimtp-capability";
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -515,13 +527,389 @@ function readRequestBody(req, maxBytes) {
   });
 }
 
+function loadIntentosUiAssets() {
+  const base = path.join(__dirname, "static", "intentos");
+  return {
+    indexTemplate: fs.readFileSync(path.join(base, "index.html"), "utf-8"),
+    app: {
+      contentType: "application/javascript; charset=utf-8",
+      body: fs.readFileSync(path.join(base, "app.js"))
+    },
+    styles: {
+      contentType: "text/css; charset=utf-8",
+      body: fs.readFileSync(path.join(base, "styles.css"))
+    }
+  };
+}
+
+function trimTrailingSlash(pathname) {
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    return pathname.slice(0, -1);
+  }
+  return pathname;
+}
+
+function resolveIntentosUiBasePath(pathname) {
+  if (typeof pathname !== "string" || pathname.length === 0) {
+    return INTENTOS_UI_PATH;
+  }
+  let basePath = pathname;
+  const indexSuffix = "/index.html";
+  const appSuffix = "/app.js";
+  const stylesSuffix = "/styles.css";
+  if (basePath.endsWith(indexSuffix)) {
+    basePath = basePath.slice(0, -indexSuffix.length);
+  } else if (basePath.endsWith(appSuffix)) {
+    basePath = basePath.slice(0, -appSuffix.length);
+  } else if (basePath.endsWith(stylesSuffix)) {
+    basePath = basePath.slice(0, -stylesSuffix.length);
+  }
+  basePath = trimTrailingSlash(basePath);
+  if (!basePath.endsWith(INTENTOS_UI_PATH)) {
+    return INTENTOS_UI_PATH;
+  }
+  return basePath;
+}
+
+function renderIntentosUiIndex(template, basePath) {
+  const safeBasePath = trimTrailingSlash(basePath || INTENTOS_UI_PATH);
+  return Buffer.from(
+    template.split(INTENTOS_UI_BASE_PLACEHOLDER).join(safeBasePath),
+    "utf-8"
+  );
+}
+
+function resolveIntentosUiAsset(pathname, rawPath, assets) {
+  if (
+    pathname === INTENTOS_UI_PATH ||
+    pathname === `${INTENTOS_UI_PATH}/` ||
+    pathname === `${INTENTOS_UI_PATH}/index.html`
+  ) {
+    return {
+      contentType: "text/html; charset=utf-8",
+      body: renderIntentosUiIndex(
+        assets.indexTemplate,
+        resolveIntentosUiBasePath(rawPath)
+      )
+    };
+  }
+  if (pathname === INTENTOS_UI_APP_PATH) {
+    return assets.app;
+  }
+  if (pathname === INTENTOS_UI_STYLES_PATH) {
+    return assets.styles;
+  }
+  return null;
+}
+
+function isIntentosUiPath(pathname) {
+  return (
+    pathname === INTENTOS_UI_PATH ||
+    pathname === `${INTENTOS_UI_PATH}/` ||
+    pathname.startsWith(`${INTENTOS_UI_PATH}/`)
+  );
+}
+
+function isIntentosApiPath(pathname) {
+  return (
+    pathname === INTENTOS_INTENTS_PATH ||
+    pathname === INTENTOS_TASKS_PATH ||
+    pathname.startsWith(INTENTOS_INTENT_PREFIX)
+  );
+}
+
+function normalizePathname(pathname, relayPath) {
+  if (typeof pathname !== "string" || pathname.length === 0) {
+    return "/";
+  }
+  const cleanedRelayPath =
+    relayPath && relayPath.length > 1 && relayPath.endsWith("/")
+      ? relayPath.slice(0, -1)
+      : relayPath;
+  if (!cleanedRelayPath || cleanedRelayPath === "/") {
+    return pathname;
+  }
+  if (pathname === cleanedRelayPath) {
+    return "/";
+  }
+  const relayPrefix = `${cleanedRelayPath}/`;
+  if (!pathname.startsWith(relayPrefix)) {
+    return pathname;
+  }
+  return `/${pathname.slice(relayPrefix.length)}`;
+}
+
+function normalizeIntentosMode(value, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+  const normalized = value.trim().toLowerCase();
+  if (normalized === "enforce" || normalized === "log") {
+    return normalized;
+  }
+  return fallback;
+}
+
+function readOptionalPemEnv(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    return "";
+  }
+  return value.trim().replace(/\\n/g, "\n");
+}
+
+function readForwardedHeader(value) {
+  const raw = firstHeaderValue(value);
+  if (typeof raw !== "string") {
+    return "";
+  }
+  return raw
+    .split(",")
+    .map((entry) => entry.trim())
+    .find((entry) => entry.length > 0) || "";
+}
+
+function resolveRequestProtocol(req) {
+  const forwarded = readForwardedHeader(req.headers["x-forwarded-proto"]);
+  if (forwarded) {
+    return forwarded.toLowerCase();
+  }
+  return req.socket && req.socket.encrypted ? "https" : "http";
+}
+
+function resolveRequestHost(req) {
+  const forwarded = readForwardedHeader(req.headers["x-forwarded-host"]);
+  if (forwarded) {
+    return forwarded;
+  }
+  const host = firstHeaderValue(req.headers.host);
+  if (typeof host === "string" && host.trim()) {
+    return host.trim();
+  }
+  return "localhost";
+}
+
+function resolveIntentosAudience(req, relayPath) {
+  const protocol = resolveRequestProtocol(req);
+  const host = resolveRequestHost(req);
+  const basePath =
+    relayPath && relayPath !== "/" ? trimTrailingSlash(relayPath) : "";
+  return `${protocol}://${host}${basePath}`;
+}
+
+function parseCapabilityPresentationHeader(req) {
+  const raw = firstHeaderValue(req.headers[INTENTOS_CAPABILITY_HEADER]);
+  if (typeof raw !== "string" || !raw.trim()) {
+    return { present: false, value: null, error: "" };
+  }
+  const value = raw.trim();
+  try {
+    return {
+      present: true,
+      value: JSON.parse(value),
+      error: ""
+    };
+  } catch (_err) {
+    // fall through and try base64-decoded JSON
+  }
+  try {
+    const decoded = Buffer.from(value, "base64").toString("utf8");
+    return {
+      present: true,
+      value: JSON.parse(decoded),
+      error: ""
+    };
+  } catch (_err) {
+    return {
+      present: true,
+      value: null,
+      error: "capability header must be JSON or base64-encoded JSON"
+    };
+  }
+}
+
+function resolveIntentosCapabilityRequirement(method, pathname) {
+  const normalizedMethod = typeof method === "string" ? method.toUpperCase() : "";
+  if (normalizedMethod === "GET" && pathname === INTENTOS_INTENTS_PATH) {
+    return { action: "intentos.read", resource: "intentos:intents" };
+  }
+  if (normalizedMethod === "GET" && pathname === INTENTOS_TASKS_PATH) {
+    return { action: "intentos.read", resource: "intentos:tasks" };
+  }
+  if (normalizedMethod === "GET" && pathname.startsWith(INTENTOS_INTENT_PREFIX)) {
+    const intentId = pathname.slice(INTENTOS_INTENT_PREFIX.length).trim();
+    if (!intentId || intentId.includes("/")) {
+      return null;
+    }
+    return { action: "intentos.read", resource: `intentos:intent/${intentId}` };
+  }
+  if (normalizedMethod === "POST" && pathname.startsWith(INTENTOS_TASK_PREFIX)) {
+    const suffix = pathname.slice(INTENTOS_TASK_PREFIX.length);
+    const claimSuffix = "/claim";
+    const resultSuffix = "/result";
+    if (suffix.endsWith(claimSuffix)) {
+      const taskId = suffix.slice(0, -claimSuffix.length).trim();
+      if (taskId && !taskId.includes("/")) {
+        return { action: "intentos.task.claim", resource: `intentos:task/${taskId}` };
+      }
+    }
+    if (suffix.endsWith(resultSuffix)) {
+      const taskId = suffix.slice(0, -resultSuffix.length).trim();
+      if (taskId && !taskId.includes("/")) {
+        return { action: "intentos.task.result", resource: `intentos:task/${taskId}` };
+      }
+    }
+  }
+  return null;
+}
+
+function hasRequiredIntentosScope(summary, requirement) {
+  if (!summary || !Array.isArray(summary.scopes)) {
+    return false;
+  }
+  return summary.scopes.some(
+    (scope) =>
+      scope &&
+      scope.action === requirement.action &&
+      scope.resource === requirement.resource
+  );
+}
+
+function requireIntentosCapability(req, options) {
+  const requirement = resolveIntentosCapabilityRequirement(options.method, options.pathname);
+  if (!requirement) {
+    return { ok: true };
+  }
+
+  const enforce =
+    options.capabilitiesEnabled &&
+    options.intentosMode === "enforce" &&
+    options.capabilityMode === "enforce";
+  const evaluate =
+    options.capabilitiesEnabled &&
+    (enforce || options.intentosMode === "log" || options.capabilityMode === "log");
+  const aud = resolveIntentosAudience(req, options.relayPath);
+
+  const logDecision = (status, details) => {
+    if (!evaluate) {
+      return;
+    }
+    const record = {
+      event: "intentos_capability",
+      mode: options.intentosMode,
+      cap_mode: options.capabilityMode,
+      enforced: enforce,
+      status,
+      method: options.method,
+      path: options.pathname,
+      action: requirement.action,
+      resource: requirement.resource,
+      aud
+    };
+    if (details && typeof details === "object") {
+      Object.assign(record, details);
+    }
+    console.log(JSON.stringify(record));
+  };
+
+  if (!evaluate) {
+    return { ok: true };
+  }
+
+  const parsed = parseCapabilityPresentationHeader(req);
+  if (!parsed.present) {
+    logDecision("missing");
+    if (enforce) {
+      return {
+        ok: false,
+        status: 403,
+        code: "capability_required",
+        message: "Capability is required for this IntentOS endpoint",
+        details: {
+          action: requirement.action,
+          resource: requirement.resource,
+          aud
+        }
+      };
+    }
+    return { ok: true };
+  }
+
+  if (parsed.error) {
+    logDecision("invalid", { errors: [parsed.error] });
+    if (enforce) {
+      return {
+        ok: false,
+        status: 403,
+        code: "capability_invalid",
+        message: "Capability is invalid for this IntentOS endpoint",
+        details: {
+          action: requirement.action,
+          resource: requirement.resource,
+          aud,
+          errors: [parsed.error]
+        }
+      };
+    }
+    return { ok: true };
+  }
+
+  const validation = validateCapabilityPresentation(parsed.value, {
+    aud,
+    publicKey: options.publicKey || undefined,
+    verifySignature: true
+  });
+  if (!validation.ok) {
+    logDecision("invalid", { errors: validation.errors });
+    if (enforce) {
+      return {
+        ok: false,
+        status: 403,
+        code: "capability_invalid",
+        message: "Capability is invalid for this IntentOS endpoint",
+        details: {
+          action: requirement.action,
+          resource: requirement.resource,
+          aud,
+          errors: validation.errors
+        }
+      };
+    }
+    return { ok: true };
+  }
+
+  if (!hasRequiredIntentosScope(validation.summary, requirement)) {
+    const error = `scope ${requirement.action} ${requirement.resource} is required`;
+    logDecision("scope_mismatch", { errors: [error] });
+    if (enforce) {
+      return {
+        ok: false,
+        status: 403,
+        code: "capability_invalid",
+        message: "Capability is invalid for this IntentOS endpoint",
+        details: {
+          action: requirement.action,
+          resource: requirement.resource,
+          aud,
+          errors: [error]
+        }
+      };
+    }
+    return { ok: true };
+  }
+
+  logDecision("ok");
+  return { ok: true };
+}
+
 function createWebhookRelayServer(relay, options = {}) {
-  const path =
+  const relayBasePath =
     options.path ||
     (process.env.AIMTP_RELAY_PATH && process.env.AIMTP_RELAY_PATH.trim()) ||
     DEFAULT_PATH;
   const relayPath =
-    path.length > 1 && path.endsWith("/") ? path.slice(0, -1) : path;
+    relayBasePath.length > 1 && relayBasePath.endsWith("/")
+      ? relayBasePath.slice(0, -1)
+      : relayBasePath;
   const peekPath = `${relayPath}/peek`;
   const pollPath = `${relayPath}/poll`;
   const mailboxPath = `${relayPath}/mailbox`;
@@ -536,6 +924,15 @@ function createWebhookRelayServer(relay, options = {}) {
     options.readyPath ||
     (process.env.AIMTP_READY_PATH && process.env.AIMTP_READY_PATH.trim()) ||
     DEFAULT_READY_PATH;
+  const normalizedRelayPath = normalizePathname(relayPath, relayPath);
+  const normalizedPeekPath = normalizePathname(peekPath, relayPath);
+  const normalizedPollPath = normalizePathname(pollPath, relayPath);
+  const normalizedMailboxPath = normalizePathname(mailboxPath, relayPath);
+  const normalizedAckPath = normalizePathname(ackPath, relayPath);
+  const normalizedFailPath = normalizePathname(failPath, relayPath);
+  const normalizedDeadPath = normalizePathname(deadPath, relayPath);
+  const normalizedHealthPath = normalizePathname(healthPath, relayPath);
+  const normalizedReadyPath = normalizePathname(readyPath, relayPath);
   const maxBytes =
     typeof options.maxBytes === "number"
       ? options.maxBytes
@@ -664,10 +1061,27 @@ function createWebhookRelayServer(relay, options = {}) {
     );
   }
 
+  const intentosEnabled = String(process.env.INTENTOS || "").trim().toLowerCase() === "on";
+  const intentosMode = normalizeIntentosMode(process.env.INTENTOS_MODE, "log");
+  const capabilityMode = normalizeIntentosMode(process.env.AIMTP_CAP_MODE, "log");
+  const intentosCapabilitiesEnabled =
+    String(process.env.AIMTP_CAPABILITIES || "").trim().toLowerCase() === "on";
+  const intentosCapabilityPublicKey = readOptionalPemEnv(process.env.AIMTP_CAP_PUBLIC_KEY);
+  let intentosUiAssets = null;
+  if (intentosEnabled) {
+    try {
+      intentosUiAssets = loadIntentosUiAssets();
+    } catch (_err) {
+      intentosUiAssets = null;
+    }
+  }
+
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url || "/", "http://localhost");
+    const rawPath = url.pathname;
+    const requestPath = normalizePathname(rawPath, relayPath);
 
-    if (url.pathname === healthPath) {
+    if (requestPath === normalizedHealthPath) {
       if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
         return;
@@ -681,7 +1095,7 @@ function createWebhookRelayServer(relay, options = {}) {
       });
       return;
     }
-    if (url.pathname === readyPath) {
+    if (requestPath === normalizedReadyPath) {
       if (req.method !== "GET") {
         sendError(res, 405, "method_not_allowed", "Method not allowed");
         return;
@@ -691,6 +1105,69 @@ function createWebhookRelayServer(relay, options = {}) {
       } else {
         sendJson(res, 503, { status: "not_ready" });
       }
+      return;
+    }
+
+    if (isIntentosUiPath(requestPath)) {
+      if (!intentosEnabled) {
+        sendError(res, 404, "not_found", "Not Found");
+        return;
+      }
+      if (req.method !== "GET") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        return;
+      }
+      const asset = intentosUiAssets
+        ? resolveIntentosUiAsset(requestPath, rawPath, intentosUiAssets)
+        : null;
+      if (!asset) {
+        sendError(res, 404, "not_found", "Not Found");
+        return;
+      }
+      res.statusCode = 200;
+      res.setHeader("Content-Type", asset.contentType);
+      res.setHeader("Content-Length", asset.body.length);
+      res.end(asset.body);
+      return;
+    }
+
+    if (isIntentosApiPath(requestPath)) {
+      if (!intentosEnabled) {
+        sendError(res, 404, "not_found", "Not Found");
+        return;
+      }
+      const capabilityDecision = requireIntentosCapability(req, {
+        pathname: requestPath,
+        method: req.method,
+        relayPath,
+        intentosMode,
+        capabilityMode,
+        capabilitiesEnabled: intentosCapabilitiesEnabled,
+        publicKey: intentosCapabilityPublicKey
+      });
+      if (!capabilityDecision.ok) {
+        sendError(
+          res,
+          capabilityDecision.status,
+          capabilityDecision.code,
+          capabilityDecision.message,
+          capabilityDecision.details
+        );
+        return;
+      }
+      if (req.method !== "GET") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        return;
+      }
+      if (requestPath === INTENTOS_INTENTS_PATH) {
+        sendJson(res, 200, { intents: [] });
+        return;
+      }
+      if (requestPath === INTENTOS_TASKS_PATH) {
+        sendJson(res, 200, { tasks: [] });
+        return;
+      }
+      sendError(res, 404, "not_found", "Intent not found");
       return;
     }
 
@@ -719,13 +1196,13 @@ function createWebhookRelayServer(relay, options = {}) {
       console.log(JSON.stringify(record));
     };
 
-  const isPeek = url.pathname === peekPath;
-  const isPoll = url.pathname === pollPath;
-  const isDead = url.pathname === deadPath;
-  const isAck = url.pathname === ackPath;
-  const isFail = url.pathname === failPath;
-  const isMailboxPath = url.pathname === mailboxPath;
-  const isRelayPath = url.pathname === relayPath;
+  const isPeek = requestPath === normalizedPeekPath;
+  const isPoll = requestPath === normalizedPollPath;
+  const isDead = requestPath === normalizedDeadPath;
+  const isAck = requestPath === normalizedAckPath;
+  const isFail = requestPath === normalizedFailPath;
+  const isMailboxPath = requestPath === normalizedMailboxPath;
+  const isRelayPath = requestPath === normalizedRelayPath;
 
   if (!isPeek && !isPoll && !isDead && !isAck && !isFail && !isMailboxPath && !isRelayPath) {
     sendError(res, 404, "not_found", "Not Found");
@@ -748,7 +1225,7 @@ function createWebhookRelayServer(relay, options = {}) {
       res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
       res.setHeader(
         "Access-Control-Allow-Headers",
-        "Authorization,Content-Type,X-AIMTP-KEY"
+        "Authorization,Content-Type,X-AIMTP-KEY,X-AIMTP-CAPABILITY"
       );
       res.setHeader("Access-Control-Max-Age", "600");
       res.statusCode = 204;

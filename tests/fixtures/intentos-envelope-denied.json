@@ -1,0 +1,28 @@
+{
+  "id": "fx-env-denied-001",
+  "recipient": "agent://calendar",
+  "createdAtSec": 1770000100,
+  "intent": {
+    "id": "fx-msg-denied-001",
+    "requester": "did:example:alice",
+    "action": "calendar:delete_event",
+    "resource": "calendar://primary/events",
+    "payload": {
+      "eventId": "evt-1"
+    }
+  },
+  "capability": {
+    "id": "fx-cap-denied-001",
+    "subject": "did:example:alice",
+    "audience": "agent://calendar",
+    "validFromSec": 1770000000,
+    "validUntilSec": 1770001000,
+    "scopes": [
+      {
+        "action": "calendar:create_event",
+        "resource": "calendar://primary/events"
+      }
+    ],
+    "signature": "sig"
+  }
+}

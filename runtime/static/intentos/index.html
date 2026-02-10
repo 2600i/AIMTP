@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IntentOS Inbox</title>
+    <link rel="stylesheet" href="__INTENTOS_UI_BASE_PATH__/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>IntentOS Inbox</h1>
+      <div class="meta">
+        <span id="last-updated">Last updated: never</span>
+        <button id="refresh-all" type="button">Refresh</button>
+      </div>
+    </header>
+
+    <section class="panel panel-capability">
+      <h2>Capability</h2>
+      <label for="capability-input">IntentOS Capability (JSON)</label>
+      <textarea
+        id="capability-input"
+        rows="5"
+        spellcheck="false"
+        placeholder='{"chain":[...],"signature":{...}}'
+      ></textarea>
+      <div class="capability-actions">
+        <button id="capability-load" type="button">Load Capability</button>
+      </div>
+      <div id="capability-status" class="hint">No capability loaded</div>
+      <div id="capability-error" class="error" hidden></div>
+    </section>
+
+    <main class="layout">
+      <section class="panel panel-intents">
+        <h2>Intents</h2>
+        <div class="filters">
+          <label>
+            Status
+            <select id="intents-status">
+              <option value="all">all</option>
+              <option value="queued">queued</option>
+              <option value="running">running</option>
+              <option value="completed">completed</option>
+              <option value="failed">failed</option>
+            </select>
+          </label>
+          <label>
+            Limit
+            <input id="intents-limit" type="number" min="1" step="1" value="50" />
+          </label>
+        </div>
+        <div id="intents-loading" class="hint" hidden>Loading intents...</div>
+        <div id="intents-error" class="error" hidden></div>
+        <ul id="intents-list" class="list"></ul>
+      </section>
+
+      <section class="panel panel-detail">
+        <h2>Intent Detail</h2>
+        <div id="detail-loading" class="hint" hidden>Loading intent detail...</div>
+        <div id="detail-error" class="error" hidden></div>
+        <div id="intent-detail" class="detail"></div>
+        <h3>Runlog / Events</h3>
+        <ol id="events-list" class="events"></ol>
+      </section>
+    </main>
+
+    <section class="panel panel-tasks">
+      <h2>Tasks</h2>
+      <div class="filters">
+        <label>
+          Status
+          <select id="tasks-status">
+            <option value="all">all</option>
+            <option value="queued">queued</option>
+            <option value="claimed">claimed</option>
+            <option value="completed">completed</option>
+            <option value="failed">failed</option>
+          </select>
+        </label>
+        <label>
+          Assigned
+          <input id="tasks-assigned" type="text" placeholder="agent id" />
+        </label>
+        <label>
+          Intent ID
+          <input id="tasks-intent-id" type="text" placeholder="intent id" />
+        </label>
+      </div>
+      <div id="tasks-loading" class="hint" hidden>Loading tasks...</div>
+      <div id="tasks-error" class="error" hidden></div>
+      <div class="table-wrap">
+        <table id="tasks-table">
+          <thead>
+            <tr>
+              <th>task_id</th>
+              <th>intent_id</th>
+              <th>type</th>
+              <th>status</th>
+              <th>assigned_to</th>
+              <th>created_at</th>
+            </tr>
+          </thead>
+          <tbody id="tasks-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <script src="__INTENTOS_UI_BASE_PATH__/app.js" defer></script>
+  </body>
+</html>

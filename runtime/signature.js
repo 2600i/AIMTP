@@ -453,6 +453,7 @@ function evaluateEnvelopeSignaturePolicy(envelope, config) {
 }
 
 module.exports = {
+  canonicalizeJson,
   canonicalizeEnvelopeForSigning,
   createSignatureTrustConfig,
   evaluateEnvelopeSignaturePolicy,
