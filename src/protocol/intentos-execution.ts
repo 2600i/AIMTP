@@ -4,9 +4,11 @@ import {
   Receipt,
   ReceiptEmitter,
   ReceiptMessage,
+  ReceiptTrustVersion,
   createJsonlReceiptEmitter,
   createReceiptMessage,
   createReceipt,
+  normalizeReceiptTrustVersion,
   hashOutput,
   signReceipt
 } from "./intentos-receipts";
@@ -164,6 +166,10 @@ function isReceiptSigningEnabled(): boolean {
   return String(process.env.INTENTOS_RECEIPTS_SIGN || "off").trim().toLowerCase() === "on";
 }
 
+function readTrustVersion(): ReceiptTrustVersion {
+  return normalizeReceiptTrustVersion(process.env.INTENTOS_TRUST_VERSION);
+}
+
 function signReceiptIfEnabled(receipt: Receipt): Receipt {
   if (!isReceiptSigningEnabled()) {
     return receipt;
@@ -176,7 +182,7 @@ function signReceiptIfEnabled(receipt: Receipt): Receipt {
   }
 
   try {
-    return signReceipt(receipt, privateKeyPem, issuer);
+    return signReceipt(receipt, privateKeyPem, issuer, { trustVersion: readTrustVersion() });
   } catch {
     // Receipt signing failures are best-effort and must not affect execution.
     return receipt;
@@ -226,13 +232,16 @@ function deliverReceiptMessage(receipt: Receipt, env: Envelope): ReceiptMessage 
 }
 
 function toReceipt(record: ExecutionRecord): Receipt | null {
+  const trustVersion = readTrustVersion();
+  const trustVersionField = trustVersion === "v2" ? trustVersion : undefined;
   if (record.state === "Admitted") {
     // Admitted means capability checks accepted execution.
     return createReceipt({
       envelopeId: record.envelopeId,
       intentId: record.intentId,
       type: "receipt.admitted",
-      metadata: {}
+      metadata: {},
+      trustVersion: trustVersionField
     });
   }
   if (record.state === "Denied") {
@@ -241,7 +250,8 @@ function toReceipt(record: ExecutionRecord): Receipt | null {
       envelopeId: record.envelopeId,
       intentId: record.intentId,
       type: "receipt.denied",
-      metadata: { reason: record.decision.reason }
+      metadata: { reason: record.decision.reason },
+      trustVersion: trustVersionField
     });
   }
   if (record.state === "Completed") {
@@ -250,7 +260,8 @@ function toReceipt(record: ExecutionRecord): Receipt | null {
       envelopeId: record.envelopeId,
       intentId: record.intentId,
       type: "receipt.completed",
-      metadata: { outputHash: hashOutput(record.output) }
+      metadata: { outputHash: hashOutput(record.output) },
+      trustVersion: trustVersionField
     });
   }
   if (record.state === "Failed") {
@@ -259,7 +270,8 @@ function toReceipt(record: ExecutionRecord): Receipt | null {
       envelopeId: record.envelopeId,
       intentId: record.intentId,
       type: "receipt.failed",
-      metadata: { error: record.error ?? "unknown-error" }
+      metadata: { error: record.error ?? "unknown-error" },
+      trustVersion: trustVersionField
     });
   }
   return null;

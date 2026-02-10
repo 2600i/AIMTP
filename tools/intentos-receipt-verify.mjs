@@ -16,11 +16,14 @@ Usage:
 
 Environment:
   INTENTOS_TRUSTED_RECEIPT_KEYS_JSON='{"issuer":"-----BEGIN PUBLIC KEY-----..."}'
+  INTENTOS_TRUST_VERSION=v1|v2
+  INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC=<seconds>
 
 Options:
   --receipt <path>      Receipt JSON file
   --jsonl <path>        Receipt JSONL file
   --envelopeId <id>     Envelope id lookup for JSONL mode
+  --trustVersion <v>    Trust version override (v1|v2)
   --help                Show this help
 `;
 
@@ -134,12 +137,19 @@ async function main() {
   const { parseTrustedReceiptKeysJson, verifyReceipt } = loadReceiptsModule();
   const trustedKeys = parseTrustedReceiptKeysJson(process.env.INTENTOS_TRUSTED_RECEIPT_KEYS_JSON);
   const receipt = await resolveReceipt(options);
-  const result = verifyReceipt(receipt, trustedKeys);
+  const maxTimestampSkewRaw =
+    process.env.INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC?.trim() || "";
+  const maxTimestampSkewSec =
+    maxTimestampSkewRaw.length > 0 ? Number.parseInt(maxTimestampSkewRaw, 10) : undefined;
+  const result = verifyReceipt(receipt, trustedKeys, {
+    trustVersion: options.trustVersion ?? process.env.INTENTOS_TRUST_VERSION,
+    maxTimestampSkewSec: Number.isFinite(maxTimestampSkewSec) ? maxTimestampSkewSec : undefined
+  });
   if (result.verified) {
-    console.log(`VERIFIED: ${result.reason}`);
+    console.log(`VERIFIED (${result.trustVersion}): ${result.reason}`);
     return;
   }
-  console.log(`UNVERIFIED: ${result.reason}`);
+  console.log(`UNVERIFIED (${result.trustVersion}): ${result.reason}`);
   process.exit(1);
 }
 

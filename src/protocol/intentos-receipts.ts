@@ -8,6 +8,8 @@ export type ReceiptType =
   | "receipt.completed"
   | "receipt.failed";
 
+export type ReceiptTrustVersion = "v1" | "v2";
+
 export type JsonPrimitive = string | number | boolean | null;
 export type JsonValue = JsonPrimitive | JsonArray | JsonObject;
 export interface JsonObject {
@@ -29,6 +31,7 @@ export interface Receipt {
   readonly type: ReceiptType;
   readonly timestamp: string;
   readonly metadata: ReceiptMetadata;
+  readonly trustVersion?: ReceiptTrustVersion;
   readonly issuer?: string;
   readonly sigAlg?: string;
   readonly signature?: string;
@@ -52,6 +55,18 @@ export type TrustedReceiptPublicKeys = Readonly<Record<string, string>>;
 export interface ReceiptVerificationResult {
   readonly verified: boolean;
   readonly reason: string;
+  readonly trustVersion: ReceiptTrustVersion;
+}
+
+export interface ReceiptCanonicalizationOptions {
+  readonly trustVersion?: ReceiptTrustVersion | string;
+}
+
+export interface SignReceiptOptions extends ReceiptCanonicalizationOptions {}
+
+export interface VerifyReceiptOptions extends ReceiptCanonicalizationOptions {
+  readonly maxTimestampSkewSec?: number;
+  readonly nowMs?: number;
 }
 
 interface CreateReceiptInput {
@@ -60,6 +75,7 @@ interface CreateReceiptInput {
   readonly type: ReceiptType;
   readonly timestamp?: string;
   readonly metadata: ReceiptMetadata;
+  readonly trustVersion?: ReceiptTrustVersion;
 }
 
 interface CreateReceiptMessageInput {
@@ -69,7 +85,7 @@ interface CreateReceiptMessageInput {
   readonly traceId?: string;
 }
 
-interface CanonicalReceiptPayload {
+interface CanonicalReceiptPayloadV1 {
   readonly receiptId: string;
   readonly envelopeId: string;
   readonly intentId: string;
@@ -79,6 +95,19 @@ interface CanonicalReceiptPayload {
   readonly issuer?: string;
   readonly sigAlg?: string;
 }
+
+interface CanonicalReceiptPayloadV2 {
+  readonly envelopeId: string;
+  readonly intentId: string;
+  readonly issuer?: string;
+  readonly type: ReceiptType;
+  readonly timestamp: string;
+  readonly metadata: ReceiptMetadata;
+  readonly sigAlg?: string;
+  readonly trustVersion: "v2";
+}
+
+const DEFAULT_RECEIPT_TRUST_VERSION: ReceiptTrustVersion = "v1";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -113,7 +142,25 @@ function stableStringifyJson(value: unknown): string {
   throw new Error(`unsupported_value_type:${typeof value}`);
 }
 
-function canonicalReceiptPayload(receipt: Receipt): CanonicalReceiptPayload {
+export function normalizeReceiptTrustVersion(
+  value: unknown,
+  fallback: ReceiptTrustVersion = DEFAULT_RECEIPT_TRUST_VERSION
+): ReceiptTrustVersion {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  if (normalized === "v2") {
+    return "v2";
+  }
+  if (normalized === "v1") {
+    return "v1";
+  }
+  return fallback;
+}
+
+export function isTerminalReceiptType(type: ReceiptType): boolean {
+  return type === "receipt.denied" || type === "receipt.completed" || type === "receipt.failed";
+}
+
+function canonicalReceiptPayloadV1(receipt: Receipt): CanonicalReceiptPayloadV1 {
   return {
     receiptId: receipt.receiptId,
     envelopeId: receipt.envelopeId,
@@ -126,6 +173,19 @@ function canonicalReceiptPayload(receipt: Receipt): CanonicalReceiptPayload {
   };
 }
 
+function canonicalReceiptPayloadV2(receipt: Receipt): CanonicalReceiptPayloadV2 {
+  return {
+    envelopeId: receipt.envelopeId,
+    intentId: receipt.intentId,
+    issuer: receipt.issuer,
+    type: receipt.type,
+    timestamp: receipt.timestamp,
+    metadata: receipt.metadata,
+    sigAlg: receipt.sigAlg,
+    trustVersion: "v2"
+  };
+}
+
 function normalizeNonEmptyString(value: unknown): string {
   if (typeof value !== "string") {
     return "";
@@ -133,15 +193,64 @@ function normalizeNonEmptyString(value: unknown): string {
   return value.trim();
 }
 
-function failVerification(reason: string): ReceiptVerificationResult {
-  return { verified: false, reason };
+function failVerification(
+  reason: string,
+  trustVersion: ReceiptTrustVersion
+): ReceiptVerificationResult {
+  return { verified: false, reason, trustVersion };
 }
 
-export function canonicalizeReceiptForSigning(receipt: Receipt): Buffer {
-  return Buffer.from(stableStringifyJson(canonicalReceiptPayload(receipt)), "utf8");
+function parseTimestampMs(timestamp: string): number | null {
+  const parsed = Date.parse(timestamp);
+  if (!Number.isFinite(parsed)) {
+    return null;
+  }
+  return parsed;
 }
 
-export function signReceipt(receipt: Receipt, privateKeyPem: string, issuer: string): Receipt {
+function validateTimestampSkew(
+  receipt: Receipt,
+  options: VerifyReceiptOptions
+): string | null {
+  const maxTimestampSkewSec = options.maxTimestampSkewSec;
+  if (!Number.isFinite(maxTimestampSkewSec) || maxTimestampSkewSec === undefined) {
+    return null;
+  }
+  if (maxTimestampSkewSec < 0) {
+    return "invalid maxTimestampSkewSec";
+  }
+  const timestampMs = parseTimestampMs(receipt.timestamp);
+  if (timestampMs === null) {
+    return "invalid timestamp";
+  }
+  const nowMs = options.nowMs ?? Date.now();
+  if (!Number.isFinite(nowMs)) {
+    return "invalid nowMs";
+  }
+  const maxSkewMs = maxTimestampSkewSec * 1000;
+  const skewMs = Math.abs(nowMs - timestampMs);
+  if (skewMs > maxSkewMs) {
+    return `timestamp outside allowed skew: ${maxTimestampSkewSec}s`;
+  }
+  return null;
+}
+
+export function canonicalizeReceiptForSigning(
+  receipt: Receipt,
+  options: ReceiptCanonicalizationOptions = {}
+): Buffer {
+  const trustVersion = normalizeReceiptTrustVersion(options.trustVersion ?? receipt.trustVersion);
+  const payload =
+    trustVersion === "v2" ? canonicalReceiptPayloadV2(receipt) : canonicalReceiptPayloadV1(receipt);
+  return Buffer.from(stableStringifyJson(payload), "utf8");
+}
+
+export function signReceipt(
+  receipt: Receipt,
+  privateKeyPem: string,
+  issuer: string,
+  options: SignReceiptOptions = {}
+): Receipt {
   const normalizedIssuer = normalizeNonEmptyString(issuer);
   if (!normalizedIssuer) {
     throw new Error("missing_issuer");
@@ -152,13 +261,15 @@ export function signReceipt(receipt: Receipt, privateKeyPem: string, issuer: str
     throw new Error("missing_private_key");
   }
 
+  const trustVersion = normalizeReceiptTrustVersion(options.trustVersion ?? receipt.trustVersion);
   const signable = {
     ...receipt,
     issuer: normalizedIssuer,
     sigAlg: "ed25519" as const,
+    trustVersion: trustVersion === "v2" ? ("v2" as const) : undefined,
     signature: undefined
   };
-  const payload = canonicalizeReceiptForSigning(signable);
+  const payload = canonicalizeReceiptForSigning(signable, { trustVersion });
   const signature = sign(null, payload, createPrivateKey(normalizedPrivateKeyPem)).toString("base64");
   return Object.freeze({
     ...signable,
@@ -168,43 +279,59 @@ export function signReceipt(receipt: Receipt, privateKeyPem: string, issuer: str
 
 export function verifyReceipt(
   receipt: Receipt,
-  trustedPublicKeys: TrustedReceiptPublicKeys
+  trustedPublicKeys: TrustedReceiptPublicKeys,
+  options: VerifyReceiptOptions = {}
 ): ReceiptVerificationResult {
+  const trustVersion = normalizeReceiptTrustVersion(options.trustVersion ?? receipt.trustVersion);
+  if (trustVersion === "v2") {
+    const timestampFailure = validateTimestampSkew(receipt, options);
+    if (timestampFailure) {
+      return failVerification(timestampFailure, trustVersion);
+    }
+  }
+
   const signature = normalizeNonEmptyString(receipt.signature);
   if (!signature) {
-    return failVerification("missing signature");
+    if (trustVersion === "v2" && isTerminalReceiptType(receipt.type)) {
+      return failVerification("missing signature for terminal receipt", trustVersion);
+    }
+    return failVerification("missing signature", trustVersion);
   }
 
   const issuer = normalizeNonEmptyString(receipt.issuer);
   if (!issuer) {
-    return failVerification("missing issuer");
+    return failVerification("missing issuer", trustVersion);
   }
 
   const sigAlg = normalizeNonEmptyString(receipt.sigAlg).toLowerCase();
   if (!sigAlg) {
-    return failVerification("missing sigAlg");
+    return failVerification("missing sigAlg", trustVersion);
   }
   if (sigAlg !== "ed25519") {
-    return failVerification(`unsupported sigAlg: ${sigAlg}`);
+    return failVerification(`unsupported sigAlg: ${sigAlg}`, trustVersion);
   }
 
   const publicKeyPem = normalizeNonEmptyString(trustedPublicKeys[issuer]);
   if (!publicKeyPem) {
-    return failVerification(`untrusted issuer: ${issuer}`);
+    return failVerification(`untrusted issuer: ${issuer}`, trustVersion);
   }
 
   try {
+    const trustVersionField = trustVersion === "v2" ? ("v2" as const) : undefined;
     const payload = canonicalizeReceiptForSigning({
       ...receipt,
       issuer,
       sigAlg,
+      trustVersion: trustVersionField,
       signature: undefined
-    });
+    }, { trustVersion });
     const verified = verify(null, payload, createPublicKey(publicKeyPem), Buffer.from(signature, "base64"));
-    return verified ? { verified: true, reason: "signature valid" } : failVerification("invalid signature");
+    return verified
+      ? { verified: true, reason: "signature valid", trustVersion }
+      : failVerification("invalid signature", trustVersion);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return failVerification(`verification error: ${message}`);
+    return failVerification(`verification error: ${message}`, trustVersion);
   }
 }
 
@@ -240,13 +367,15 @@ export function parseTrustedReceiptKeysJson(raw: string | undefined): TrustedRec
 
 export function createReceipt(input: CreateReceiptInput): Receipt {
   const metadata = Object.freeze({ ...input.metadata }) as ReceiptMetadata;
+  const trustVersion = normalizeReceiptTrustVersion(input.trustVersion);
   return Object.freeze({
     receiptId: randomUUID(),
     envelopeId: input.envelopeId,
     intentId: input.intentId,
     type: input.type,
     timestamp: input.timestamp ?? new Date().toISOString(),
-    metadata
+    metadata,
+    ...(trustVersion === "v2" ? { trustVersion } : {})
   });
 }
 

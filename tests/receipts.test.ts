@@ -76,6 +76,7 @@ afterEach(() => {
   delete process.env.INTENTOS_RECEIPTS_SIGN;
   delete process.env.INTENTOS_RECEIPTS_ISSUER;
   delete process.env.INTENTOS_RECEIPTS_PRIVATE_KEY;
+  delete process.env.INTENTOS_TRUST_VERSION;
   delete process.env.AIMTP_STORE;
   delete process.env.AIMTP_MAILBOX_SQLITE_PATH;
   jest.resetModules();
@@ -134,7 +135,7 @@ describe("IntentOS v2 receipts", () => {
       [issuer]: publicKey.export({ type: "spki", format: "pem" }).toString()
     };
     const verification = verifyReceipt(receipt, trustedKeys);
-    expect(verification).toEqual({ verified: true, reason: "signature valid" });
+    expect(verification).toEqual({ verified: true, reason: "signature valid", trustVersion: "v1" });
   });
 
   test("writes denied receipt with { reason } metadata", () => {

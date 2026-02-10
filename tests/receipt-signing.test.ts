@@ -34,6 +34,7 @@ describe("IntentOS federation receipt signing", () => {
     const verification = verifyReceipt(signed, trustedKeys);
     expect(verification.verified).toBe(true);
     expect(verification.reason).toBe("signature valid");
+    expect(verification.trustVersion).toBe("v1");
   });
 
   test("tampering any signed field fails verification", () => {
@@ -79,5 +80,29 @@ describe("IntentOS federation receipt signing", () => {
     const canonicalA = canonicalizeReceiptForSigning(signed).toString("utf8");
     const canonicalB = canonicalizeReceiptForSigning(reordered).toString("utf8");
     expect(canonicalA).toBe(canonicalB);
+  });
+
+  test("v2 canonicalization is stable for equivalent receipt objects", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const reordered: Receipt = {
+      timestamp: signed.timestamp,
+      metadata: signed.metadata,
+      trustVersion: signed.trustVersion,
+      intentId: signed.intentId,
+      type: signed.type,
+      envelopeId: signed.envelopeId,
+      issuer: signed.issuer,
+      sigAlg: signed.sigAlg,
+      receiptId: signed.receiptId,
+      signature: signed.signature
+    };
+
+    const canonicalA = canonicalizeReceiptForSigning(signed, { trustVersion: "v2" }).toString("utf8");
+    const canonicalB = canonicalizeReceiptForSigning(reordered, { trustVersion: "v2" }).toString("utf8");
+    expect(canonicalA).toBe(canonicalB);
+
+    const verification = verifyReceipt(signed, trustedKeys, { trustVersion: "v2" });
+    expect(verification.verified).toBe(true);
+    expect(verification.trustVersion).toBe("v2");
   });
 });

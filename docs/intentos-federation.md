@@ -56,7 +56,9 @@ Spoofing prevention requirements:
 
 ## Runtime Receipt Policy (Opt-In)
 - `INTENTOS_RECEIPT_POLICY=off|warn|enforce` (default `off`)
+- `INTENTOS_TRUST_VERSION=v1|v2` (default `v1`)
 - `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` (existing): JSON object mapping `issuer -> PEM public key`
+- `INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC` (optional): max absolute clock skew for v2 timestamp sanity checks
 
 Policy behavior when a receipt envelope is processed:
 - `off`: receipt processing continues even if receipt verification fails or signature/issuer is missing.
@@ -64,6 +66,74 @@ Policy behavior when a receipt envelope is processed:
 - `enforce`: unverified receipts are rejected from trusted receipt processing; runtime continues running and does not crash.
 
 Verified receipts are marked trusted and accepted in all modes.
+
+## IntentOS v2 Trust Semantics (Versioned Successor)
+This section defines the versioned successor to frozen v1 semantics. v1 remains default unless `INTENTOS_TRUST_VERSION=v2` is set.
+
+### 1) Version Selection and Compatibility (v2)
+- Trust semantics are selected by policy context:
+  - `INTENTOS_TRUST_VERSION=v1` -> frozen v1 behavior.
+  - `INTENTOS_TRUST_VERSION=v2` -> v2 behavior.
+- Receipt field compatibility:
+  - `receipt.trustVersion` is optional and additive.
+  - absent `receipt.trustVersion` MUST be interpreted as `v1` unless policy context explicitly selects `v2`.
+- v1 receipts remain valid protocol artifacts and are not silently reinterpreted.
+
+### 2) Verification Requirements (v2)
+- For terminal receipts (`receipt.denied`, `receipt.completed`, `receipt.failed`), a trusted result requires:
+  - signature present
+  - known issuer in local trusted key map
+  - valid signature over v2 canonical payload
+- Unknown issuer MUST fail verification even when signature bytes are present.
+- v2 trust checks are local policy checks only and MUST NOT change execution transitions.
+
+### 3) Canonicalization Profile (v2)
+- v2 signing/verification canonical payload MUST be deterministic and include:
+  - `envelopeId`
+  - `intentId`
+  - `issuer`
+  - `type`
+  - `timestamp`
+  - `metadata`
+  - `sigAlg`
+  - `trustVersion` (fixed `v2` in payload)
+- Determinism requirements are unchanged:
+  - object keys sorted lexicographically
+  - `undefined` members omitted
+  - equivalent content yields identical canonical bytes
+
+### 4) Replay Linkage and Anti-Tamper Expectations (v2)
+- A verifiable receipt MUST bind the tuple:
+  - `envelopeId + intentId + issuer + type + timestamp + metadata`
+- Timestamp checks:
+  - optional sanity bounds MAY be enforced via `INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC`
+  - out-of-window timestamps SHOULD fail trust verification when bound is configured
+- Anti-replay storage (dedup store, nonce DB, global sequence) is explicitly out of scope for this phase.
+
+### 5) Authority Boundaries Across Relays (v2)
+- Receipt authority is issuer-scoped per trust domain.
+- A relay MUST trust only explicitly configured issuer keys.
+- A relay MUST NOT infer cross-relay trust transitively from receipt forwarding alone.
+
+### 6) Policy Semantics (v2)
+- `v2 + enforce`:
+  - unsigned terminal receipts MUST be rejected from trusted acceptance
+  - untrusted/unknown issuer receipts MUST be rejected
+- `v2 + warn`:
+  - processing continues
+  - runtime SHOULD emit warnings for unsigned/untrusted receipts
+- `v2 + off`:
+  - processing continues even when trust checks fail
+  - failed trust receipts remain untrusted artifacts
+
+### 7) Upgrade Guidance
+- Keep existing behavior (default):
+  - `INTENTOS_TRUST_VERSION=v1` (or unset)
+  - `INTENTOS_RECEIPT_POLICY=off|warn|enforce` as currently configured
+- Stage v2 rollout:
+  1. Keep policy in `warn`, set `INTENTOS_TRUST_VERSION=v2`, and populate `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON`.
+  2. Observe warning volume and issuer coverage.
+  3. Switch to `INTENTOS_RECEIPT_POLICY=enforce` after signing/trust config is complete.
 
 ## IntentOS v1 Trust Semantics (Frozen)
 **FROZEN v1:** This section is normative for IntentOS v1 trust behavior. Changes to these rules MUST be versioned explicitly in a future IntentOS trust-semantics revision.
