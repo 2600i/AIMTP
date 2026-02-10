@@ -9,6 +9,23 @@ import { spawnSync } from "node:child_process";
 
 const COMPOSE_FILE = "docker-compose.federation.yml";
 const require = createRequire(import.meta.url);
+const RELAY_A_PUBLIC_KEY_PEM = [
+  "-----BEGIN PUBLIC KEY-----",
+  "MCowBQYDK2VwAyEAQfzjXFsveEOYsv55DKXnd7VcM66OXZbDq3ACaKMwdoo=",
+  "-----END PUBLIC KEY-----",
+  ""
+].join("\n");
+const RELAY_B_PUBLIC_KEY_PEM = [
+  "-----BEGIN PUBLIC KEY-----",
+  "MCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=",
+  "-----END PUBLIC KEY-----",
+  ""
+].join("\n");
+const DEMO_TRUSTED_RECEIPT_KEYS = Object.freeze({
+  "relay://a": RELAY_A_PUBLIC_KEY_PEM,
+  "relay://b": RELAY_B_PUBLIC_KEY_PEM
+});
+const DEMO_TRUSTED_RECEIPT_KEYS_JSON = JSON.stringify(DEMO_TRUSTED_RECEIPT_KEYS);
 
 function loadReceiptPolicyModule() {
   const distPath = path.resolve(process.cwd(), "dist/runtime/intentos/receipt-policy.js");
@@ -68,6 +85,10 @@ function runDockerCompose(args, options = {}) {
   const stdout = (result.stdout || "").trim();
   const details = [stderr, stdout].filter((value) => value.length > 0).join("\n");
   throw new Error(`docker compose ${args.join(" ")} failed${details ? `: ${details}` : ""}`);
+}
+
+function shellQuoteSingle(value) {
+  return `'${String(value).replace(/'/g, `'\"'\"'`)}'`;
 }
 
 function sleep(ms) {
@@ -172,10 +193,9 @@ function verifyReceiptInRelay(service, receipt) {
         "exec",
         "-T",
         service,
-        "node",
-        "tools/intentos-receipt-verify.mjs",
-        "--receipt",
-        remotePath
+        "sh",
+        "-lc",
+        `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON=${shellQuoteSingle(DEMO_TRUSTED_RECEIPT_KEYS_JSON)} node tools/intentos-receipt-verify.mjs --receipt ${shellQuoteSingle(remotePath)}`,
       ],
       { allowFailure: true }
     );
@@ -191,13 +211,18 @@ function verifyReceiptInRelay(service, receipt) {
   }
 }
 
+function configureTrustedReceiptKeysForDemo() {
+  process.env.INTENTOS_TRUSTED_RECEIPT_KEYS_JSON = DEMO_TRUSTED_RECEIPT_KEYS_JSON;
+}
+
 function enforceReceiptPolicy(service, receipt, trustVersion) {
   const result = processReceiptEnvelope({
     id: `receipt-msg-${service}-${receipt.receiptId || "unknown"}`,
     receipt
   }, {
     mode: "enforce",
-    trustVersion
+    trustVersion,
+    env: process.env
   });
   if (!result.accepted) {
     throw new Error(`receipt policy rejected in ${service}: ${result.reason}`);
@@ -236,6 +261,7 @@ function runTrustModePreview(receipt, trustVersion) {
         {
           mode,
           trustVersion,
+          env: process.env,
           logger: {
             warn(event) {
               warnings.push(event);
@@ -256,6 +282,8 @@ async function main() {
   const trustVersion = normalizeTrustVersion(process.env.INTENTOS_TRUST_VERSION);
   const relayA = "relay-a";
   const relayB = "relay-b";
+
+  configureTrustedReceiptKeysForDemo();
 
   await waitForRelay(relayA);
   await waitForRelay(relayB);
