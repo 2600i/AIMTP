@@ -5,6 +5,7 @@
   "type": "commonjs",
   "scripts": {
     "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/cap-mint.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js && node tests/intentos-ui.test.js",
+    "test:receipts": "jest --config jest.config.cjs --runInBand tests/receipts.test.ts",
     "build": "tsc -p tsconfig.json",
     "ship": "node scripts/ship.js",
     "demo": "npm run build && node dist/runtime/demo-run.js",
@@ -36,7 +37,10 @@
     "better-sqlite3": "^12.6.2"
   },
   "devDependencies": {
+    "@types/jest": "^29.5.12",
     "@types/node": "^20.11.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
     "typescript": "^5.4.0"
   }
 }

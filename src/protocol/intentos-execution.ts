@@ -1,3 +1,15 @@
+import path from "node:path";
+import { MailboxStore, createMailboxStore, parseMailboxStoreType } from "../runtime/mailbox";
+import {
+  Receipt,
+  ReceiptEmitter,
+  ReceiptMessage,
+  createJsonlReceiptEmitter,
+  createReceiptMessage,
+  createReceipt,
+  hashOutput
+} from "./intentos-receipts";
+
 /* ============================================================================
  * IntentOS v1: Operational Semantics (Small-Step, Transition-Oriented)
  * ========================================================================== */
@@ -80,12 +92,172 @@ export interface ExecutionRecord {
 export interface RuleHooks {
   readonly onTransition?: (transition: Transition, env: Envelope, msg: Intent) => void;
   readonly onRecord?: (record: ExecutionRecord) => void;
+  readonly onReceipt?: (receipt: Receipt) => void;
 }
 
 export type IntentHandler = (
   msg: Intent,
   env: Envelope
 ) => Promise<unknown> | unknown;
+
+const DEFAULT_RECEIPTS_PATH =
+  process.env.INTENTOS_RECEIPTS_PATH ||
+  path.join(process.cwd(), "runtime", "intentos-receipts.jsonl");
+
+let receiptEmitter: ReceiptEmitter | null = null;
+let receiptDeliveryMailbox: MailboxStore | null = null;
+
+function getReceiptEmitter(): ReceiptEmitter {
+  if (!receiptEmitter) {
+    receiptEmitter = createJsonlReceiptEmitter(DEFAULT_RECEIPTS_PATH);
+  }
+  return receiptEmitter;
+}
+
+function parseOptionalEnvInt(value: string | undefined): number | undefined {
+  if (!value || value.trim() === "") {
+    return undefined;
+  }
+  const parsed = Number.parseInt(value, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function getReceiptDeliveryMailbox(): MailboxStore {
+  if (!receiptDeliveryMailbox) {
+    const mailboxStoreType = parseMailboxStoreType(
+      process.env.AIMTP_STORE || process.env.AIMTP_MAILBOX_STORE
+    );
+    const mailboxSqlitePathRaw = process.env.AIMTP_MAILBOX_SQLITE_PATH?.trim();
+    const mailboxSqlitePath =
+      mailboxSqlitePathRaw && mailboxSqlitePathRaw.length > 0 ? mailboxSqlitePathRaw : undefined;
+    const redisUrl = process.env.AIMTP_REDIS_URL?.trim();
+    const redisHost = process.env.AIMTP_REDIS_HOST?.trim();
+    const redisUsername = process.env.AIMTP_REDIS_USERNAME?.trim();
+    const redisPassword = process.env.AIMTP_REDIS_PASSWORD?.trim();
+    const redisKeyPrefix = process.env.AIMTP_REDIS_KEY_PREFIX?.trim();
+    const redisCliPath = process.env.AIMTP_REDIS_CLI_PATH?.trim();
+    receiptDeliveryMailbox = createMailboxStore({
+      type: mailboxStoreType,
+      sqlitePath: mailboxSqlitePath,
+      redisUrl,
+      redisHost,
+      redisPort: parseOptionalEnvInt(process.env.AIMTP_REDIS_PORT),
+      redisDb: parseOptionalEnvInt(process.env.AIMTP_REDIS_DB),
+      redisUsername,
+      redisPassword,
+      redisKeyPrefix,
+      redisCliPath
+    });
+  }
+  return receiptDeliveryMailbox;
+}
+
+function isReceiptDeliveryEnabled(): boolean {
+  return String(process.env.INTENTOS_RECEIPTS_DELIVER || "off").trim().toLowerCase() === "on";
+}
+
+function parseIdentity(value: unknown): string | null {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function resolveReceiptRequester(env: Envelope): string | null {
+  const envelope = env as Envelope & { sender?: unknown; from?: unknown };
+  return (
+    parseIdentity(env.intent.requester) ||
+    parseIdentity(envelope.sender) ||
+    parseIdentity(envelope.from)
+  );
+}
+
+function deliverReceiptMessage(receipt: Receipt, env: Envelope): ReceiptMessage | null {
+  if (!isReceiptDeliveryEnabled()) {
+    return null;
+  }
+
+  const requester = resolveReceiptRequester(env);
+  if (!requester) {
+    return null;
+  }
+
+  const message = createReceiptMessage({
+    receipt,
+    requester,
+    createdAtSec: env.createdAtSec,
+    traceId: env.traceId
+  });
+
+  try {
+    getReceiptDeliveryMailbox().enqueue(message.recipient, message);
+  } catch {
+    // Receipt delivery failures are best-effort and must not affect execution.
+  }
+  return message;
+}
+
+function toReceipt(record: ExecutionRecord): Receipt | null {
+  if (record.state === "Admitted") {
+    // Admitted means capability checks accepted execution.
+    return createReceipt({
+      envelopeId: record.envelopeId,
+      intentId: record.intentId,
+      type: "receipt.admitted",
+      metadata: {}
+    });
+  }
+  if (record.state === "Denied") {
+    // Denied means admission failed with a concrete reason.
+    return createReceipt({
+      envelopeId: record.envelopeId,
+      intentId: record.intentId,
+      type: "receipt.denied",
+      metadata: { reason: record.decision.reason }
+    });
+  }
+  if (record.state === "Completed") {
+    // Completed captures a deterministic hash of handler output.
+    return createReceipt({
+      envelopeId: record.envelopeId,
+      intentId: record.intentId,
+      type: "receipt.completed",
+      metadata: { outputHash: hashOutput(record.output) }
+    });
+  }
+  if (record.state === "Failed") {
+    // Failed records handler error text from the runtime path.
+    return createReceipt({
+      envelopeId: record.envelopeId,
+      intentId: record.intentId,
+      type: "receipt.failed",
+      metadata: { error: record.error ?? "unknown-error" }
+    });
+  }
+  return null;
+}
+
+function emitReceipt(record: ExecutionRecord, env: Envelope, hooks?: RuleHooks): void {
+  const receipt = toReceipt(record);
+  if (!receipt) {
+    return;
+  }
+  hooks?.onReceipt?.(receipt);
+  try {
+    getReceiptEmitter().emit(receipt);
+  } catch {
+    // Receipt sink failures must not alter execution semantics.
+  }
+  deliverReceiptMessage(receipt, env);
+}
+
+interface AdmissionOptions {
+  readonly emitReceipt?: boolean;
+}
 
 /* Section 2: State graph */
 
@@ -215,7 +387,13 @@ export function fireEnqueue(env: Envelope, msg: Intent, hooks?: RuleHooks): Exec
  * Enqueued(Msg), CapValid(Env, Msg)        --> Admitted(Msg)
  * Enqueued(Msg), not CapValid(Env, Msg)    --> Denied(Msg, r)
  */
-export function fireAdmission(env: Envelope, msg: Intent, hooks?: RuleHooks): ExecutionRecord {
+export function fireAdmission(
+  env: Envelope,
+  msg: Intent,
+  hooks?: RuleHooks,
+  options?: AdmissionOptions
+): ExecutionRecord {
+  const shouldEmitReceipt = options?.emitReceipt ?? true;
   const enqueueStep = transition(
     "ENQUEUE",
     null,
@@ -230,6 +408,9 @@ export function fireAdmission(env: Envelope, msg: Intent, hooks?: RuleHooks): Ex
     const denied = markDenied(env, msg, reason);
     hooks?.onTransition?.(denied.transitions[1], env, msg);
     hooks?.onRecord?.(denied);
+    if (shouldEmitReceipt) {
+      emitReceipt(denied, env, hooks);
+    }
     return denied;
   }
 
@@ -249,6 +430,9 @@ export function fireAdmission(env: Envelope, msg: Intent, hooks?: RuleHooks): Ex
     transitions: [enqueueStep, admitStep]
   };
   hooks?.onRecord?.(record);
+  if (shouldEmitReceipt) {
+    emitReceipt(record, env, hooks);
+  }
   return record;
 }
 
@@ -268,8 +452,9 @@ export async function fireDispatch(
   handler: IntentHandler,
   hooks?: RuleHooks
 ): Promise<ExecutionRecord> {
-  const admitted = fireAdmission(env, msg, hooks);
+  const admitted = fireAdmission(env, msg, hooks, { emitReceipt: false });
   if (admitted.state !== "Admitted" || !canDispatch(env, msg)) {
+    emitReceipt(admitted, env, hooks);
     return admitted;
   }
 
@@ -302,6 +487,7 @@ export async function fireDispatch(
       output
     };
     hooks?.onRecord?.(completed);
+    emitReceipt(completed, env, hooks);
     return completed;
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -317,6 +503,7 @@ export async function fireDispatch(
       error: message
     };
     hooks?.onRecord?.(failed);
+    emitReceipt(failed, env, hooks);
     return failed;
   }
 }
