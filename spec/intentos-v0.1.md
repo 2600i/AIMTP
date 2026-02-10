@@ -57,6 +57,12 @@ IntentOS v0.3 introduces versioned trust semantics for receipt verification and 
 - v1 behavior remains frozen and backward compatible.
 - v2 behavior is additive and policy-gated.
 
+### Versioning Note
+
+- v2 trust semantics are opt-in through `INTENTOS_TRUST_VERSION=v2`.
+- If unset, runtime remains on v1 trust semantics by default.
+- Future trust revisions MUST remain explicitly versioned and opt-in.
+
 ### v2 Trust Requirements
 
 - Trusted terminal receipts (`receipt.denied|receipt.completed|receipt.failed`) require valid signing proof.

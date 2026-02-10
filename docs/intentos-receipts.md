@@ -85,6 +85,22 @@ A routed receipt message MUST contain:
 - v2 trust semantics are defined in `/Users/solo446/Documents/AIMTP/docs/intentos-federation.md`.
 - This receipts contract remains execution-semantics stable across trust versions.
 
+## v2 Trust Semantics Quickstart
+Use this profile when turning on trusted-only receipt acceptance in operations.
+
+```sh
+INTENTOS_TRUST_VERSION=v2
+INTENTOS_RECEIPT_POLICY=enforce
+INTENTOS_TRUSTED_RECEIPT_KEYS_JSON='{"relay://X":"<PUBLIC_KEY_PEM>"}'
+# Optional:
+INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC=300
+```
+
+Expected behavior:
+- Signed receipt + trusted issuer + valid signature => trusted.
+- Unsigned terminal receipt => rejected in `enforce`, warning in `warn`.
+- Tampered or unknown-issuer receipt => rejected in `enforce`, warning in `warn`.
+
 ## Examples
 Receipt (completed):
 ```json
