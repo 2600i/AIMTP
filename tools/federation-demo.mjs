@@ -37,6 +37,11 @@ const RELAY_CONFIG = Object.freeze({
   }
 });
 
+function normalizeTrustVersion(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "v2" ? "v2" : "v1";
+}
+
 function runCommand(command, args, options = {}) {
   const result = spawnSync(command, args, {
     encoding: "utf8",
@@ -186,10 +191,13 @@ function verifyReceiptInRelay(service, receipt) {
   }
 }
 
-function enforceReceiptPolicy(service, receipt) {
+function enforceReceiptPolicy(service, receipt, trustVersion) {
   const result = processReceiptEnvelope({
     id: `receipt-msg-${service}-${receipt.receiptId || "unknown"}`,
     receipt
+  }, {
+    mode: "enforce",
+    trustVersion
   });
   if (!result.accepted) {
     throw new Error(`receipt policy rejected in ${service}: ${result.reason}`);
@@ -197,7 +205,13 @@ function enforceReceiptPolicy(service, receipt) {
   return result;
 }
 
-function runTamperedPolicyPreview(receipt) {
+function runTrustModePreview(receipt, trustVersion) {
+  const unsigned = {
+    ...receipt,
+    sigAlg: undefined,
+    signature: undefined
+  };
+
   const tampered = {
     ...receipt,
     metadata: {
@@ -206,43 +220,40 @@ function runTamperedPolicyPreview(receipt) {
     }
   };
 
-  const warnEvents = [];
-  const warnResult = processReceiptEnvelope(
-    {
-      id: `receipt-msg-preview-warn-${tampered.receiptId || "unknown"}`,
-      receipt: tampered
-    },
-    {
-      mode: "warn",
-      logger: {
-        warn(event) {
-          warnEvents.push(event);
+  const cases = [
+    { name: "unsigned", receipt: unsigned },
+    { name: "tampered", receipt: tampered }
+  ];
+
+  cases.forEach((entry) => {
+    (["warn", "enforce"]).forEach((mode) => {
+      const warnings = [];
+      const result = processReceiptEnvelope(
+        {
+          id: `receipt-msg-preview-${entry.name}-${mode}-${entry.receipt.receiptId || "unknown"}`,
+          receipt: entry.receipt
+        },
+        {
+          mode,
+          trustVersion,
+          logger: {
+            warn(event) {
+              warnings.push(event);
+            }
+          }
         }
-      }
-    }
-  );
-
-  const enforceResult = processReceiptEnvelope(
-    {
-      id: `receipt-msg-preview-enforce-${tampered.receiptId || "unknown"}`,
-      receipt: tampered
-    },
-    { mode: "enforce" }
-  );
-
-  console.log(
-    `DEMO POLICY PREVIEW: tampered mode=warn accepted=${String(warnResult.accepted)} trusted=${String(
-      warnResult.trusted
-    )} reason=${warnResult.reason} warnings=${warnEvents.length}`
-  );
-  console.log(
-    `DEMO POLICY PREVIEW: tampered mode=enforce accepted=${String(
-      enforceResult.accepted
-    )} trusted=${String(enforceResult.trusted)} reason=${enforceResult.reason}`
-  );
+      );
+      console.log(
+        `DEMO POLICY PREVIEW: case=${entry.name} trustVersion=${trustVersion} mode=${mode} accepted=${String(
+          result.accepted
+        )} trusted=${String(result.trusted)} reason=${result.reason} warnings=${warnings.length}`
+      );
+    });
+  });
 }
 
 async function main() {
+  const trustVersion = normalizeTrustVersion(process.env.INTENTOS_TRUST_VERSION);
   const relayA = "relay-a";
   const relayB = "relay-b";
 
@@ -268,19 +279,23 @@ async function main() {
     throw new Error("missing completed receipt for relay-b");
   }
 
-  const relayAPolicy = enforceReceiptPolicy(relayA, relayACompleted);
-  const relayBPolicy = enforceReceiptPolicy(relayB, relayBCompleted);
+  const relayAPolicy = enforceReceiptPolicy(relayA, relayACompleted, trustVersion);
+  const relayBPolicy = enforceReceiptPolicy(relayB, relayBCompleted, trustVersion);
 
   verifyReceiptInRelay(relayB, relayACompleted);
   verifyReceiptInRelay(relayA, relayBCompleted);
 
   console.log(
-    `DEMO POLICY: ${relayA} mode=${relayAPolicy.mode} trusted=${String(relayAPolicy.trusted)}`
+    `DEMO POLICY: ${relayA} trustVersion=${trustVersion} mode=${relayAPolicy.mode} trusted=${String(
+      relayAPolicy.trusted
+    )}`
   );
   console.log(
-    `DEMO POLICY: ${relayB} mode=${relayBPolicy.mode} trusted=${String(relayBPolicy.trusted)}`
+    `DEMO POLICY: ${relayB} trustVersion=${trustVersion} mode=${relayBPolicy.mode} trusted=${String(
+      relayBPolicy.trusted
+    )}`
   );
-  runTamperedPolicyPreview(relayACompleted);
+  runTrustModePreview(relayACompleted, trustVersion);
   console.log("DEMO OK: relay-a receipt verified by relay-b trust store");
   console.log("DEMO OK: relay-b receipt verified by relay-a trust store");
 }

@@ -24,6 +24,12 @@ Each receipt MUST contain:
 
 Receipts are runtime artifacts and are immutable once created.
 
+Optional trust extension fields:
+- `trustVersion` (`v2` when v2 trust semantics are emitted; absent implies v1 compatibility)
+- `issuer`
+- `sigAlg`
+- `signature`
+
 ## Metadata Contract by Type
 - `receipt.admitted`: `{}`
 - `receipt.denied`: `{ "reason": "<string>" }`
@@ -73,6 +79,11 @@ A routed receipt message MUST contain:
 - Failures in sink write or delivery enqueue MUST be swallowed.
 - Admission logic, capability checks, and execution state transitions are unchanged.
 - Receipt side effects MUST NOT alter execution semantics.
+
+## Trust Semantics Versioning
+- Runtime trust policy selection is controlled by `INTENTOS_TRUST_VERSION=v1|v2` (default `v1`).
+- v2 trust semantics are defined in `/Users/solo446/Documents/AIMTP/docs/intentos-federation.md`.
+- This receipts contract remains execution-semantics stable across trust versions.
 
 ## Examples
 Receipt (completed):

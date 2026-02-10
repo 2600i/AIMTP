@@ -20,6 +20,17 @@ describe("IntentOS receipt policy enforcement", () => {
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
   const trustedKeys = Object.freeze({ [issuer]: publicKeyPem });
 
+  test("default behavior remains v1/off when trust version is not set", () => {
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope({ receipt: baseReceipt() }, { logger });
+    expect(result.mode).toBe("off");
+    expect(result.trustVersion).toBe("v1");
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("missing signature");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   test("off mode: unverified receipt passes", () => {
     const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
     const result = processReceiptEnvelope({ receipt: baseReceipt() }, { mode: "off", logger });
@@ -68,6 +79,64 @@ describe("IntentOS receipt policy enforcement", () => {
     });
   });
 
+  test("v2 enforce rejects unsigned terminal receipts", () => {
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: baseReceipt() },
+      { mode: "enforce", trustVersion: "v2", logger }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.trustVersion).toBe("v2");
+    expect(result.reason).toBe("missing signature for terminal receipt");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("v2 warn emits warnings for unsigned/untrusted receipts", () => {
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: baseReceipt() },
+      { mode: "warn", trustVersion: "v2", logger }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("missing signature for terminal receipt");
+    expect(logger.warn).toHaveBeenCalledTimes(1);
+  });
+
+  test("v2 enforce accepts signed and verified receipts", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      { mode: "enforce", trustVersion: "v2", trustedReceiptKeys: trustedKeys, logger }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+    expect(result.trustVersion).toBe("v2");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("v2 enforce rejects unknown issuer even when receipt is signed", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        trustedReceiptKeys: Object.freeze({}),
+        logger
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe(`untrusted issuer: ${issuer}`);
+    expect(result.trustVersion).toBe("v2");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
   test("tampered signed receipt fails verification in enforce mode", () => {
     const signed = signReceipt(baseReceipt(), privateKeyPem, issuer);
     const tampered: Receipt = {
@@ -87,4 +156,3 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
-

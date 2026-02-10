@@ -1,6 +1,8 @@
 import {
   Receipt,
+  ReceiptTrustVersion,
   TrustedReceiptPublicKeys,
+  normalizeReceiptTrustVersion,
   parseTrustedReceiptKeysJson,
   verifyReceipt
 } from "../../protocol/intentos-receipts";
@@ -13,6 +15,8 @@ export interface ReceiptPolicyLogger {
 
 export interface ProcessReceiptEnvelopeOptions {
   readonly mode?: ReceiptPolicyMode | string;
+  readonly trustVersion?: ReceiptTrustVersion | string;
+  readonly maxTimestampSkewSec?: number;
   readonly trustedReceiptKeysJson?: string;
   readonly trustedReceiptKeys?: TrustedReceiptPublicKeys;
   readonly logger?: ReceiptPolicyLogger;
@@ -23,6 +27,7 @@ export interface ProcessReceiptEnvelopeResult {
   readonly accepted: boolean;
   readonly trusted: boolean;
   readonly mode: ReceiptPolicyMode;
+  readonly trustVersion: ReceiptTrustVersion;
   readonly reason: string;
   readonly receipt: Receipt | null;
 }
@@ -54,6 +59,38 @@ function readMode(options: ProcessReceiptEnvelopeOptions): ReceiptPolicyMode {
     return normalizeReceiptPolicyMode(options.mode);
   }
   return normalizeReceiptPolicyMode(options.env?.INTENTOS_RECEIPT_POLICY);
+}
+
+function readTrustVersion(options: ProcessReceiptEnvelopeOptions): ReceiptTrustVersion {
+  if (options.trustVersion !== undefined) {
+    return normalizeReceiptTrustVersion(options.trustVersion);
+  }
+  return normalizeReceiptTrustVersion(options.env?.INTENTOS_TRUST_VERSION);
+}
+
+function parseOptionalNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function readMaxTimestampSkewSec(options: ProcessReceiptEnvelopeOptions): number | undefined {
+  if (options.maxTimestampSkewSec !== undefined) {
+    return parseOptionalNonNegativeInt(options.maxTimestampSkewSec);
+  }
+  return parseOptionalNonNegativeInt(options.env?.INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC);
 }
 
 function readTrustedKeys(
@@ -107,12 +144,14 @@ function extractReceiptEnvelope(envelope: unknown): Receipt | null {
 function warnReceiptPolicy(
   logger: ReceiptPolicyLogger,
   mode: ReceiptPolicyMode,
+  trustVersion: ReceiptTrustVersion,
   reason: string,
   receipt: Receipt | null
 ): void {
   logger.warn({
     event: "intentos_receipt_policy_warning",
     mode,
+    trust_version: trustVersion,
     reason,
     receipt_id: receipt?.receiptId ?? null,
     envelope_id: receipt?.envelopeId ?? null,
@@ -126,24 +165,30 @@ export function processReceiptEnvelope(
   options: ProcessReceiptEnvelopeOptions = {}
 ): ProcessReceiptEnvelopeResult {
   const mode = readMode(options);
+  const trustVersion = readTrustVersion(options);
+  const maxTimestampSkewSec = readMaxTimestampSkewSec(options);
   const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
   const { trustedKeys, configError } = readTrustedKeys(options);
   const receipt = extractReceiptEnvelope(envelope);
   if (!receipt) {
     const reason = "missing receipt";
     if (mode === "warn") {
-      warnReceiptPolicy(logger, mode, reason, null);
+      warnReceiptPolicy(logger, mode, trustVersion, reason, null);
     }
     return {
       accepted: mode !== "enforce",
       trusted: false,
       mode,
+      trustVersion,
       reason,
       receipt: null
     };
   }
 
-  const verification = verifyReceipt(receipt, trustedKeys);
+  const verification = verifyReceipt(receipt, trustedKeys, {
+    trustVersion,
+    maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
+  });
   const reason =
     verification.verified || !configError
       ? verification.reason
@@ -154,19 +199,21 @@ export function processReceiptEnvelope(
       accepted: true,
       trusted: true,
       mode,
+      trustVersion,
       reason,
       receipt
     };
   }
 
   if (mode === "warn") {
-    warnReceiptPolicy(logger, mode, reason, receipt);
+    warnReceiptPolicy(logger, mode, trustVersion, reason, receipt);
   }
 
   return {
     accepted: mode !== "enforce",
     trusted: false,
     mode,
+    trustVersion,
     reason,
     receipt
   };

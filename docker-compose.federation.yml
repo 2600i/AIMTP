@@ -20,6 +20,7 @@ services:
       INTENTOS_RECEIPTS_DELIVER: "on"
       INTENTOS_RECEIPTS_SIGN: "on"
       INTENTOS_RECEIPTS_ISSUER: "relay://a"
+      INTENTOS_TRUST_VERSION: "${INTENTOS_TRUST_VERSION:-v1}"
       # Demo-only key material for local federation interop testing.
       INTENTOS_RECEIPTS_PRIVATE_KEY: |-
         -----BEGIN PRIVATE KEY-----
@@ -49,6 +50,7 @@ services:
       INTENTOS_RECEIPTS_DELIVER: "on"
       INTENTOS_RECEIPTS_SIGN: "on"
       INTENTOS_RECEIPTS_ISSUER: "relay://b"
+      INTENTOS_TRUST_VERSION: "${INTENTOS_TRUST_VERSION:-v1}"
       # Demo-only key material for local federation interop testing.
       INTENTOS_RECEIPTS_PRIVATE_KEY: |-
         -----BEGIN PRIVATE KEY-----

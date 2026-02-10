@@ -46,3 +46,34 @@ Mode semantics:
 - Missing capability in enforce mode MUST return `403` with `code=capability_required`.
 - Invalid capability (bad format/signature/aud/expired/scope mismatch) in enforce mode MUST return `403` with `code=capability_invalid`.
 - The UI MUST surface read errors from those API calls to the user without attempting fallback writes.
+
+## IntentOS v0.3 (Versioned Trust Semantics for Receipts)
+
+IntentOS v0.3 introduces versioned trust semantics for receipt verification and policy without changing execution state transitions.
+
+### Version Selection
+
+- `INTENTOS_TRUST_VERSION=v1|v2` selects trust semantics. Default is `v1`.
+- v1 behavior remains frozen and backward compatible.
+- v2 behavior is additive and policy-gated.
+
+### v2 Trust Requirements
+
+- Trusted terminal receipts (`receipt.denied|receipt.completed|receipt.failed`) require valid signing proof.
+- Issuer identity MUST resolve to a configured trusted key.
+- Verification MUST use deterministic v2 canonicalization rules.
+
+### Policy Modes
+
+- `INTENTOS_RECEIPT_POLICY=off|warn|enforce` behavior remains unchanged structurally:
+  - `off` continues processing.
+  - `warn` continues and emits warnings on trust failures.
+  - `enforce` rejects untrusted receipt acceptance.
+- Policy controls receipt trust acceptance only. It MUST NOT alter execution semantics.
+
+### Replay Linkage (v2)
+
+- v2 trust verification binds receipt trust to:
+  - `envelopeId + intentId + issuer + type + timestamp + metadata`
+- Timestamp sanity bounds MAY be enforced when configured.
+- Persistent anti-replay storage is out of scope in this phase.
