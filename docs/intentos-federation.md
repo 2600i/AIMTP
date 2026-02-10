@@ -2,6 +2,18 @@
 
 This document defines federation security boundaries for IntentOS receipts. It is intentionally minimal: boundaries, verification, and compatibility constraints only.
 
+## IntentOS v2 Reference Milestone
+
+IntentOS v2 trust semantics are now the reference opt-in trust layer for receipts. This is the line in the sand for v2 behavior.
+
+- v2 trust semantics are opt-in via `INTENTOS_TRUST_VERSION=v2`; v1 remains the default.
+- Deterministic canonicalization and Ed25519 signatures remain the trust proof basis.
+- Trusted acceptance requires issuer identity plus lookup in a trusted key map.
+- Policy gating remains `off|warn|enforce`.
+- Execution semantics are unchanged (`admit/deny/dispatch/complete/fail` behavior is not altered by trust policy).
+- In this repository, `v0.1.39+` is the v2 reference line for operators and implementers.
+- For downstream forks without aligned version tags, use the post-v2-merge baseline commit as the reference line.
+
 ## Threat Model (Brief)
 - Forged receipts: an attacker fabricates `receipt.*` objects that look valid.
 - Replay: old but valid receipts are replayed to mislead state consumers.
@@ -66,6 +78,39 @@ Policy behavior when a receipt envelope is processed:
 - `enforce`: unverified receipts are rejected from trusted receipt processing; runtime continues running and does not crash.
 
 Verified receipts are marked trusted and accepted in all modes.
+
+## Migration: v1 → v2 (Operators)
+
+### Minimal Recommended Environment
+
+```sh
+INTENTOS_TRUST_VERSION=v2
+INTENTOS_RECEIPT_POLICY=enforce
+INTENTOS_TRUSTED_RECEIPT_KEYS_JSON='{"relay://X":"<PUBLIC_KEY_PEM>"}'
+```
+
+Optional hardening:
+
+```sh
+INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC=300
+```
+
+### Behavior Changes in v2
+
+- `v2 + enforce`:
+  - unsigned terminal receipts are rejected
+  - tampered signed receipts are rejected (invalid signature)
+  - unknown issuer receipts are rejected even when signed
+- `v2 + warn`:
+  - processing continues
+  - warnings are emitted for unsigned, tampered, or unknown-issuer receipts
+
+### What Does NOT Change
+
+- IntentOS execution semantics do not change (`admit/deny/dispatch/complete/fail`).
+- Handler behavior and routing logic do not change.
+- Transport/network/orchestration behavior does not change.
+- v1 remains available and default unless `INTENTOS_TRUST_VERSION=v2` is explicitly set.
 
 ## IntentOS v2 Trust Semantics (Versioned Successor)
 This section defines the versioned successor to frozen v1 semantics. v1 remains default unless `INTENTOS_TRUST_VERSION=v2` is set.
@@ -200,3 +245,13 @@ This section defines the versioned successor to frozen v1 semantics. v1 remains 
 - Signed receipts are optional in v1.
 - v1 receipt verification is local and best-effort, based on local trust configuration.
 - Future versions that alter trust behavior MUST introduce explicit versioned trust semantics and MUST NOT silently reinterpret v1 behavior.
+
+## Trust Roadmap (v3, Non-binding)
+
+The following items are directional only. They are not commitments and have no guaranteed delivery order.
+
+- Key rotation and explicit key validity windows.
+- Delegated issuance and chain-of-trust models for multi-relay environments.
+- Trust bundles for portable multi-issuer trust distribution.
+
+Any future trust changes MUST be versioned and opt-in. v1/v2 behavior MUST NOT be silently reinterpreted.
