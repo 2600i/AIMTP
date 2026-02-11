@@ -1,0 +1,22 @@
+{
+  "branch": "main",
+  "remote": "origin",
+  "tagPrefix": "v",
+  "checks": [
+    "npm test",
+    "npm run build"
+  ],
+  "preflight rules": [
+    "noDetachedHead",
+    "onMainOnly",
+    "cleanWorkingTree",
+    "localMainMatchesRemote"
+  ],
+  "preflight": {
+    "allowPrereleaseRelease": false
+  },
+  "githubRelease": {
+    "enabled": false,
+    "generateNotes": true
+  }
+}
