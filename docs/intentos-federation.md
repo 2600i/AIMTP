@@ -255,6 +255,9 @@ IntentOS v3 trust design is currently captured as a draft proposal for structure
 An experimental, opt-in trust bundle loader is available for receipt-policy trust key configuration only.
 
 - New optional env: `INTENTOS_TRUST_BUNDLE_PATH=/path/to/trust-bundle.json`
+- New optional env: `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=on|off` (default `off`)
+- New optional env: `INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON='{"signer://name":"<PUBLIC_KEY_PEM>"}'`
+- New optional env: `INTENTOS_TRUST_BUNDLE_SIGNER_ALLOWLIST='signer://a,signer://b'`
 - Loader behavior:
   - Reads the JSON file from disk.
   - Performs structural validation (bundle object with `issuers`, issuer entries with `keys[]`, and key entries containing `publicKeyPem`).
@@ -263,6 +266,19 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
   - Evaluates keys in stable bundle order.
   - Resolves each issuer to active keys at evaluation time `T`, where a key is active when `(notBefore absent OR T >= notBefore) AND (notAfter absent OR T < notAfter)`.
   - Attempts signature verification against each active key in order until one succeeds.
+- Signed bundle behavior (bundle path only):
+  - Signature verification is opt-in and disabled by default.
+  - If `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=off`, unsigned bundles are accepted (backward compatible).
+  - If `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=on`, the bundle must include:
+    - `bundleVersion: "v3"`
+    - `bundleId` (string)
+    - `issuedAtSec` (number)
+    - `signer` (string signer issuer ID)
+    - `sigAlg: "ed25519"`
+    - `signature` (base64)
+  - Signature input is canonical JSON of the bundle with `signature` excluded, using deterministic stable key sorting.
+  - Signer key resolution is local-only from `INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON` (no network fetch).
+  - When signer allowlist is set, only listed signer IDs are accepted.
 - Precedence:
   - If both `INTENTOS_TRUST_BUNDLE_PATH` and `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` are set, the bundle path source takes precedence.
 - Scope boundary:
@@ -271,6 +287,32 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
   - IntentOS execution semantics remain unchanged.
 
 For bundle-path verification, evaluation time `T` uses `receipt.timestamp` when it is present and numeric; otherwise it uses current unix time (`Date.now()/1000`). Unknown issuers fail as `unknown issuer`, issuers with no active keys fail as `no active key for issuer`, and failures across all active keys fail as `signature invalid for all active keys`.
+
+When bundle signatures are required, bundle configuration failures use specific reasons:
+
+- `bundle signature required`
+- `unknown bundle signer`
+- `bundle signature invalid`
+- `bundle signer not allowed`
+- `bundle malformed`
+
+Short signed bundle example:
+
+```json
+{
+  "bundleVersion": "v3",
+  "bundleId": "bundle-prod-2026-02-11",
+  "issuedAtSec": 1767225600,
+  "signer": "signer://relay-admin",
+  "sigAlg": "ed25519",
+  "signature": "BASE64_SIGNATURE",
+  "issuers": {
+    "relay://north-1": {
+      "keys": [{ "publicKeyPem": "-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----\\n" }]
+    }
+  }
+}
+```
 
 ### v3 Rotation Guidance (Bundle Path)
 
@@ -288,7 +330,15 @@ When `INTENTOS_RECEIPT_POLICY=warn` and bundle-path verification fails, runtime 
 - Includes truncated `attemptReasons` (first three reasons only)
 - No extra diagnostics event is emitted in `off` or `enforce`
 
-Example bundle file: `examples/trust-bundle.json`
+Example unsigned bundle file: `examples/trust-bundle.json`
+
+Example signed bundle file: `examples/trust-bundle.signed.example.json`
+
+Signing helper:
+
+```bash
+node tools/trust-bundle-sign.mjs --in examples/trust-bundle.json --out trust-bundle.signed.json --signer signer://relay-admin --private-key-pem /path/signer-private-key.pem
+```
 
 ## Trust Roadmap (v3, Non-binding)
 

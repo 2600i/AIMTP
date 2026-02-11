@@ -1,4 +1,4 @@
-import { generateKeyPairSync } from "node:crypto";
+import { generateKeyPairSync, sign as signBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,11 +16,81 @@ function baseReceipt(): Receipt {
   };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stableStringifyJson(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("non_finite_number");
+    }
+    return Object.is(value, -0) ? "0" : JSON.stringify(value);
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringifyJson(entry)).join(",")}]`;
+  }
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort();
+    const parts = keys.map((key) => `${JSON.stringify(key)}:${stableStringifyJson(value[key])}`);
+    return `{${parts.join(",")}}`;
+  }
+  throw new Error(`unsupported_value_type:${typeof value}`);
+}
+
+function canonicalizeTrustBundleForSigning(bundle: Record<string, unknown>): Buffer {
+  return Buffer.from(
+    stableStringifyJson({
+      ...bundle,
+      signature: undefined
+    }),
+    "utf8"
+  );
+}
+
+function signTrustBundle(
+  bundle: Record<string, unknown>,
+  signer: string,
+  privateKeyPem: string
+): Record<string, unknown> {
+  const signable = {
+    ...bundle,
+    signer,
+    sigAlg: "ed25519",
+    signature: undefined
+  };
+  const signature = signBytes(null, canonicalizeTrustBundleForSigning(signable), privateKeyPem).toString(
+    "base64"
+  );
+  return {
+    ...signable,
+    signature
+  };
+}
+
 describe("IntentOS receipt policy enforcement", () => {
   const issuer = "relay://policy-test";
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const bundleSigner = "signer://policy-admin";
+  const { publicKey: bundleSignerPublicKey, privateKey: bundleSignerPrivateKey } =
+    generateKeyPairSync("ed25519");
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+  const bundleSignerPrivateKeyPem = bundleSignerPrivateKey
+    .export({ type: "pkcs8", format: "pem" })
+    .toString();
+  const bundleSignerPublicKeyPem = bundleSignerPublicKey.export({ type: "spki", format: "pem" }).toString();
   const trustedKeys = Object.freeze({ [issuer]: publicKeyPem });
   const tempDirs: string[] = [];
 
@@ -49,6 +119,25 @@ describe("IntentOS receipt policy enforcement", () => {
   function parseWarnJsonPayload(warnArg: unknown): Record<string, unknown> {
     expect(typeof warnArg).toBe("string");
     return JSON.parse(String(warnArg)) as Record<string, unknown>;
+  }
+
+  function baseUnsignedV3Bundle(): Record<string, unknown> {
+    return {
+      bundleVersion: "v3",
+      bundleId: "trust-bundle-policy-v3",
+      issuedAtSec: 1767225600,
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    };
   }
 
   test("default behavior remains v1/off when trust version is not set", () => {
@@ -179,6 +268,186 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.trusted).toBe(true);
     expect(result.reason).toBe("signature valid");
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("loads unsigned bundle when signature requirement is off", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "off"
+        }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
+  test("rejects unsigned bundle when signature requirement is on", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: JSON.stringify({
+            [bundleSigner]: bundleSignerPublicKeyPem
+          })
+        }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: bundle signature required");
+  });
+
+  test("accepts signed bundle when trusted signer is configured", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundle = signTrustBundle(baseUnsignedV3Bundle(), bundleSigner, bundleSignerPrivateKeyPem);
+    const trustBundlePath = writeTrustBundle(trustBundle);
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: JSON.stringify({
+            [bundleSigner]: bundleSignerPublicKeyPem
+          })
+        }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
+  test("rejects signed bundle when signer is not trusted", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundle = signTrustBundle(baseUnsignedV3Bundle(), bundleSigner, bundleSignerPrivateKeyPem);
+    const trustBundlePath = writeTrustBundle(trustBundle);
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: JSON.stringify({
+            "signer://someone-else": bundleSignerPublicKeyPem
+          })
+        }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: unknown bundle signer");
+  });
+
+  test("rejects tampered signed bundle", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundle = signTrustBundle(baseUnsignedV3Bundle(), bundleSigner, bundleSignerPrivateKeyPem);
+    const tamperedTrustBundle = {
+      ...trustBundle,
+      bundleId: "trust-bundle-policy-v3-tampered"
+    };
+    const trustBundlePath = writeTrustBundle(tamperedTrustBundle);
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: JSON.stringify({
+            [bundleSigner]: bundleSignerPublicKeyPem
+          })
+        }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: bundle signature invalid");
+  });
+
+  test("rejects signer not in allowlist", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundle = signTrustBundle(baseUnsignedV3Bundle(), bundleSigner, bundleSignerPrivateKeyPem);
+    const trustBundlePath = writeTrustBundle(trustBundle);
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: JSON.stringify({
+            [bundleSigner]: bundleSignerPublicKeyPem
+          }),
+          INTENTOS_TRUST_BUNDLE_SIGNER_ALLOWLIST: "signer://another-admin"
+        }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: bundle signer not allowed");
+  });
+
+  test("canonicalization is deterministic for signed bundle verification", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const signedBundle = signTrustBundle(baseUnsignedV3Bundle(), bundleSigner, bundleSignerPrivateKeyPem);
+    const reorderedBundle: Record<string, unknown> = {
+      signer: signedBundle.signer,
+      issuedAtSec: signedBundle.issuedAtSec,
+      sigAlg: signedBundle.sigAlg,
+      bundleId: signedBundle.bundleId,
+      signature: signedBundle.signature,
+      bundleVersion: signedBundle.bundleVersion,
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              publicKeyPem,
+              kid: "relay-a",
+              alg: "ed25519"
+            }
+          ]
+        }
+      }
+    };
+    const trustBundlePath = writeTrustBundle(reorderedBundle);
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: JSON.stringify({
+            [bundleSigner]: bundleSignerPublicKeyPem
+          })
+        }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
   });
 
   test("bundle validity window: active key accepts", () => {
@@ -737,6 +1006,25 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.trusted).toBe(true);
     expect(result.reason).toBe("signature valid");
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("bundle signature env is ignored when bundle path is not set", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: "{not-json",
+          INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: JSON.stringify({ [issuer]: publicKeyPem })
+        }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
   });
 
   test("v2 enforce rejects unknown issuer even when receipt is signed", () => {

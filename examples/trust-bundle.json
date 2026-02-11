@@ -1,8 +1,10 @@
 {
-  "bundleVersion": "intentos-trust-bundle/v1",
+  "bundleVersion": "v3",
+  "bundleId": "example-federation-trust-v3-unsigned",
+  "issuedAtSec": 1767225600,
   "metadata": {
     "name": "example-federation-trust",
-    "description": "Example trust bundle for receipt issuer verification"
+    "description": "Example unsigned trust bundle for receipt issuer verification"
   },
   "issuers": {
     "relay://north-1": {
