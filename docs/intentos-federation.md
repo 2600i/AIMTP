@@ -258,13 +258,18 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
 - New optional env: `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=on|off` (default `off`)
 - New optional env: `INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON='{"signer://name":"<PUBLIC_KEY_PEM>"}'`
 - New optional env: `INTENTOS_TRUST_BUNDLE_SIGNER_ALLOWLIST='signer://a,signer://b'`
+- New optional env: `INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON='{"signers":[],"issuerKeys":{}}'`
 - Loader behavior:
   - Reads the JSON file from disk.
   - Performs structural validation (bundle object with `issuers`, issuer entries with `keys[]`, and key entries containing `publicKeyPem`).
+  - Supports optional `revocations` with:
+    - `revocations.signers: string[]` (bundle signer IDs)
+    - `revocations.issuerKeys: { [issuer]: string[] }` (issuer key fingerprints)
   - Supports optional key validity fields `notBefore` and `notAfter` (unix seconds).
   - Validates key windows: when both fields are present, `notBefore` MUST be less than `notAfter`.
   - Evaluates keys in stable bundle order.
   - Resolves each issuer to active keys at evaluation time `T`, where a key is active when `(notBefore absent OR T >= notBefore) AND (notAfter absent OR T < notAfter)`.
+  - Excludes revoked issuer keys before signature verification by matching computed key fingerprint.
   - Attempts signature verification against each active key in order until one succeeds.
 - Signed bundle behavior (bundle path only):
   - Signature verification is opt-in and disabled by default.
@@ -279,8 +284,10 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
   - Signature input is canonical JSON of the bundle with `signature` excluded, using deterministic stable key sorting.
   - Signer key resolution is local-only from `INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON` (no network fetch).
   - When signer allowlist is set, only listed signer IDs are accepted.
+  - If signer ID is listed in `revocations.signers`, bundle loading fails with `bundle signer revoked`.
 - Precedence:
   - If both `INTENTOS_TRUST_BUNDLE_PATH` and `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` are set, the bundle path source takes precedence.
+  - If `INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON` is set, it overrides `bundle.revocations`.
 - Scope boundary:
   - This changes receipt-policy trust resolution for bundle path usage only.
   - Existing `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` behavior is unchanged (no validity-window semantics).
@@ -294,6 +301,7 @@ When bundle signatures are required, bundle configuration failures use specific 
 - `unknown bundle signer`
 - `bundle signature invalid`
 - `bundle signer not allowed`
+- `bundle signer revoked`
 - `bundle malformed`
 
 Short signed bundle example:
@@ -306,6 +314,12 @@ Short signed bundle example:
   "signer": "signer://relay-admin",
   "sigAlg": "ed25519",
   "signature": "BASE64_SIGNATURE",
+  "revocations": {
+    "signers": ["signer://compromised-admin"],
+    "issuerKeys": {
+      "relay://north-1": ["4f6f2f755f10"]
+    }
+  },
   "issuers": {
     "relay://north-1": {
       "keys": [{ "publicKeyPem": "-----BEGIN PUBLIC KEY-----\\n...\\n-----END PUBLIC KEY-----\\n" }]
@@ -313,6 +327,8 @@ Short signed bundle example:
   }
 }
 ```
+
+Key fingerprint revocation note: use the fingerprint shown in bundle diagnostics (`attempts[].fingerprint`) for the target issuer key, then add it under `revocations.issuerKeys[issuer]`.
 
 ### v3 Rotation Guidance (Bundle Path)
 

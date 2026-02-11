@@ -24,6 +24,7 @@ export interface ProcessReceiptEnvelopeOptions {
   readonly trustBundleRequireSignature?: boolean | string;
   readonly trustBundleTrustedSignersJson?: string;
   readonly trustBundleSignerAllowlist?: string;
+  readonly trustBundleRevocationsJson?: string;
   readonly trustedReceiptKeysJson?: string;
   readonly trustedReceiptKeys?: TrustedReceiptPublicKeys;
   readonly logger?: ReceiptPolicyLogger;
@@ -60,6 +61,7 @@ type TrustBundleSignerKeys = Readonly<Record<string, string>>;
 interface ParsedTrustBundle {
   readonly bundle: Record<string, unknown>;
   readonly issuerKeys: TrustBundleIssuerKeySet;
+  readonly revocations: TrustBundleRevocations;
 }
 
 interface TrustBundleSignaturePolicy {
@@ -72,6 +74,7 @@ interface TrustBundleSignaturePolicy {
 interface TrustedKeyResolution {
   readonly trustedKeys: TrustedReceiptPublicKeys;
   readonly bundleIssuerKeys: TrustBundleIssuerKeySet | null;
+  readonly bundleRevocations: TrustBundleRevocations | null;
   readonly configError: string | null;
 }
 
@@ -97,11 +100,22 @@ interface BundleReceiptVerificationResult {
   readonly attemptReport: TrustBundleVerificationAttemptReport | null;
 }
 
+interface TrustBundleRevocations {
+  readonly signers: ReadonlySet<string>;
+  readonly issuerKeys: Readonly<Record<string, ReadonlySet<string>>>;
+}
+
 const TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON = "bundle signature required";
 const TRUST_BUNDLE_UNKNOWN_SIGNER_REASON = "unknown bundle signer";
 const TRUST_BUNDLE_SIGNATURE_INVALID_REASON = "bundle signature invalid";
 const TRUST_BUNDLE_SIGNER_NOT_ALLOWED_REASON = "bundle signer not allowed";
+const TRUST_BUNDLE_SIGNER_REVOKED_REASON = "bundle signer revoked";
 const TRUST_BUNDLE_MALFORMED_REASON = "bundle malformed";
+const EMPTY_TRUST_BUNDLE_REVOCATIONS: TrustBundleRevocations = Object.freeze({
+  signers: Object.freeze(new Set<string>()),
+  issuerKeys: Object.freeze({})
+});
+const EMPTY_TRUST_BUNDLE_KEY_REVOCATIONS: ReadonlySet<string> = Object.freeze(new Set<string>());
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -291,7 +305,8 @@ function parseTrustedReceiptKeysBundle(raw: string): ParsedTrustBundle {
 
   return {
     bundle: parsed,
-    issuerKeys: parseTrustedReceiptKeysBundleObject(parsed)
+    issuerKeys: parseTrustedReceiptKeysBundleObject(parsed),
+    revocations: parseTrustBundleRevocations(parsed.revocations)
   };
 }
 
@@ -352,6 +367,89 @@ function parseTrustBundleTrustedSignersJson(raw: unknown): TrustBundleSignerKeys
   return Object.freeze(normalized);
 }
 
+function parseTrustBundleRevocations(raw: unknown): TrustBundleRevocations {
+  if (raw === undefined) {
+    return EMPTY_TRUST_BUNDLE_REVOCATIONS;
+  }
+  if (!isPlainObject(raw)) {
+    throw new Error("trust_bundle_revocations_must_be_object");
+  }
+
+  const signers = new Set<string>();
+  if (Object.prototype.hasOwnProperty.call(raw, "signers")) {
+    if (!Array.isArray(raw.signers)) {
+      throw new Error("trust_bundle_revocations_signers_must_be_array");
+    }
+    for (const signerEntry of raw.signers) {
+      const signer = normalizeNonEmptyString(signerEntry);
+      if (!signer) {
+        throw new Error("trust_bundle_revocations_signers_entries_must_be_non_empty_strings");
+      }
+      signers.add(signer);
+    }
+  }
+
+  const issuerKeys: Record<string, ReadonlySet<string>> = {};
+  if (Object.prototype.hasOwnProperty.call(raw, "issuerKeys")) {
+    if (!isPlainObject(raw.issuerKeys)) {
+      throw new Error("trust_bundle_revocations_issuer_keys_must_be_object");
+    }
+    Object.entries(raw.issuerKeys).forEach(([issuerId, fingerprintsEntry]) => {
+      const issuer = normalizeNonEmptyString(issuerId);
+      if (!issuer) {
+        throw new Error("trust_bundle_revocations_issuer_keys_issuer_must_be_non_empty_string");
+      }
+      if (!Array.isArray(fingerprintsEntry)) {
+        throw new Error("trust_bundle_revocations_issuer_keys_entries_must_be_array");
+      }
+      const fingerprints = new Set<string>();
+      for (const fingerprintEntry of fingerprintsEntry) {
+        const fingerprint = normalizeNonEmptyString(fingerprintEntry).toLowerCase();
+        if (!fingerprint) {
+          throw new Error(
+            "trust_bundle_revocations_issuer_keys_fingerprint_must_be_non_empty_string"
+          );
+        }
+        fingerprints.add(fingerprint);
+      }
+      issuerKeys[issuer] = Object.freeze(fingerprints);
+    });
+  }
+
+  return Object.freeze({
+    signers: Object.freeze(signers),
+    issuerKeys: Object.freeze(issuerKeys)
+  });
+}
+
+function parseTrustBundleRevocationsJson(raw: unknown): TrustBundleRevocations {
+  const input = normalizeNonEmptyString(raw);
+  if (!input) {
+    throw new Error("invalid_trust_bundle_revocations_json:empty");
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`invalid_trust_bundle_revocations_json:${message}`);
+  }
+  return parseTrustBundleRevocations(parsed);
+}
+
+function readTrustBundleRevocations(
+  parsedBundle: ParsedTrustBundle,
+  options: ProcessReceiptEnvelopeOptions
+): TrustBundleRevocations {
+  const overrideRevocationsJson =
+    options.trustBundleRevocationsJson ?? options.env?.INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON;
+  if (overrideRevocationsJson !== undefined) {
+    return parseTrustBundleRevocationsJson(overrideRevocationsJson);
+  }
+  return parsedBundle.revocations;
+}
+
 function readTrustBundleSignaturePolicy(
   options: ProcessReceiptEnvelopeOptions
 ): TrustBundleSignaturePolicy {
@@ -399,7 +497,8 @@ function canonicalizeTrustBundleForSigning(bundle: Record<string, unknown>): Buf
 function verifyTrustBundleSignature(
   bundle: Record<string, unknown>,
   trustedSigners: TrustBundleSignerKeys,
-  signerAllowlist: ReadonlySet<string> | null
+  signerAllowlist: ReadonlySet<string> | null,
+  revokedSigners: ReadonlySet<string>
 ): string | null {
   const bundleVersion = normalizeNonEmptyString(bundle.bundleVersion);
   const bundleId = normalizeNonEmptyString(bundle.bundleId);
@@ -412,6 +511,9 @@ function verifyTrustBundleSignature(
   const signature = normalizeNonEmptyString(bundle.signature);
   if (!signer || !sigAlg || !signature) {
     return TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON;
+  }
+  if (revokedSigners.has(signer)) {
+    return TRUST_BUNDLE_SIGNER_REVOKED_REASON;
   }
   if (bundleVersion !== "v3" || !bundleId || issuedAtSec === undefined || issuedAtSec < 0) {
     return TRUST_BUNDLE_MALFORMED_REASON;
@@ -456,6 +558,7 @@ function readTrustedKeys(
     return {
       trustedKeys: options.trustedReceiptKeys,
       bundleIssuerKeys: null,
+      bundleRevocations: null,
       configError: null
     };
   }
@@ -469,22 +572,26 @@ function readTrustedKeys(
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: null,
+        bundleRevocations: null,
         configError: signaturePolicy.configError
       };
     }
 
     try {
       const parsedBundle = loadTrustedReceiptKeysFromBundlePath(bundlePath);
+      const bundleRevocations = readTrustBundleRevocations(parsedBundle, options);
       if (signaturePolicy.requireSignature) {
         const signatureError = verifyTrustBundleSignature(
           parsedBundle.bundle,
           signaturePolicy.trustedSigners,
-          signaturePolicy.signerAllowlist
+          signaturePolicy.signerAllowlist,
+          bundleRevocations.signers
         );
         if (signatureError) {
           return {
             trustedKeys: EMPTY_TRUSTED_KEYS,
             bundleIssuerKeys: null,
+            bundleRevocations: null,
             configError: signatureError
           };
         }
@@ -493,6 +600,7 @@ function readTrustedKeys(
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: parsedBundle.issuerKeys,
+        bundleRevocations,
         configError: null
       };
     } catch (error) {
@@ -500,6 +608,7 @@ function readTrustedKeys(
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: null,
+        bundleRevocations: null,
         configError: signaturePolicy.requireSignature ? TRUST_BUNDLE_MALFORMED_REASON : message
       };
     }
@@ -511,6 +620,7 @@ function readTrustedKeys(
     return {
       trustedKeys: parseTrustedReceiptKeysJson(trustedKeysJson),
       bundleIssuerKeys: null,
+      bundleRevocations: null,
       configError: null
     };
   } catch (error) {
@@ -518,6 +628,7 @@ function readTrustedKeys(
     return {
       trustedKeys: EMPTY_TRUSTED_KEYS,
       bundleIssuerKeys: null,
+      bundleRevocations: null,
       configError: message
     };
   }
@@ -654,6 +765,7 @@ function buildBundleAttemptReport(
 function verifyReceiptWithBundleIssuerKeys(
   receipt: Receipt,
   bundleIssuerKeys: TrustBundleIssuerKeySet,
+  bundleRevocations: TrustBundleRevocations,
   trustVersion: ReceiptTrustVersion,
   maxTimestampSkewSec: number | undefined
 ): BundleReceiptVerificationResult {
@@ -673,6 +785,7 @@ function verifyReceiptWithBundleIssuerKeys(
 
   const evaluationTimeSec = resolveReceiptEvaluationTimeSec(receipt);
   const issuerKeys = bundleIssuerKeys[issuer];
+  const revokedIssuerKeys = bundleRevocations.issuerKeys[issuer] ?? EMPTY_TRUST_BUNDLE_KEY_REVOCATIONS;
   if (!issuerKeys) {
     return {
       verification: {
@@ -694,17 +807,19 @@ function verifyReceiptWithBundleIssuerKeys(
   let successfulVerification: ReceiptVerificationResult | null = null;
   for (let index = 0; index < issuerKeys.length; index += 1) {
     const key = issuerKeys[index];
-    const active = isBundleKeyActiveAtTime(key, evaluationTimeSec);
+    const fingerprint = computeBundleKeyFingerprint(key.publicKeyPem);
+    const revoked = revokedIssuerKeys.has(fingerprint);
+    const active = !revoked && isBundleKeyActiveAtTime(key, evaluationTimeSec);
     const attempt: TrustBundleVerificationAttempt = {
       index,
-      fingerprint: computeBundleKeyFingerprint(key.publicKeyPem),
+      fingerprint,
       active
     };
 
     if (!active) {
       attempts.push({
         ...attempt,
-        reasonSkipped: resolveBundleSkipReason(key, evaluationTimeSec)
+        reasonSkipped: revoked ? "revoked" : resolveBundleSkipReason(key, evaluationTimeSec)
       });
       continue;
     }
@@ -770,7 +885,7 @@ export function processReceiptEnvelope(
   const trustVersion = readTrustVersion(options);
   const maxTimestampSkewSec = readMaxTimestampSkewSec(options);
   const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
-  const { trustedKeys, bundleIssuerKeys, configError } = readTrustedKeys(options);
+  const { trustedKeys, bundleIssuerKeys, bundleRevocations, configError } = readTrustedKeys(options);
   const receipt = extractReceiptEnvelope(envelope);
   if (!receipt) {
     const reason = "missing receipt";
@@ -788,7 +903,13 @@ export function processReceiptEnvelope(
   }
 
   const bundleVerification = bundleIssuerKeys
-    ? verifyReceiptWithBundleIssuerKeys(receipt, bundleIssuerKeys, trustVersion, maxTimestampSkewSec)
+    ? verifyReceiptWithBundleIssuerKeys(
+      receipt,
+      bundleIssuerKeys,
+      bundleRevocations ?? EMPTY_TRUST_BUNDLE_REVOCATIONS,
+      trustVersion,
+      maxTimestampSkewSec
+    )
     : null;
   const verification = bundleVerification
     ? bundleVerification.verification
