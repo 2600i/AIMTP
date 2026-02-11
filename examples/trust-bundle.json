@@ -6,6 +6,12 @@
     "name": "example-federation-trust",
     "description": "Example unsigned trust bundle for receipt issuer verification"
   },
+  "revocations": {
+    "signers": ["signer://north-admin-compromised-2026-02"],
+    "issuerKeys": {
+      "relay://north-1": ["4f6f2f755f10"]
+    }
+  },
   "issuers": {
     "relay://north-1": {
       "keys": [

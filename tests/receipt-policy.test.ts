@@ -1,4 +1,4 @@
-import { generateKeyPairSync, sign as signBytes } from "node:crypto";
+import { createHash, generateKeyPairSync, sign as signBytes } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -77,6 +77,11 @@ function signTrustBundle(
     ...signable,
     signature
   };
+}
+
+function computeBundleKeyFingerprint(publicKeyPem: string): string {
+  const normalizedPem = publicKeyPem.replace(/\r\n/g, "\n").trim();
+  return createHash("sha256").update(normalizedPem).digest("hex").slice(0, 12);
 }
 
 describe("IntentOS receipt policy enforcement", () => {
@@ -408,6 +413,59 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.reason).toContain("trusted key config: bundle signer not allowed");
   });
 
+  test("rejects bundle when signer is revoked and signature is required", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundle = signTrustBundle(baseUnsignedV3Bundle(), bundleSigner, bundleSignerPrivateKeyPem);
+    const trustBundlePath = writeTrustBundle({
+      ...trustBundle,
+      revocations: {
+        signers: [bundleSigner]
+      }
+    });
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "on",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: JSON.stringify({
+            [bundleSigner]: bundleSignerPublicKeyPem
+          })
+        }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: bundle signer revoked");
+  });
+
+  test("revoked signer does not block when signature requirement is off", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      ...baseUnsignedV3Bundle(),
+      signer: bundleSigner,
+      revocations: {
+        signers: [bundleSigner]
+      }
+    });
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE: "off"
+        }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
   test("canonicalization is deterministic for signed bundle verification", () => {
     const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
     const signedBundle = signTrustBundle(baseUnsignedV3Bundle(), bundleSigner, bundleSignerPrivateKeyPem);
@@ -663,6 +721,73 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.reason).toBe("signature valid");
   });
 
+  test("revoked issuer key is excluded and rotation still succeeds with alternate key", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const { publicKey: revokedPublicKey, privateKey: revokedPrivateKey } = generateKeyPairSync("ed25519");
+    const { publicKey: alternatePublicKey, privateKey: alternatePrivateKey } = generateKeyPairSync("ed25519");
+    const revokedPublicKeyPem = revokedPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const revokedPrivateKeyPem = revokedPrivateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const alternatePublicKeyPem = alternatePublicKey.export({ type: "spki", format: "pem" }).toString();
+    const alternatePrivateKeyPem = alternatePrivateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const revokedFingerprint = computeBundleKeyFingerprint(revokedPublicKeyPem);
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "v3",
+      bundleId: "trust-bundle-revocation-rotation",
+      issuedAtSec: nowSec - 30,
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-revoked",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: revokedPublicKeyPem
+            },
+            {
+              kid: "relay-alternate",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: alternatePublicKeyPem
+            }
+          ]
+        }
+      },
+      revocations: {
+        issuerKeys: {
+          [issuer]: [revokedFingerprint]
+        }
+      }
+    });
+
+    const revokedSigned = signReceipt(baseReceipt(), revokedPrivateKeyPem, issuer, { trustVersion: "v2" });
+    const revokedResult = processReceiptEnvelope(
+      { receipt: revokedSigned },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(revokedResult.accepted).toBe(false);
+    expect(revokedResult.trusted).toBe(false);
+    expect(revokedResult.reason).toBe("signature invalid for all active keys");
+
+    const alternateSigned = signReceipt(baseReceipt(), alternatePrivateKeyPem, issuer, { trustVersion: "v2" });
+    const alternateResult = processReceiptEnvelope(
+      { receipt: alternateSigned },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(alternateResult.accepted).toBe(true);
+    expect(alternateResult.trusted).toBe(true);
+    expect(alternateResult.reason).toBe("signature valid");
+  });
+
   test("bundle verification returns specific reason when all active keys fail", () => {
     const nowSec = Math.floor(Date.now() / 1000);
     const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
@@ -885,6 +1010,135 @@ describe("IntentOS receipt policy enforcement", () => {
       expect(secondAttempts).toHaveLength(1);
       expect(firstAttempts[0].fingerprint).toBe(secondAttempts[0].fingerprint);
       expect(String(firstAttempts[0].fingerprint)).toMatch(/^[a-f0-9]{12}$/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("env revocations override bundle revocations", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const revokedFingerprint = computeBundleKeyFingerprint(publicKeyPem);
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "v3",
+      bundleId: "trust-bundle-revocation-override",
+      issuedAtSec: Math.floor(Date.now() / 1000) - 30,
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-primary",
+              alg: "ed25519",
+              publicKeyPem
+            }
+          ]
+        }
+      },
+      revocations: {
+        issuerKeys: {
+          [issuer]: [revokedFingerprint]
+        }
+      }
+    });
+
+    const withoutOverride = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(withoutOverride.accepted).toBe(false);
+    expect(withoutOverride.trusted).toBe(false);
+    expect(withoutOverride.reason).toBe("no active key for issuer");
+
+    const withOverride = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON: JSON.stringify({
+            signers: [],
+            issuerKeys: {}
+          })
+        }
+      }
+    );
+    expect(withOverride.accepted).toBe(true);
+    expect(withOverride.trusted).toBe(true);
+    expect(withOverride.reason).toBe("signature valid");
+  });
+
+  test("revoked key selection remains deterministic across repeated evaluations", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const revokedFingerprint = computeBundleKeyFingerprint(publicKeyPem);
+    const { publicKey: alternatePublicKey } = generateKeyPairSync("ed25519");
+    const alternatePublicKeyPem = alternatePublicKey.export({ type: "spki", format: "pem" }).toString();
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "v3",
+      bundleId: "trust-bundle-revocation-determinism",
+      issuedAtSec: nowSec - 30,
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-revoked",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem
+            },
+            {
+              kid: "relay-alternate",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: alternatePublicKeyPem
+            }
+          ]
+        }
+      },
+      revocations: {
+        issuerKeys: {
+          [issuer]: [revokedFingerprint]
+        }
+      }
+    });
+
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const firstResult = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "warn",
+          trustVersion: "v2",
+          env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+        }
+      );
+      const secondResult = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "warn",
+          trustVersion: "v2",
+          env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+        }
+      );
+
+      expect(firstResult.reason).toBe("signature invalid for all active keys");
+      expect(secondResult.reason).toBe("signature invalid for all active keys");
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+
+      const firstEvent = parseWarnJsonPayload(warnSpy.mock.calls[0][0]);
+      const secondEvent = parseWarnJsonPayload(warnSpy.mock.calls[1][0]);
+      expect(firstEvent.attempts).toEqual(secondEvent.attempts);
+
+      const attempts = firstEvent.attempts as Array<Record<string, unknown>>;
+      expect(attempts[0].reasonSkipped).toBe("revoked");
+      expect(attempts[0].active).toBe(false);
+      expect(attempts[0].fingerprint).toBe(revokedFingerprint);
     } finally {
       warnSpy.mockRestore();
     }
