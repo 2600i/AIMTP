@@ -1,0 +1,25 @@
+{
+  "bundleVersion": "v3",
+  "bundleId": "example-federation-trust-v3-signed",
+  "issuedAtSec": 1767225600,
+  "signer": "signer://relay-admin",
+  "sigAlg": "ed25519",
+  "signature": "REPLACE_WITH_BASE64_SIGNATURE",
+  "metadata": {
+    "name": "example-federation-trust",
+    "description": "Example signed trust bundle for receipt issuer verification"
+  },
+  "issuers": {
+    "relay://north-1": {
+      "keys": [
+        {
+          "kid": "north-1-2026q1",
+          "alg": "ed25519",
+          "notBefore": 1766361600,
+          "notAfter": 1775001600,
+          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_BASE64_KEY_MATERIAL\n-----END PUBLIC KEY-----\n"
+        }
+      ]
+    }
+  }
+}

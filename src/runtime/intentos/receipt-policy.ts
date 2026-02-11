@@ -8,7 +8,7 @@ import {
   verifyReceipt
 } from "../../protocol/intentos-receipts";
 import { readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { createHash, createPublicKey, verify } from "node:crypto";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -21,6 +21,9 @@ export interface ProcessReceiptEnvelopeOptions {
   readonly trustVersion?: ReceiptTrustVersion | string;
   readonly maxTimestampSkewSec?: number;
   readonly trustBundlePath?: string;
+  readonly trustBundleRequireSignature?: boolean | string;
+  readonly trustBundleTrustedSignersJson?: string;
+  readonly trustBundleSignerAllowlist?: string;
   readonly trustedReceiptKeysJson?: string;
   readonly trustedReceiptKeys?: TrustedReceiptPublicKeys;
   readonly logger?: ReceiptPolicyLogger;
@@ -52,6 +55,19 @@ interface TrustBundleKey {
 }
 
 type TrustBundleIssuerKeySet = Readonly<Record<string, ReadonlyArray<TrustBundleKey>>>;
+type TrustBundleSignerKeys = Readonly<Record<string, string>>;
+
+interface ParsedTrustBundle {
+  readonly bundle: Record<string, unknown>;
+  readonly issuerKeys: TrustBundleIssuerKeySet;
+}
+
+interface TrustBundleSignaturePolicy {
+  readonly requireSignature: boolean;
+  readonly trustedSigners: TrustBundleSignerKeys;
+  readonly signerAllowlist: ReadonlySet<string> | null;
+  readonly configError: string | null;
+}
 
 interface TrustedKeyResolution {
   readonly trustedKeys: TrustedReceiptPublicKeys;
@@ -81,8 +97,43 @@ interface BundleReceiptVerificationResult {
   readonly attemptReport: TrustBundleVerificationAttemptReport | null;
 }
 
+const TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON = "bundle signature required";
+const TRUST_BUNDLE_UNKNOWN_SIGNER_REASON = "unknown bundle signer";
+const TRUST_BUNDLE_SIGNATURE_INVALID_REASON = "bundle signature invalid";
+const TRUST_BUNDLE_SIGNER_NOT_ALLOWED_REASON = "bundle signer not allowed";
+const TRUST_BUNDLE_MALFORMED_REASON = "bundle malformed";
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stableStringifyJson(value: unknown): string {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("non_finite_number");
+    }
+    return Object.is(value, -0) ? "0" : JSON.stringify(value);
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringifyJson(entry)).join(",")}]`;
+  }
+  if (isPlainObject(value)) {
+    const keys = Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort();
+    const parts = keys.map((key) => `${JSON.stringify(key)}:${stableStringifyJson(value[key])}`);
+    return `{${parts.join(",")}}`;
+  }
+  throw new Error(`unsupported_value_type:${typeof value}`);
 }
 
 function normalizeReceiptPolicyMode(
@@ -135,6 +186,17 @@ function normalizeNonEmptyString(value: unknown): string {
   return value.trim();
 }
 
+function normalizeBooleanOnOff(value: unknown, fallback = false): boolean {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "on") {
+    return true;
+  }
+  if (normalized === "off") {
+    return false;
+  }
+  return fallback;
+}
+
 function parseOptionalUnixSeconds(value: unknown): number | undefined {
   if (typeof value === "number") {
     return Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -153,25 +215,13 @@ function parseOptionalUnixSeconds(value: unknown): number | undefined {
   return parsed;
 }
 
-function parseTrustedReceiptKeysBundle(raw: string): TrustBundleIssuerKeySet {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(`invalid_trust_bundle_json:${message}`);
-  }
-
-  if (!isPlainObject(parsed)) {
-    throw new Error("trust_bundle_must_be_object");
-  }
-
-  if (!isPlainObject(parsed.issuers)) {
+function parseTrustedReceiptKeysBundleObject(bundle: Record<string, unknown>): TrustBundleIssuerKeySet {
+  if (!isPlainObject(bundle.issuers)) {
     throw new Error("trust_bundle_issuers_must_be_object");
   }
 
   const normalized: Record<string, ReadonlyArray<TrustBundleKey>> = {};
-  Object.entries(parsed.issuers).forEach(([issuerId, issuerEntry]) => {
+  Object.entries(bundle.issuers).forEach(([issuerId, issuerEntry]) => {
     const issuer = normalizeNonEmptyString(issuerId);
     if (!issuer) {
       throw new Error("trust_bundle_issuer_id_must_be_non_empty_string");
@@ -226,7 +276,26 @@ function parseTrustedReceiptKeysBundle(raw: string): TrustBundleIssuerKeySet {
   return Object.freeze(normalized);
 }
 
-function loadTrustedReceiptKeysFromBundlePath(bundlePath: string): TrustBundleIssuerKeySet {
+function parseTrustedReceiptKeysBundle(raw: string): ParsedTrustBundle {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`invalid_trust_bundle_json:${message}`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error("trust_bundle_must_be_object");
+  }
+
+  return {
+    bundle: parsed,
+    issuerKeys: parseTrustedReceiptKeysBundleObject(parsed)
+  };
+}
+
+function loadTrustedReceiptKeysFromBundlePath(bundlePath: string): ParsedTrustBundle {
   let rawBundle = "";
   try {
     rawBundle = readFileSync(bundlePath, "utf8");
@@ -235,6 +304,142 @@ function loadTrustedReceiptKeysFromBundlePath(bundlePath: string): TrustBundleIs
     throw new Error(`invalid_trust_bundle_path:${message}`);
   }
   return parseTrustedReceiptKeysBundle(rawBundle);
+}
+
+function parseTrustBundleSignerAllowlist(raw: unknown): ReadonlySet<string> | null {
+  const input = normalizeNonEmptyString(raw);
+  if (!input) {
+    return null;
+  }
+
+  const signers = input
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+  if (signers.length === 0) {
+    throw new Error("invalid_trust_bundle_signer_allowlist");
+  }
+  return new Set(signers);
+}
+
+function parseTrustBundleTrustedSignersJson(raw: unknown): TrustBundleSignerKeys {
+  const input = normalizeNonEmptyString(raw);
+  if (!input) {
+    return Object.freeze({});
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(input);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`invalid_trust_bundle_trusted_signers_json:${message}`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error("trust_bundle_trusted_signers_json_must_be_object");
+  }
+
+  const normalized: Record<string, string> = {};
+  Object.entries(parsed).forEach(([signer, value]) => {
+    const normalizedSigner = normalizeNonEmptyString(signer);
+    const normalizedPublicKey = normalizeNonEmptyString(value);
+    if (!normalizedSigner || !normalizedPublicKey) {
+      throw new Error("trust_bundle_trusted_signers_json_entries_must_be_non_empty_strings");
+    }
+    normalized[normalizedSigner] = normalizedPublicKey;
+  });
+  return Object.freeze(normalized);
+}
+
+function readTrustBundleSignaturePolicy(
+  options: ProcessReceiptEnvelopeOptions
+): TrustBundleSignaturePolicy {
+  const requireSignature = normalizeBooleanOnOff(
+    options.trustBundleRequireSignature ?? options.env?.INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE
+  );
+  if (!requireSignature) {
+    return {
+      requireSignature,
+      trustedSigners: Object.freeze({}),
+      signerAllowlist: null,
+      configError: null
+    };
+  }
+
+  try {
+    return {
+      requireSignature,
+      trustedSigners: parseTrustBundleTrustedSignersJson(
+        options.trustBundleTrustedSignersJson ?? options.env?.INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON
+      ),
+      signerAllowlist: parseTrustBundleSignerAllowlist(
+        options.trustBundleSignerAllowlist ?? options.env?.INTENTOS_TRUST_BUNDLE_SIGNER_ALLOWLIST
+      ),
+      configError: null
+    };
+  } catch {
+    return {
+      requireSignature,
+      trustedSigners: Object.freeze({}),
+      signerAllowlist: null,
+      configError: TRUST_BUNDLE_MALFORMED_REASON
+    };
+  }
+}
+
+function canonicalizeTrustBundleForSigning(bundle: Record<string, unknown>): Buffer {
+  const canonicalPayload = {
+    ...bundle,
+    signature: undefined
+  };
+  return Buffer.from(stableStringifyJson(canonicalPayload), "utf8");
+}
+
+function verifyTrustBundleSignature(
+  bundle: Record<string, unknown>,
+  trustedSigners: TrustBundleSignerKeys,
+  signerAllowlist: ReadonlySet<string> | null
+): string | null {
+  const bundleVersion = normalizeNonEmptyString(bundle.bundleVersion);
+  const bundleId = normalizeNonEmptyString(bundle.bundleId);
+  const issuedAtSec =
+    typeof bundle.issuedAtSec === "number" && Number.isFinite(bundle.issuedAtSec)
+      ? bundle.issuedAtSec
+      : undefined;
+  const signer = normalizeNonEmptyString(bundle.signer);
+  const sigAlg = normalizeNonEmptyString(bundle.sigAlg).toLowerCase();
+  const signature = normalizeNonEmptyString(bundle.signature);
+  if (!signer || !sigAlg || !signature) {
+    return TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON;
+  }
+  if (bundleVersion !== "v3" || !bundleId || issuedAtSec === undefined || issuedAtSec < 0) {
+    return TRUST_BUNDLE_MALFORMED_REASON;
+  }
+  if (signerAllowlist && !signerAllowlist.has(signer)) {
+    return TRUST_BUNDLE_SIGNER_NOT_ALLOWED_REASON;
+  }
+
+  const signerPublicKeyPem = normalizeNonEmptyString(trustedSigners[signer]);
+  if (!signerPublicKeyPem) {
+    return TRUST_BUNDLE_UNKNOWN_SIGNER_REASON;
+  }
+  if (sigAlg !== "ed25519") {
+    return TRUST_BUNDLE_MALFORMED_REASON;
+  }
+
+  try {
+    const payload = canonicalizeTrustBundleForSigning(bundle);
+    const isValid = verify(
+      null,
+      payload,
+      createPublicKey(signerPublicKeyPem),
+      Buffer.from(signature, "base64")
+    );
+    return isValid ? null : TRUST_BUNDLE_SIGNATURE_INVALID_REASON;
+  } catch {
+    return TRUST_BUNDLE_MALFORMED_REASON;
+  }
 }
 
 function readMaxTimestampSkewSec(options: ProcessReceiptEnvelopeOptions): number | undefined {
@@ -259,10 +464,35 @@ function readTrustedKeys(
     options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
   );
   if (bundlePath) {
-    try {
+    const signaturePolicy = readTrustBundleSignaturePolicy(options);
+    if (signaturePolicy.configError) {
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
-        bundleIssuerKeys: loadTrustedReceiptKeysFromBundlePath(bundlePath),
+        bundleIssuerKeys: null,
+        configError: signaturePolicy.configError
+      };
+    }
+
+    try {
+      const parsedBundle = loadTrustedReceiptKeysFromBundlePath(bundlePath);
+      if (signaturePolicy.requireSignature) {
+        const signatureError = verifyTrustBundleSignature(
+          parsedBundle.bundle,
+          signaturePolicy.trustedSigners,
+          signaturePolicy.signerAllowlist
+        );
+        if (signatureError) {
+          return {
+            trustedKeys: EMPTY_TRUSTED_KEYS,
+            bundleIssuerKeys: null,
+            configError: signatureError
+          };
+        }
+      }
+
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: parsedBundle.issuerKeys,
         configError: null
       };
     } catch (error) {
@@ -270,7 +500,7 @@ function readTrustedKeys(
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: null,
-        configError: message
+        configError: signaturePolicy.requireSignature ? TRUST_BUNDLE_MALFORMED_REASON : message
       };
     }
   }
