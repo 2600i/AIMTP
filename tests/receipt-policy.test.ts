@@ -1,5 +1,5 @@
 import { generateKeyPairSync } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Receipt, signReceipt } from "../src/protocol/intentos-receipts";
@@ -39,6 +39,11 @@ describe("IntentOS receipt policy enforcement", () => {
     const filePath = path.join(dirPath, "trust-bundle.json");
     writeFileSync(filePath, JSON.stringify(bundle), "utf8");
     return filePath;
+  }
+
+  function receiptWithNumericTimestampFixture(): Receipt {
+    const fixturePath = path.join(__dirname, "fixtures", "intentos-receipt-numeric-timestamp.json");
+    return JSON.parse(readFileSync(fixturePath, "utf8")) as Receipt;
   }
 
   test("default behavior remains v1/off when trust version is not set", () => {
@@ -171,6 +176,211 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
+  test("bundle validity window: active key accepts", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              notBefore: nowSec - 60,
+              notAfter: nowSec + 60,
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
+  test("bundle validity window: not-yet-valid key rejects with no active key", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              notBefore: nowSec + 300,
+              notAfter: nowSec + 900,
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("no active key for issuer");
+  });
+
+  test("bundle validity window: expired key rejects with no active key", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              notBefore: nowSec - 900,
+              notAfter: nowSec - 300,
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("no active key for issuer");
+  });
+
+  test("bundle verification rejects unknown issuer", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        "relay://other-issuer": {
+          keys: [
+            {
+              kid: "relay-other",
+              alg: "ed25519",
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("unknown issuer");
+  });
+
+  test("bundle validity window: expired old key plus active new key succeeds", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const { publicKey: oldPublicKey } = generateKeyPairSync("ed25519");
+    const oldPublicKeyPem = oldPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-old",
+              alg: "ed25519",
+              notBefore: nowSec - 900,
+              notAfter: nowSec - 300,
+              publicKeyPem: oldPublicKeyPem
+            },
+            {
+              kid: "relay-new",
+              alg: "ed25519",
+              notBefore: nowSec - 60,
+              notAfter: nowSec + 900,
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
+  test("bundle evaluation time uses numeric receipt.timestamp when present", () => {
+    const fixtureReceipt = receiptWithNumericTimestampFixture();
+    const signed = signReceipt(fixtureReceipt, privateKeyPem, issuer, { trustVersion: "v2" });
+    const timestampSec = Number((fixtureReceipt as { timestamp?: unknown }).timestamp);
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              notBefore: timestampSec - 10,
+              notAfter: timestampSec + 10,
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
   test("rejects malformed trust bundle structure", () => {
     const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
     const trustBundlePath = writeTrustBundle({
@@ -196,6 +406,40 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.reason).toContain("trusted key config: trust_bundle_keys_must_be_array");
     expect(result.reason).toContain(issuer);
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("rejects trust bundle key windows where notBefore is not less than notAfter", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              notBefore: nowSec + 10,
+              notAfter: nowSec + 10,
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain(
+      "trusted key config: trust_bundle_key_window_must_have_notBefore_lt_notAfter"
+    );
   });
 
   test("bundle path keys override INTENTOS_TRUSTED_RECEIPT_KEYS_JSON", () => {
