@@ -9,6 +9,11 @@ import {
 } from "../../protocol/intentos-receipts";
 import { readFileSync } from "node:fs";
 import { createHash, createPublicKey, verify } from "node:crypto";
+import {
+  appendTransparencyEntry,
+  type TransparencyEntryType,
+  verifyTransparencyLog
+} from "./trust-transparency";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -75,6 +80,8 @@ interface TrustedKeyResolution {
   readonly trustedKeys: TrustedReceiptPublicKeys;
   readonly bundleIssuerKeys: TrustBundleIssuerKeySet | null;
   readonly bundleRevocations: TrustBundleRevocations | null;
+  readonly bundleHash: string | null;
+  readonly transparencyLog: TransparencyLogPolicy | null;
   readonly configError: string | null;
 }
 
@@ -105,12 +112,20 @@ interface TrustBundleRevocations {
   readonly issuerKeys: Readonly<Record<string, ReadonlySet<string>>>;
 }
 
+type TransparencyLogMode = "off" | "append" | "verify";
+
+interface TransparencyLogPolicy {
+  readonly mode: TransparencyLogMode;
+  readonly path: string;
+}
+
 const TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON = "bundle signature required";
 const TRUST_BUNDLE_UNKNOWN_SIGNER_REASON = "unknown bundle signer";
 const TRUST_BUNDLE_SIGNATURE_INVALID_REASON = "bundle signature invalid";
 const TRUST_BUNDLE_SIGNER_NOT_ALLOWED_REASON = "bundle signer not allowed";
 const TRUST_BUNDLE_SIGNER_REVOKED_REASON = "bundle signer revoked";
 const TRUST_BUNDLE_MALFORMED_REASON = "bundle malformed";
+const TRANSPARENCY_LOG_CHAIN_BROKEN_REASON = "transparency log chain broken";
 const EMPTY_TRUST_BUNDLE_REVOCATIONS: TrustBundleRevocations = Object.freeze({
   signers: Object.freeze(new Set<string>()),
   issuerKeys: Object.freeze({})
@@ -209,6 +224,31 @@ function normalizeBooleanOnOff(value: unknown, fallback = false): boolean {
     return false;
   }
   return fallback;
+}
+
+function normalizeTransparencyLogMode(value: unknown): TransparencyLogMode {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "append" || normalized === "verify" || normalized === "off") {
+    return normalized;
+  }
+  return "off";
+}
+
+function readTransparencyLogPolicy(
+  bundlePath: string,
+  options: ProcessReceiptEnvelopeOptions
+): TransparencyLogPolicy | null {
+  if (!bundlePath) {
+    return null;
+  }
+  const logPath = normalizeNonEmptyString(options.env?.INTENTOS_TRANSPARENCY_LOG_PATH);
+  if (!logPath) {
+    return null;
+  }
+  return {
+    mode: normalizeTransparencyLogMode(options.env?.INTENTOS_TRANSPARENCY_LOG_MODE),
+    path: logPath
+  };
 }
 
 function parseOptionalUnixSeconds(value: unknown): number | undefined {
@@ -551,6 +591,49 @@ function readMaxTimestampSkewSec(options: ProcessReceiptEnvelopeOptions): number
   return parseOptionalNonNegativeInt(options.env?.INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC);
 }
 
+function computeTrustBundleHash(bundle: Record<string, unknown>): string {
+  return createHash("sha256").update(stableStringifyJson(bundle)).digest("hex");
+}
+
+function hasTrustBundleRevocations(revocations: TrustBundleRevocations): boolean {
+  if (revocations.signers.size > 0) {
+    return true;
+  }
+  return Object.values(revocations.issuerKeys).some((fingerprints) => fingerprints.size > 0);
+}
+
+function summarizeTrustBundleRevocations(revocations: TrustBundleRevocations): string {
+  const issuerKeyCount = Object.values(revocations.issuerKeys).reduce(
+    (sum, fingerprints) => sum + fingerprints.size,
+    0
+  );
+  return `signers=${revocations.signers.size}; issuerKeys=${issuerKeyCount}`;
+}
+
+function appendTransparencyPolicyEvent(
+  transparencyLog: TransparencyLogPolicy | null,
+  type: TransparencyEntryType,
+  bundleHash?: string,
+  reason?: string
+): void {
+  if (!transparencyLog || transparencyLog.mode !== "append") {
+    return;
+  }
+  try {
+    appendTransparencyEntry(
+      {
+        timestamp: new Date().toISOString(),
+        type,
+        ...(bundleHash ? { bundleHash } : {}),
+        ...(reason ? { reason } : {})
+      },
+      { path: transparencyLog.path }
+    );
+  } catch {
+    // Transparency logging is best-effort and must not alter receipt policy decisions.
+  }
+}
+
 function readTrustedKeys(
   options: ProcessReceiptEnvelopeOptions
 ): TrustedKeyResolution {
@@ -559,6 +642,8 @@ function readTrustedKeys(
       trustedKeys: options.trustedReceiptKeys,
       bundleIssuerKeys: null,
       bundleRevocations: null,
+      bundleHash: null,
+      transparencyLog: null,
       configError: null
     };
   }
@@ -566,19 +651,38 @@ function readTrustedKeys(
   const bundlePath = normalizeNonEmptyString(
     options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
   );
+  const transparencyLog = readTransparencyLogPolicy(bundlePath, options);
   if (bundlePath) {
+    if (transparencyLog?.mode === "verify") {
+      const verification = verifyTransparencyLog(transparencyLog.path);
+      if (!verification.valid) {
+        return {
+          trustedKeys: EMPTY_TRUSTED_KEYS,
+          bundleIssuerKeys: null,
+          bundleRevocations: null,
+          bundleHash: null,
+          transparencyLog,
+          configError: `${TRANSPARENCY_LOG_CHAIN_BROKEN_REASON} at entry ${verification.brokenAt ?? 1}`
+        };
+      }
+    }
+
     const signaturePolicy = readTrustBundleSignaturePolicy(options);
     if (signaturePolicy.configError) {
+      appendTransparencyPolicyEvent(transparencyLog, "bundle_rejected", undefined, signaturePolicy.configError);
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: null,
         bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog,
         configError: signaturePolicy.configError
       };
     }
 
     try {
       const parsedBundle = loadTrustedReceiptKeysFromBundlePath(bundlePath);
+      const bundleHash = computeTrustBundleHash(parsedBundle.bundle);
       const bundleRevocations = readTrustBundleRevocations(parsedBundle, options);
       if (signaturePolicy.requireSignature) {
         const signatureError = verifyTrustBundleSignature(
@@ -588,27 +692,45 @@ function readTrustedKeys(
           bundleRevocations.signers
         );
         if (signatureError) {
+          appendTransparencyPolicyEvent(transparencyLog, "bundle_rejected", bundleHash, signatureError);
           return {
             trustedKeys: EMPTY_TRUSTED_KEYS,
             bundleIssuerKeys: null,
             bundleRevocations: null,
+            bundleHash,
+            transparencyLog,
             configError: signatureError
           };
         }
+      }
+
+      appendTransparencyPolicyEvent(transparencyLog, "bundle_loaded", bundleHash);
+      if (hasTrustBundleRevocations(bundleRevocations)) {
+        appendTransparencyPolicyEvent(
+          transparencyLog,
+          "revocation_applied",
+          bundleHash,
+          summarizeTrustBundleRevocations(bundleRevocations)
+        );
       }
 
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: parsedBundle.issuerKeys,
         bundleRevocations,
+        bundleHash,
+        transparencyLog,
         configError: null
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      appendTransparencyPolicyEvent(transparencyLog, "bundle_rejected", undefined, message);
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: null,
         bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog,
         configError: signaturePolicy.requireSignature ? TRUST_BUNDLE_MALFORMED_REASON : message
       };
     }
@@ -621,6 +743,8 @@ function readTrustedKeys(
       trustedKeys: parseTrustedReceiptKeysJson(trustedKeysJson),
       bundleIssuerKeys: null,
       bundleRevocations: null,
+      bundleHash: null,
+      transparencyLog: null,
       configError: null
     };
   } catch (error) {
@@ -629,6 +753,8 @@ function readTrustedKeys(
       trustedKeys: EMPTY_TRUSTED_KEYS,
       bundleIssuerKeys: null,
       bundleRevocations: null,
+      bundleHash: null,
+      transparencyLog: null,
       configError: message
     };
   }
@@ -885,12 +1011,16 @@ export function processReceiptEnvelope(
   const trustVersion = readTrustVersion(options);
   const maxTimestampSkewSec = readMaxTimestampSkewSec(options);
   const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
-  const { trustedKeys, bundleIssuerKeys, bundleRevocations, configError } = readTrustedKeys(options);
+  const { trustedKeys, bundleIssuerKeys, bundleRevocations, bundleHash, transparencyLog, configError } =
+    readTrustedKeys(options);
   const receipt = extractReceiptEnvelope(envelope);
   if (!receipt) {
     const reason = "missing receipt";
     if (mode === "warn") {
       warnReceiptPolicy(logger, mode, trustVersion, reason, null);
+    }
+    if (mode === "enforce") {
+      appendTransparencyPolicyEvent(transparencyLog, "policy_reject", bundleHash ?? undefined, reason);
     }
     return {
       accepted: mode !== "enforce",
@@ -939,6 +1069,10 @@ export function processReceiptEnvelope(
     } else {
       warnReceiptPolicy(logger, mode, trustVersion, reason, receipt);
     }
+  }
+
+  if (mode === "enforce") {
+    appendTransparencyPolicyEvent(transparencyLog, "policy_reject", bundleHash ?? undefined, reason);
   }
 
   return {

@@ -356,6 +356,33 @@ Signing helper:
 node tools/trust-bundle-sign.mjs --in examples/trust-bundle.json --out trust-bundle.signed.json --signer signer://relay-admin --private-key-pem /path/signer-private-key.pem
 ```
 
+## v3 Transparency Log (Experimental)
+
+IntentOS v3 includes an opt-in local transparency log for trust-bundle and receipt-policy events. This is integrity-focused telemetry for operators and does not change trust or execution semantics.
+
+- `INTENTOS_TRANSPARENCY_LOG_PATH=/path/to/trust-log.jsonl`
+- `INTENTOS_TRANSPARENCY_LOG_MODE=off|append|verify` (default `off`)
+
+Behavior:
+
+- `off`: no transparency log reads/writes.
+- `append`: appends JSONL entries for:
+  - `bundle_loaded`
+  - `bundle_rejected`
+  - `revocation_applied`
+  - `policy_reject`
+- `verify`: verifies the full hash chain on bundle load and rejects bundle trust loading when the chain is broken.
+
+Use cases:
+
+- Audit trail for trust-bundle acceptance/rejection decisions.
+- Forensic review of bundle revocation and policy-rejection events after incidents.
+
+Scope note:
+
+- This is not a blockchain and does not provide global consensus.
+- It is a local append-only integrity chain (`prevHash -> entryHash -> chainHash`) intended for operator-controlled environments.
+
 ## Trust Roadmap (v3, Non-binding)
 
 The following items are directional only. They are not commitments and have no guaranteed delivery order.

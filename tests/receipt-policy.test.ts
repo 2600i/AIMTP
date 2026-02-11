@@ -116,6 +116,16 @@ describe("IntentOS receipt policy enforcement", () => {
     return filePath;
   }
 
+  function writeTransparencyLog(lines: ReadonlyArray<unknown>): string {
+    const dirPath = mkdtempSync(path.join(tmpdir(), "intentos-transparency-log-"));
+    tempDirs.push(dirPath);
+    const filePath = path.join(dirPath, "trust-log.jsonl");
+    const content =
+      lines.length > 0 ? `${lines.map((line) => JSON.stringify(line)).join("\n")}\n` : "";
+    writeFileSync(filePath, content, "utf8");
+    return filePath;
+  }
+
   function receiptWithNumericTimestampFixture(): Receipt {
     const fixturePath = path.join(__dirname, "fixtures", "intentos-receipt-numeric-timestamp.json");
     return JSON.parse(readFileSync(fixturePath, "utf8")) as Receipt;
@@ -1260,6 +1270,99 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.trusted).toBe(true);
     expect(result.reason).toBe("signature valid");
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("append mode logs bundle load and enforce policy rejection", () => {
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const transparencyLogPath = writeTransparencyLog([]);
+    const result = processReceiptEnvelope(
+      { receipt: baseReceipt() },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRANSPARENCY_LOG_PATH: transparencyLogPath,
+          INTENTOS_TRANSPARENCY_LOG_MODE: "append"
+        }
+      }
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    const entries = readFileSync(transparencyLogPath, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { type?: string });
+    const types = entries.map((entry) => entry.type);
+    expect(types).toContain("bundle_loaded");
+    expect(types).toContain("policy_reject");
+  });
+
+  test("append mode logs revocation_applied when bundle revocations are present", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      ...baseUnsignedV3Bundle(),
+      revocations: {
+        issuerKeys: {
+          [issuer]: ["deadbeef"]
+        }
+      }
+    });
+    const transparencyLogPath = writeTransparencyLog([]);
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRANSPARENCY_LOG_PATH: transparencyLogPath,
+          INTENTOS_TRANSPARENCY_LOG_MODE: "append"
+        }
+      }
+    );
+
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    const types = readFileSync(transparencyLogPath, "utf8")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((line) => line.length > 0)
+      .map((line) => JSON.parse(line) as { type?: string })
+      .map((entry) => entry.type);
+    expect(types).toContain("bundle_loaded");
+    expect(types).toContain("revocation_applied");
+  });
+
+  test("verify mode rejects bundle load when transparency chain is broken", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const transparencyLogPath = writeTransparencyLog([
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        entryHash: "bad-entry-hash",
+        chainHash: "bad-chain-hash"
+      }
+    ]);
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRANSPARENCY_LOG_PATH: transparencyLogPath,
+          INTENTOS_TRANSPARENCY_LOG_MODE: "verify"
+        }
+      }
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: transparency log chain broken at entry 1");
   });
 
   test("bundle signature env is ignored when bundle path is not set", () => {
