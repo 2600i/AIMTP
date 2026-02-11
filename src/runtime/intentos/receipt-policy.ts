@@ -8,6 +8,7 @@ import {
   verifyReceipt
 } from "../../protocol/intentos-receipts";
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -56,6 +57,28 @@ interface TrustedKeyResolution {
   readonly trustedKeys: TrustedReceiptPublicKeys;
   readonly bundleIssuerKeys: TrustBundleIssuerKeySet | null;
   readonly configError: string | null;
+}
+
+interface TrustBundleVerificationAttempt {
+  readonly index: number;
+  readonly fingerprint?: string;
+  readonly active: boolean;
+  readonly reasonSkipped?: string;
+  readonly verifyResult?: string;
+}
+
+interface TrustBundleVerificationAttemptReport {
+  readonly issuer: string;
+  readonly trustVersion: ReceiptTrustVersion;
+  readonly evaluationTimeSec: number;
+  readonly keysTotal: number;
+  readonly keysActive: number;
+  readonly attempts: ReadonlyArray<TrustBundleVerificationAttempt>;
+}
+
+interface BundleReceiptVerificationResult {
+  readonly verification: ReceiptVerificationResult;
+  readonly attemptReport: TrustBundleVerificationAttemptReport | null;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -311,6 +334,42 @@ function warnReceiptPolicy(
   });
 }
 
+function summarizeAttemptReasons(
+  attempts: ReadonlyArray<TrustBundleVerificationAttempt>,
+  limit = 3
+): ReadonlyArray<string> {
+  const reasons = attempts.flatMap((attempt) => {
+    if (attempt.reasonSkipped) {
+      return [`key[${attempt.index}]:${attempt.reasonSkipped}`];
+    }
+    if (attempt.verifyResult) {
+      return [`key[${attempt.index}]:${attempt.verifyResult}`];
+    }
+    return [];
+  });
+  return reasons.slice(0, limit);
+}
+
+function warnBundleVerificationAttempts(
+  logger: ReceiptPolicyLogger,
+  mode: ReceiptPolicyMode,
+  reason: string,
+  report: TrustBundleVerificationAttemptReport
+): void {
+  logger.warn({
+    event: "intentos_trust_bundle_verify_attempts",
+    mode,
+    reason,
+    issuer: report.issuer,
+    trustVersion: report.trustVersion,
+    evaluationTimeSec: report.evaluationTimeSec,
+    keysTotal: report.keysTotal,
+    keysActive: report.keysActive,
+    attemptReasons: summarizeAttemptReasons(report.attempts),
+    attempts: report.attempts
+  });
+}
+
 function resolveReceiptEvaluationTimeSec(receipt: Receipt): number {
   const candidate = parseOptionalUnixSeconds((receipt as { timestamp?: unknown }).timestamp);
   if (candidate !== undefined) {
@@ -325,59 +384,151 @@ function isBundleKeyActiveAtTime(key: TrustBundleKey, timestampSec: number): boo
   return hasStarted && hasNotExpired;
 }
 
+function normalizePublicKeyPemForFingerprint(publicKeyPem: string): string {
+  return publicKeyPem.replace(/\r\n/g, "\n").trim();
+}
+
+function computeBundleKeyFingerprint(publicKeyPem: string): string {
+  const normalizedPem = normalizePublicKeyPemForFingerprint(publicKeyPem);
+  return createHash("sha256").update(normalizedPem).digest("hex").slice(0, 12);
+}
+
+function resolveBundleSkipReason(key: TrustBundleKey, evaluationTimeSec: number): string {
+  if (key.notBefore !== undefined && evaluationTimeSec < key.notBefore) {
+    return "not yet valid";
+  }
+  if (key.notAfter !== undefined && evaluationTimeSec >= key.notAfter) {
+    return "expired";
+  }
+  return "inactive";
+}
+
+function buildBundleAttemptReport(
+  issuer: string,
+  trustVersion: ReceiptTrustVersion,
+  evaluationTimeSec: number,
+  issuerKeys: ReadonlyArray<TrustBundleKey>,
+  attempts: ReadonlyArray<TrustBundleVerificationAttempt>
+): TrustBundleVerificationAttemptReport {
+  const keysActive = attempts.filter((attempt) => attempt.active).length;
+  return {
+    issuer,
+    trustVersion,
+    evaluationTimeSec,
+    keysTotal: issuerKeys.length,
+    keysActive,
+    attempts
+  };
+}
+
 function verifyReceiptWithBundleIssuerKeys(
   receipt: Receipt,
   bundleIssuerKeys: TrustBundleIssuerKeySet,
   trustVersion: ReceiptTrustVersion,
   maxTimestampSkewSec: number | undefined
-): ReceiptVerificationResult {
+): BundleReceiptVerificationResult {
   const verificationOptions = {
     trustVersion,
     maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
   };
   const baseline = verifyReceipt(receipt, EMPTY_TRUSTED_KEYS, verificationOptions);
   if (baseline.verified || !baseline.reason.startsWith("untrusted issuer:")) {
-    return baseline;
+    return { verification: baseline, attemptReport: null };
   }
 
   const issuer = normalizeNonEmptyString(receipt.issuer);
   if (!issuer) {
-    return baseline;
-  }
-
-  const issuerKeys = bundleIssuerKeys[issuer];
-  if (!issuerKeys) {
-    return {
-      verified: false,
-      reason: "unknown issuer",
-      trustVersion: baseline.trustVersion
-    };
+    return { verification: baseline, attemptReport: null };
   }
 
   const evaluationTimeSec = resolveReceiptEvaluationTimeSec(receipt);
-  const activeKeys = issuerKeys.filter((key) => isBundleKeyActiveAtTime(key, evaluationTimeSec));
-  if (activeKeys.length === 0) {
+  const issuerKeys = bundleIssuerKeys[issuer];
+  if (!issuerKeys) {
     return {
-      verified: false,
-      reason: "no active key for issuer",
-      trustVersion: baseline.trustVersion
+      verification: {
+        verified: false,
+        reason: "unknown issuer",
+        trustVersion: baseline.trustVersion
+      },
+      attemptReport: buildBundleAttemptReport(
+        issuer,
+        baseline.trustVersion,
+        evaluationTimeSec,
+        [],
+        []
+      )
     };
   }
 
-  for (const key of activeKeys) {
-    const attempt = verifyReceipt(receipt, { [issuer]: key.publicKeyPem }, verificationOptions);
-    if (attempt.verified) {
-      return attempt;
+  const attempts: TrustBundleVerificationAttempt[] = [];
+  let successfulVerification: ReceiptVerificationResult | null = null;
+  for (let index = 0; index < issuerKeys.length; index += 1) {
+    const key = issuerKeys[index];
+    const active = isBundleKeyActiveAtTime(key, evaluationTimeSec);
+    const attempt: TrustBundleVerificationAttempt = {
+      index,
+      fingerprint: computeBundleKeyFingerprint(key.publicKeyPem),
+      active
+    };
+
+    if (!active) {
+      attempts.push({
+        ...attempt,
+        reasonSkipped: resolveBundleSkipReason(key, evaluationTimeSec)
+      });
+      continue;
     }
-    if (attempt.reason !== "invalid signature" && !attempt.reason.startsWith("verification error:")) {
-      return attempt;
+
+    if (successfulVerification) {
+      attempts.push({
+        ...attempt,
+        reasonSkipped: "skipped after successful verification"
+      });
+      continue;
+    }
+
+    const verifyAttempt = verifyReceipt(receipt, { [issuer]: key.publicKeyPem }, verificationOptions);
+    attempts.push({
+      ...attempt,
+      verifyResult: verifyAttempt.reason
+    });
+    if (verifyAttempt.verified) {
+      successfulVerification = verifyAttempt;
     }
   }
 
+  const attemptReport = buildBundleAttemptReport(
+    issuer,
+    baseline.trustVersion,
+    evaluationTimeSec,
+    issuerKeys,
+    attempts
+  );
+  if (successfulVerification) {
+    return {
+      verification: successfulVerification,
+      attemptReport
+    };
+  }
+
+  if (attemptReport.keysActive === 0) {
+    return {
+      verification: {
+        verified: false,
+        reason: "no active key for issuer",
+        trustVersion: baseline.trustVersion
+      },
+      attemptReport
+    };
+  }
+
   return {
-    verified: false,
-    reason: "invalid signature",
-    trustVersion: baseline.trustVersion
+    verification: {
+      verified: false,
+      reason: "signature invalid for all active keys",
+      trustVersion: baseline.trustVersion
+    },
+    attemptReport
   };
 }
 
@@ -406,8 +557,11 @@ export function processReceiptEnvelope(
     };
   }
 
-  const verification = bundleIssuerKeys
+  const bundleVerification = bundleIssuerKeys
     ? verifyReceiptWithBundleIssuerKeys(receipt, bundleIssuerKeys, trustVersion, maxTimestampSkewSec)
+    : null;
+  const verification = bundleVerification
+    ? bundleVerification.verification
     : verifyReceipt(receipt, trustedKeys, {
       trustVersion,
       maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
@@ -429,7 +583,11 @@ export function processReceiptEnvelope(
   }
 
   if (mode === "warn") {
-    warnReceiptPolicy(logger, mode, trustVersion, reason, receipt);
+    if (bundleVerification?.attemptReport) {
+      warnBundleVerificationAttempts(logger, mode, reason, bundleVerification.attemptReport);
+    } else {
+      warnReceiptPolicy(logger, mode, trustVersion, reason, receipt);
+    }
   }
 
   return {

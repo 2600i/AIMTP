@@ -260,7 +260,9 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
   - Performs structural validation (bundle object with `issuers`, issuer entries with `keys[]`, and key entries containing `publicKeyPem`).
   - Supports optional key validity fields `notBefore` and `notAfter` (unix seconds).
   - Validates key windows: when both fields are present, `notBefore` MUST be less than `notAfter`.
-  - Resolves each issuer to an ordered list of active keys at evaluation time `T`, where a key is active when `(notBefore absent OR T >= notBefore) AND (notAfter absent OR T < notAfter)`.
+  - Evaluates keys in stable bundle order.
+  - Resolves each issuer to active keys at evaluation time `T`, where a key is active when `(notBefore absent OR T >= notBefore) AND (notAfter absent OR T < notAfter)`.
+  - Attempts signature verification against each active key in order until one succeeds.
 - Precedence:
   - If both `INTENTOS_TRUST_BUNDLE_PATH` and `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` are set, the bundle path source takes precedence.
 - Scope boundary:
@@ -268,7 +270,23 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
   - Existing `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` behavior is unchanged (no validity-window semantics).
   - IntentOS execution semantics remain unchanged.
 
-For bundle-path verification, evaluation time `T` uses `receipt.timestamp` when it is present and numeric; otherwise it uses current unix time (`Date.now()/1000`). Unknown issuers fail as `unknown issuer`, issuers with no active keys fail as `no active key for issuer`, and active-key verification fails as `invalid signature` if no active key verifies.
+For bundle-path verification, evaluation time `T` uses `receipt.timestamp` when it is present and numeric; otherwise it uses current unix time (`Date.now()/1000`). Unknown issuers fail as `unknown issuer`, issuers with no active keys fail as `no active key for issuer`, and failures across all active keys fail as `signature invalid for all active keys`.
+
+### v3 Rotation Guidance (Bundle Path)
+
+- Add a new key with an overlapping validity window before retiring the old key.
+- Keep the old key active during overlap so existing in-flight receipts can still verify.
+- Retire the old key by setting `notAfter` once all expected receipts are signed by the new key.
+- Preserve key ordering in the bundle to keep evaluation and diagnostics deterministic.
+
+### v3 Warn-Mode Diagnostics Event
+
+When `INTENTOS_RECEIPT_POLICY=warn` and bundle-path verification fails, runtime emits a single structured event:
+
+- `event=intentos_trust_bundle_verify_attempts`
+- Includes: `reason`, `issuer`, `trustVersion`, `keysTotal`, `keysActive`
+- Includes truncated `attemptReasons` (first three reasons only)
+- No extra diagnostics event is emitted in `off` or `enforce`
 
 Example bundle file: `examples/trust-bundle.json`
 

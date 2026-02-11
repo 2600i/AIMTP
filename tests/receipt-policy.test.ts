@@ -46,6 +46,11 @@ describe("IntentOS receipt policy enforcement", () => {
     return JSON.parse(readFileSync(fixturePath, "utf8")) as Receipt;
   }
 
+  function parseWarnJsonPayload(warnArg: unknown): Record<string, unknown> {
+    expect(typeof warnArg).toBe("string");
+    return JSON.parse(String(warnArg)) as Record<string, unknown>;
+  }
+
   test("default behavior remains v1/off when trust version is not set", () => {
     const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
     const result = processReceiptEnvelope({ receipt: baseReceipt() }, { logger });
@@ -347,6 +352,92 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.reason).toBe("signature valid");
   });
 
+  test("bundle key rotation succeeds when first active key fails and second active key verifies", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const { publicKey: wrongPublicKey } = generateKeyPairSync("ed25519");
+    const wrongPublicKeyPem = wrongPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-rotation-old",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: wrongPublicKeyPem
+            },
+            {
+              kid: "relay-rotation-new",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
+  test("bundle verification returns specific reason when all active keys fail", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const { publicKey: wrongPublicKeyA } = generateKeyPairSync("ed25519");
+    const { publicKey: wrongPublicKeyB } = generateKeyPairSync("ed25519");
+    const wrongPublicKeyPemA = wrongPublicKeyA.export({ type: "spki", format: "pem" }).toString();
+    const wrongPublicKeyPemB = wrongPublicKeyB.export({ type: "spki", format: "pem" }).toString();
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: wrongPublicKeyPemA
+            },
+            {
+              kid: "relay-b",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: wrongPublicKeyPemB
+            }
+          ]
+        }
+      }
+    });
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toBe("signature invalid for all active keys");
+  });
+
   test("bundle evaluation time uses numeric receipt.timestamp when present", () => {
     const fixtureReceipt = receiptWithNumericTimestampFixture();
     const signed = signReceipt(fixtureReceipt, privateKeyPem, issuer, { trustVersion: "v2" });
@@ -379,6 +470,155 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.accepted).toBe(true);
     expect(result.trusted).toBe(true);
     expect(result.reason).toBe("signature valid");
+  });
+
+  test("warn mode emits bundle diagnostics event with expected fields", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const wrongPublicKeys = Array.from({ length: 4 }, () => generateKeyPairSync("ed25519").publicKey);
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: wrongPublicKeys.map((wrongPublicKey, index) => ({
+            kid: `relay-warn-${index + 1}`,
+            alg: "ed25519",
+            notBefore: nowSec - 120,
+            notAfter: nowSec + 120,
+            publicKeyPem: wrongPublicKey.export({ type: "spki", format: "pem" }).toString()
+          }))
+        }
+      }
+    });
+
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const result = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "warn",
+          trustVersion: "v2",
+          env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+        }
+      );
+      expect(result.accepted).toBe(true);
+      expect(result.trusted).toBe(false);
+      expect(result.reason).toBe("signature invalid for all active keys");
+
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const event = parseWarnJsonPayload(warnSpy.mock.calls[0][0]);
+      expect(event.event).toBe("intentos_trust_bundle_verify_attempts");
+      expect(event.reason).toBe("signature invalid for all active keys");
+      expect(event.issuer).toBe(issuer);
+      expect(event.trustVersion).toBe("v2");
+      expect(event.keysTotal).toBe(4);
+      expect(event.keysActive).toBe(4);
+      expect(event.attemptReasons).toEqual(expect.any(Array));
+      expect((event.attemptReasons as unknown[]).length).toBe(3);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("bundle diagnostics logs only in warn mode", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const { publicKey: wrongPublicKey } = generateKeyPairSync("ed25519");
+    const wrongPublicKeyPem = wrongPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-only-warn",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: wrongPublicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "off",
+          trustVersion: "v2",
+          env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+        }
+      );
+      processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+        }
+      );
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  test("bundle key fingerprint remains stable across repeated evaluations", () => {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const { publicKey: wrongPublicKey } = generateKeyPairSync("ed25519");
+    const wrongPublicKeyPem = wrongPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-fingerprint",
+              alg: "ed25519",
+              notBefore: nowSec - 120,
+              notAfter: nowSec + 120,
+              publicKeyPem: wrongPublicKeyPem
+            }
+          ]
+        }
+      }
+    });
+
+    const warnSpy = jest.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "warn",
+          trustVersion: "v2",
+          env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+        }
+      );
+      processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "warn",
+          trustVersion: "v2",
+          env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath }
+        }
+      );
+      expect(warnSpy).toHaveBeenCalledTimes(2);
+
+      const firstEvent = parseWarnJsonPayload(warnSpy.mock.calls[0][0]);
+      const secondEvent = parseWarnJsonPayload(warnSpy.mock.calls[1][0]);
+      const firstAttempts = firstEvent.attempts as Array<Record<string, unknown>>;
+      const secondAttempts = secondEvent.attempts as Array<Record<string, unknown>>;
+      expect(firstAttempts).toHaveLength(1);
+      expect(secondAttempts).toHaveLength(1);
+      expect(firstAttempts[0].fingerprint).toBe(secondAttempts[0].fingerprint);
+      expect(String(firstAttempts[0].fingerprint)).toMatch(/^[a-f0-9]{12}$/);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   test("rejects malformed trust bundle structure", () => {

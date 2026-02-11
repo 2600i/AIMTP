@@ -8,18 +8,18 @@
     "relay://north-1": {
       "keys": [
         {
-          "kid": "north-1-2025q4",
+          "kid": "north-1-old-2025q4",
           "alg": "ed25519",
           "notBefore": 1761955200,
-          "notAfter": 1767225600,
-          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_OLD_BASE64_KEY_MATERIAL\n-----END PUBLIC KEY-----\n"
+          "notAfter": 1769040000,
+          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_OLD_ROTATION_BASE64_KEY_MATERIAL\n-----END PUBLIC KEY-----\n"
         },
         {
-          "kid": "north-1-2026q1",
+          "kid": "north-1-new-2026q1",
           "alg": "ed25519",
-          "notBefore": 1767225600,
+          "notBefore": 1766361600,
           "notAfter": 1775001600,
-          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_BASE64_KEY_MATERIAL\n-----END PUBLIC KEY-----\n"
+          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_NEW_ROTATION_BASE64_KEY_MATERIAL\n-----END PUBLIC KEY-----\n"
         }
       ]
     },
