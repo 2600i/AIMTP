@@ -246,6 +246,29 @@ This section defines the versioned successor to frozen v1 semantics. v1 remains 
 - v1 receipt verification is local and best-effort, based on local trust configuration.
 - Future versions that alter trust behavior MUST introduce explicit versioned trust semantics and MUST NOT silently reinterpret v1 behavior.
 
+## IntentOS v3 Trust (Draft)
+
+IntentOS v3 trust design is currently captured as a draft proposal for structured Trust Bundles, intended to support portable issuer trust configuration with multi-key rotation and optional validity windows. See `spec/intentos-v3-trust-draft.md` for the draft structure and resolution model. Core v3 trust semantics remain draft-only and non-normative.
+
+## v3 Bundle Loader (Experimental)
+
+An experimental, opt-in trust bundle loader is available for receipt-policy trust key configuration only.
+
+- New optional env: `INTENTOS_TRUST_BUNDLE_PATH=/path/to/trust-bundle.json`
+- Loader behavior:
+  - Reads the JSON file from disk.
+  - Performs basic structural validation (bundle object with `issuers`, issuer entries with `keys[]`, and key entries containing `publicKeyPem`).
+  - Resolves each issuer to a single public key (first non-empty `publicKeyPem` in that issuer key list).
+  - Produces the same effective issuer->public-key map used by `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON`.
+- Precedence:
+  - If both `INTENTOS_TRUST_BUNDLE_PATH` and `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` are set, the bundle path source takes precedence.
+- Scope boundary:
+  - This changes trust configuration loading only.
+  - Receipt verification semantics are unchanged.
+  - IntentOS execution semantics remain unchanged.
+
+Example bundle file: `examples/trust-bundle.json`
+
 ## Trust Roadmap (v3, Non-binding)
 
 The following items are directional only. They are not commitments and have no guaranteed delivery order.

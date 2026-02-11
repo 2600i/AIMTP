@@ -1,4 +1,7 @@
 import { generateKeyPairSync } from "node:crypto";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { Receipt, signReceipt } from "../src/protocol/intentos-receipts";
 import { processReceiptEnvelope, type ReceiptPolicyLogger } from "../src/runtime/intentos/receipt-policy";
 
@@ -19,6 +22,24 @@ describe("IntentOS receipt policy enforcement", () => {
   const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
   const trustedKeys = Object.freeze({ [issuer]: publicKeyPem });
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    while (tempDirs.length > 0) {
+      const dirPath = tempDirs.pop();
+      if (dirPath) {
+        rmSync(dirPath, { recursive: true, force: true });
+      }
+    }
+  });
+
+  function writeTrustBundle(bundle: unknown): string {
+    const dirPath = mkdtempSync(path.join(tmpdir(), "intentos-trust-bundle-"));
+    tempDirs.push(dirPath);
+    const filePath = path.join(dirPath, "trust-bundle.json");
+    writeFileSync(filePath, JSON.stringify(bundle), "utf8");
+    return filePath;
+  }
 
   test("default behavior remains v1/off when trust version is not set", () => {
     const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
@@ -115,6 +136,122 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.trusted).toBe(true);
     expect(result.reason).toBe("signature valid");
     expect(result.trustVersion).toBe("v2");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("loads trusted keys from bundle path when provided", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath },
+        logger
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("rejects malformed trust bundle structure", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: "not-an-array"
+        }
+      }
+    });
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: { INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath },
+        logger
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: trust_bundle_keys_must_be_array");
+    expect(result.reason).toContain(issuer);
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("bundle path keys override INTENTOS_TRUSTED_RECEIPT_KEYS_JSON", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const { publicKey: wrongPublicKey } = generateKeyPairSync("ed25519");
+    const wrongPublicKeyPem = wrongPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const trustBundlePath = writeTrustBundle({
+      bundleVersion: "intentos-trust-bundle/v1",
+      issuers: {
+        [issuer]: {
+          keys: [
+            {
+              kid: "relay-a",
+              alg: "ed25519",
+              publicKeyPem
+            }
+          ]
+        }
+      }
+    });
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: JSON.stringify({ [issuer]: wrongPublicKeyPem })
+        },
+        logger
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+    expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("backward compatible env JSON loading when bundle path is not set", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: JSON.stringify({ [issuer]: publicKeyPem })
+        },
+        logger
+      }
+    );
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
     expect(logger.warn).not.toHaveBeenCalled();
   });
 

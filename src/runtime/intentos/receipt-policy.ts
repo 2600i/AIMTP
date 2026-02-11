@@ -6,6 +6,7 @@ import {
   parseTrustedReceiptKeysJson,
   verifyReceipt
 } from "../../protocol/intentos-receipts";
+import { readFileSync } from "node:fs";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -17,6 +18,7 @@ export interface ProcessReceiptEnvelopeOptions {
   readonly mode?: ReceiptPolicyMode | string;
   readonly trustVersion?: ReceiptTrustVersion | string;
   readonly maxTimestampSkewSec?: number;
+  readonly trustBundlePath?: string;
   readonly trustedReceiptKeysJson?: string;
   readonly trustedReceiptKeys?: TrustedReceiptPublicKeys;
   readonly logger?: ReceiptPolicyLogger;
@@ -86,6 +88,76 @@ function parseOptionalNonNegativeInt(value: unknown): number | undefined {
   return parsed;
 }
 
+function normalizeNonEmptyString(value: unknown): string {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim();
+}
+
+function parseTrustedReceiptKeysBundle(raw: string): TrustedReceiptPublicKeys {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`invalid_trust_bundle_json:${message}`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error("trust_bundle_must_be_object");
+  }
+
+  if (!isPlainObject(parsed.issuers)) {
+    throw new Error("trust_bundle_issuers_must_be_object");
+  }
+
+  const normalized: Record<string, string> = {};
+  Object.entries(parsed.issuers).forEach(([issuerId, issuerEntry]) => {
+    const issuer = normalizeNonEmptyString(issuerId);
+    if (!issuer) {
+      throw new Error("trust_bundle_issuer_id_must_be_non_empty_string");
+    }
+    if (!isPlainObject(issuerEntry)) {
+      throw new Error(`trust_bundle_issuer_entry_must_be_object:${issuer}`);
+    }
+    if (!Array.isArray(issuerEntry.keys)) {
+      throw new Error(`trust_bundle_keys_must_be_array:${issuer}`);
+    }
+
+    let publicKeyPem = "";
+    for (const keyEntry of issuerEntry.keys) {
+      if (!isPlainObject(keyEntry)) {
+        throw new Error(`trust_bundle_key_entry_must_be_object:${issuer}`);
+      }
+      const candidate = normalizeNonEmptyString(keyEntry.publicKeyPem);
+      if (candidate) {
+        publicKeyPem = candidate;
+        break;
+      }
+    }
+
+    if (!publicKeyPem) {
+      throw new Error(`trust_bundle_missing_public_key_pem:${issuer}`);
+    }
+
+    normalized[issuer] = publicKeyPem;
+  });
+
+  return Object.freeze(normalized);
+}
+
+function loadTrustedReceiptKeysFromBundlePath(bundlePath: string): TrustedReceiptPublicKeys {
+  let rawBundle = "";
+  try {
+    rawBundle = readFileSync(bundlePath, "utf8");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`invalid_trust_bundle_path:${message}`);
+  }
+  return parseTrustedReceiptKeysBundle(rawBundle);
+}
+
 function readMaxTimestampSkewSec(options: ProcessReceiptEnvelopeOptions): number | undefined {
   if (options.maxTimestampSkewSec !== undefined) {
     return parseOptionalNonNegativeInt(options.maxTimestampSkewSec);
@@ -101,6 +173,24 @@ function readTrustedKeys(
       trustedKeys: options.trustedReceiptKeys,
       configError: null
     };
+  }
+
+  const bundlePath = normalizeNonEmptyString(
+    options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
+  );
+  if (bundlePath) {
+    try {
+      return {
+        trustedKeys: loadTrustedReceiptKeysFromBundlePath(bundlePath),
+        configError: null
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        trustedKeys: Object.freeze({}),
+        configError: message
+      };
+    }
   }
 
   const trustedKeysJson =

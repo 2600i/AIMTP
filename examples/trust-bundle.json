@@ -1,0 +1,27 @@
+{
+  "bundleVersion": "intentos-trust-bundle/v1",
+  "metadata": {
+    "name": "example-federation-trust",
+    "description": "Example trust bundle for receipt issuer verification"
+  },
+  "issuers": {
+    "relay://north-1": {
+      "keys": [
+        {
+          "kid": "north-1-2026q1",
+          "alg": "ed25519",
+          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_BASE64_KEY_MATERIAL\n-----END PUBLIC KEY-----\n"
+        }
+      ]
+    },
+    "relay://south-1": {
+      "keys": [
+        {
+          "kid": "south-1-2026q1",
+          "alg": "ed25519",
+          "publicKeyPem": "-----BEGIN PUBLIC KEY-----\nREPLACE_WITH_BASE64_KEY_MATERIAL\n-----END PUBLIC KEY-----\n"
+        }
+      ]
+    }
+  }
+}
