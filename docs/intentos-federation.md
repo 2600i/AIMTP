@@ -257,15 +257,18 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
 - New optional env: `INTENTOS_TRUST_BUNDLE_PATH=/path/to/trust-bundle.json`
 - Loader behavior:
   - Reads the JSON file from disk.
-  - Performs basic structural validation (bundle object with `issuers`, issuer entries with `keys[]`, and key entries containing `publicKeyPem`).
-  - Resolves each issuer to a single public key (first non-empty `publicKeyPem` in that issuer key list).
-  - Produces the same effective issuer->public-key map used by `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON`.
+  - Performs structural validation (bundle object with `issuers`, issuer entries with `keys[]`, and key entries containing `publicKeyPem`).
+  - Supports optional key validity fields `notBefore` and `notAfter` (unix seconds).
+  - Validates key windows: when both fields are present, `notBefore` MUST be less than `notAfter`.
+  - Resolves each issuer to an ordered list of active keys at evaluation time `T`, where a key is active when `(notBefore absent OR T >= notBefore) AND (notAfter absent OR T < notAfter)`.
 - Precedence:
   - If both `INTENTOS_TRUST_BUNDLE_PATH` and `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` are set, the bundle path source takes precedence.
 - Scope boundary:
-  - This changes trust configuration loading only.
-  - Receipt verification semantics are unchanged.
+  - This changes receipt-policy trust resolution for bundle path usage only.
+  - Existing `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` behavior is unchanged (no validity-window semantics).
   - IntentOS execution semantics remain unchanged.
+
+For bundle-path verification, evaluation time `T` uses `receipt.timestamp` when it is present and numeric; otherwise it uses current unix time (`Date.now()/1000`). Unknown issuers fail as `unknown issuer`, issuers with no active keys fail as `no active key for issuer`, and active-key verification fails as `invalid signature` if no active key verifies.
 
 Example bundle file: `examples/trust-bundle.json`
 

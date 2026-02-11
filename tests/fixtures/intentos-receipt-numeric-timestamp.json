@@ -1,0 +1,10 @@
+{
+  "receiptId": "receipt-policy-ts-numeric-001",
+  "envelopeId": "env-policy-ts-numeric-001",
+  "intentId": "intent-policy-ts-numeric-001",
+  "type": "receipt.completed",
+  "timestamp": 1700000000,
+  "metadata": {
+    "outputHash": "fixture-hash"
+  }
+}

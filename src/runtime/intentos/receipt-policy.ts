@@ -1,5 +1,6 @@
 import {
   Receipt,
+  ReceiptVerificationResult,
   ReceiptTrustVersion,
   TrustedReceiptPublicKeys,
   normalizeReceiptTrustVersion,
@@ -40,6 +41,22 @@ const DEFAULT_POLICY_LOGGER: ReceiptPolicyLogger = {
     console.warn(JSON.stringify(event));
   }
 };
+
+const EMPTY_TRUSTED_KEYS: TrustedReceiptPublicKeys = Object.freeze({});
+
+interface TrustBundleKey {
+  readonly publicKeyPem: string;
+  readonly notBefore?: number;
+  readonly notAfter?: number;
+}
+
+type TrustBundleIssuerKeySet = Readonly<Record<string, ReadonlyArray<TrustBundleKey>>>;
+
+interface TrustedKeyResolution {
+  readonly trustedKeys: TrustedReceiptPublicKeys;
+  readonly bundleIssuerKeys: TrustBundleIssuerKeySet | null;
+  readonly configError: string | null;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -95,7 +112,25 @@ function normalizeNonEmptyString(value: unknown): string {
   return value.trim();
 }
 
-function parseTrustedReceiptKeysBundle(raw: string): TrustedReceiptPublicKeys {
+function parseOptionalUnixSeconds(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? value : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function parseTrustedReceiptKeysBundle(raw: string): TrustBundleIssuerKeySet {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -112,7 +147,7 @@ function parseTrustedReceiptKeysBundle(raw: string): TrustedReceiptPublicKeys {
     throw new Error("trust_bundle_issuers_must_be_object");
   }
 
-  const normalized: Record<string, string> = {};
+  const normalized: Record<string, ReadonlyArray<TrustBundleKey>> = {};
   Object.entries(parsed.issuers).forEach(([issuerId, issuerEntry]) => {
     const issuer = normalizeNonEmptyString(issuerId);
     if (!issuer) {
@@ -125,29 +160,50 @@ function parseTrustedReceiptKeysBundle(raw: string): TrustedReceiptPublicKeys {
       throw new Error(`trust_bundle_keys_must_be_array:${issuer}`);
     }
 
-    let publicKeyPem = "";
+    const keys: TrustBundleKey[] = [];
     for (const keyEntry of issuerEntry.keys) {
       if (!isPlainObject(keyEntry)) {
         throw new Error(`trust_bundle_key_entry_must_be_object:${issuer}`);
       }
-      const candidate = normalizeNonEmptyString(keyEntry.publicKeyPem);
-      if (candidate) {
-        publicKeyPem = candidate;
-        break;
+      const publicKeyPem = normalizeNonEmptyString(keyEntry.publicKeyPem);
+      if (!publicKeyPem) {
+        continue;
       }
+
+      const hasNotBefore = Object.prototype.hasOwnProperty.call(keyEntry, "notBefore");
+      const hasNotAfter = Object.prototype.hasOwnProperty.call(keyEntry, "notAfter");
+      const notBefore = hasNotBefore ? parseOptionalUnixSeconds(keyEntry.notBefore) : undefined;
+      const notAfter = hasNotAfter ? parseOptionalUnixSeconds(keyEntry.notAfter) : undefined;
+      if (hasNotBefore && notBefore === undefined) {
+        throw new Error(`trust_bundle_key_not_before_must_be_unix_seconds:${issuer}`);
+      }
+      if (hasNotAfter && notAfter === undefined) {
+        throw new Error(`trust_bundle_key_not_after_must_be_unix_seconds:${issuer}`);
+      }
+      if (notBefore !== undefined && notAfter !== undefined && notBefore >= notAfter) {
+        throw new Error(`trust_bundle_key_window_must_have_notBefore_lt_notAfter:${issuer}`);
+      }
+
+      keys.push(
+        Object.freeze({
+          publicKeyPem,
+          ...(notBefore !== undefined ? { notBefore } : {}),
+          ...(notAfter !== undefined ? { notAfter } : {})
+        })
+      );
     }
 
-    if (!publicKeyPem) {
+    if (keys.length === 0) {
       throw new Error(`trust_bundle_missing_public_key_pem:${issuer}`);
     }
 
-    normalized[issuer] = publicKeyPem;
+    normalized[issuer] = Object.freeze(keys);
   });
 
   return Object.freeze(normalized);
 }
 
-function loadTrustedReceiptKeysFromBundlePath(bundlePath: string): TrustedReceiptPublicKeys {
+function loadTrustedReceiptKeysFromBundlePath(bundlePath: string): TrustBundleIssuerKeySet {
   let rawBundle = "";
   try {
     rawBundle = readFileSync(bundlePath, "utf8");
@@ -167,10 +223,11 @@ function readMaxTimestampSkewSec(options: ProcessReceiptEnvelopeOptions): number
 
 function readTrustedKeys(
   options: ProcessReceiptEnvelopeOptions
-): { trustedKeys: TrustedReceiptPublicKeys; configError: string | null } {
+): TrustedKeyResolution {
   if (options.trustedReceiptKeys) {
     return {
       trustedKeys: options.trustedReceiptKeys,
+      bundleIssuerKeys: null,
       configError: null
     };
   }
@@ -181,13 +238,15 @@ function readTrustedKeys(
   if (bundlePath) {
     try {
       return {
-        trustedKeys: loadTrustedReceiptKeysFromBundlePath(bundlePath),
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: loadTrustedReceiptKeysFromBundlePath(bundlePath),
         configError: null
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return {
-        trustedKeys: Object.freeze({}),
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
         configError: message
       };
     }
@@ -198,12 +257,14 @@ function readTrustedKeys(
   try {
     return {
       trustedKeys: parseTrustedReceiptKeysJson(trustedKeysJson),
+      bundleIssuerKeys: null,
       configError: null
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     return {
-      trustedKeys: Object.freeze({}),
+      trustedKeys: EMPTY_TRUSTED_KEYS,
+      bundleIssuerKeys: null,
       configError: message
     };
   }
@@ -250,6 +311,76 @@ function warnReceiptPolicy(
   });
 }
 
+function resolveReceiptEvaluationTimeSec(receipt: Receipt): number {
+  const candidate = parseOptionalUnixSeconds((receipt as { timestamp?: unknown }).timestamp);
+  if (candidate !== undefined) {
+    return candidate;
+  }
+  return Date.now() / 1000;
+}
+
+function isBundleKeyActiveAtTime(key: TrustBundleKey, timestampSec: number): boolean {
+  const hasStarted = key.notBefore === undefined || timestampSec >= key.notBefore;
+  const hasNotExpired = key.notAfter === undefined || timestampSec < key.notAfter;
+  return hasStarted && hasNotExpired;
+}
+
+function verifyReceiptWithBundleIssuerKeys(
+  receipt: Receipt,
+  bundleIssuerKeys: TrustBundleIssuerKeySet,
+  trustVersion: ReceiptTrustVersion,
+  maxTimestampSkewSec: number | undefined
+): ReceiptVerificationResult {
+  const verificationOptions = {
+    trustVersion,
+    maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
+  };
+  const baseline = verifyReceipt(receipt, EMPTY_TRUSTED_KEYS, verificationOptions);
+  if (baseline.verified || !baseline.reason.startsWith("untrusted issuer:")) {
+    return baseline;
+  }
+
+  const issuer = normalizeNonEmptyString(receipt.issuer);
+  if (!issuer) {
+    return baseline;
+  }
+
+  const issuerKeys = bundleIssuerKeys[issuer];
+  if (!issuerKeys) {
+    return {
+      verified: false,
+      reason: "unknown issuer",
+      trustVersion: baseline.trustVersion
+    };
+  }
+
+  const evaluationTimeSec = resolveReceiptEvaluationTimeSec(receipt);
+  const activeKeys = issuerKeys.filter((key) => isBundleKeyActiveAtTime(key, evaluationTimeSec));
+  if (activeKeys.length === 0) {
+    return {
+      verified: false,
+      reason: "no active key for issuer",
+      trustVersion: baseline.trustVersion
+    };
+  }
+
+  for (const key of activeKeys) {
+    const attempt = verifyReceipt(receipt, { [issuer]: key.publicKeyPem }, verificationOptions);
+    if (attempt.verified) {
+      return attempt;
+    }
+    if (attempt.reason !== "invalid signature" && !attempt.reason.startsWith("verification error:")) {
+      return attempt;
+    }
+  }
+
+  return {
+    verified: false,
+    reason: "invalid signature",
+    trustVersion: baseline.trustVersion
+  };
+}
+
 export function processReceiptEnvelope(
   envelope: unknown,
   options: ProcessReceiptEnvelopeOptions = {}
@@ -258,7 +389,7 @@ export function processReceiptEnvelope(
   const trustVersion = readTrustVersion(options);
   const maxTimestampSkewSec = readMaxTimestampSkewSec(options);
   const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
-  const { trustedKeys, configError } = readTrustedKeys(options);
+  const { trustedKeys, bundleIssuerKeys, configError } = readTrustedKeys(options);
   const receipt = extractReceiptEnvelope(envelope);
   if (!receipt) {
     const reason = "missing receipt";
@@ -275,10 +406,12 @@ export function processReceiptEnvelope(
     };
   }
 
-  const verification = verifyReceipt(receipt, trustedKeys, {
-    trustVersion,
-    maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
-  });
+  const verification = bundleIssuerKeys
+    ? verifyReceiptWithBundleIssuerKeys(receipt, bundleIssuerKeys, trustVersion, maxTimestampSkewSec)
+    : verifyReceipt(receipt, trustedKeys, {
+      trustVersion,
+      maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
+    });
   const reason =
     verification.verified || !configError
       ? verification.reason
