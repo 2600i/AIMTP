@@ -16,9 +16,16 @@ import {
   verifyTransparencyLogIncremental
 } from "./trust-transparency";
 import {
+  normalizeTrustDistributionMode,
   resolveTrustDistributionSnapshot,
   type TrustDistributionSnapshot
 } from "./trust-distribution";
+import {
+  evaluateTrustSnapshot,
+  type SnapshotPolicyMode,
+  type TrustSnapshotCandidate,
+  type TrustSnapshotState
+} from "./trust-snapshot-policy";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -139,6 +146,7 @@ const EMPTY_TRUST_BUNDLE_REVOCATIONS: TrustBundleRevocations = Object.freeze({
   issuerKeys: Object.freeze({})
 });
 const EMPTY_TRUST_BUNDLE_KEY_REVOCATIONS: ReadonlySet<string> = Object.freeze(new Set<string>());
+let currentTrustSnapshotState: TrustSnapshotState | null = null;
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -245,6 +253,14 @@ function normalizeTransparencyLogMode(value: unknown): TransparencyLogMode {
 function normalizeTransparencyCheckpointMode(value: unknown): TransparencyCheckpointMode {
   const normalized = normalizeNonEmptyString(value).toLowerCase();
   if (normalized === "append" || normalized === "verify" || normalized === "off") {
+    return normalized;
+  }
+  return "off";
+}
+
+function normalizeTrustSnapshotPolicyMode(value: unknown): SnapshotPolicyMode {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "warn" || normalized === "enforce" || normalized === "off") {
     return normalized;
   }
   return "off";
@@ -684,8 +700,8 @@ function readTrustedKeys(
   }
 
   let distributionSnapshot: TrustDistributionSnapshot | null = null;
-  const distributionMode = normalizeNonEmptyString(options.env?.INTENTOS_TRUST_DISTRIBUTION).toLowerCase();
-  if (distributionMode !== "off" && distributionMode.length > 0) {
+  const distributionMode = normalizeTrustDistributionMode(options.env?.INTENTOS_TRUST_DISTRIBUTION);
+  if (distributionMode !== "off") {
     try {
       distributionSnapshot = resolveTrustDistributionSnapshot(options.env);
     } catch (error) {
@@ -709,6 +725,48 @@ function readTrustedKeys(
     options,
     distributionSnapshot?.transparencyLogPath
   );
+  const snapshotPolicyMode = normalizeTrustSnapshotPolicyMode(options.env?.INTENTOS_TRUST_SNAPSHOT_POLICY);
+  let snapshotCandidate: TrustSnapshotCandidate | null = null;
+  const commitSnapshotCandidate = (): void => {
+    if (!snapshotCandidate?.head) {
+      return;
+    }
+    currentTrustSnapshotState = {
+      head: snapshotCandidate.head,
+      source: snapshotCandidate.source,
+      observedAt: snapshotCandidate.observedAt
+    };
+  };
+  if (distributionMode !== "off" && distributionSnapshot) {
+    snapshotCandidate = {
+      ...(distributionSnapshot.transparencyHead ? { head: distributionSnapshot.transparencyHead } : {}),
+      source: `${distributionMode}:${distributionSnapshot.bundlePath ?? bundlePath ?? "none"}`,
+      observedAt: new Date().toISOString()
+    };
+    const evaluation = evaluateTrustSnapshot(currentTrustSnapshotState, snapshotCandidate, snapshotPolicyMode);
+    if (evaluation.reason) {
+      (options.logger ?? DEFAULT_POLICY_LOGGER).warn({
+        event: "intentos_trust_snapshot_policy",
+        mode: snapshotPolicyMode,
+        decision: evaluation.decision,
+        reason: evaluation.reason,
+        relation: evaluation.relation,
+        current: currentTrustSnapshotState ?? null,
+        next: snapshotCandidate
+      });
+    }
+    if (evaluation.decision === "reject") {
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
+        bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog,
+        configError: `trust snapshot policy rejected: ${evaluation.reason ?? "snapshot_rejected"}`
+      };
+    }
+  }
+
   if (bundlePath) {
     if (transparencyLog?.mode === "verify") {
       const useCheckpointIncrementalVerification =
@@ -781,6 +839,7 @@ function readTrustedKeys(
         );
       }
 
+      commitSnapshotCandidate();
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: parsedBundle.issuerKeys,
@@ -806,8 +865,10 @@ function readTrustedKeys(
   const trustedKeysJson =
     options.trustedReceiptKeysJson ?? options.env?.INTENTOS_TRUSTED_RECEIPT_KEYS_JSON;
   try {
+    const parsedTrustedKeys = parseTrustedReceiptKeysJson(trustedKeysJson);
+    commitSnapshotCandidate();
     return {
-      trustedKeys: parseTrustedReceiptKeysJson(trustedKeysJson),
+      trustedKeys: parsedTrustedKeys,
       bundleIssuerKeys: null,
       bundleRevocations: null,
       bundleHash: null,

@@ -364,6 +364,11 @@ IntentOS v3 supports an opt-in trust distribution boundary for selecting where t
   - `off`: existing trust loading path is unchanged.
   - `fs`: uses local filesystem paths via adapter snapshot.
   - `http`: fetches trust artifacts, writes local temp snapshots, then reuses the existing verification pipeline.
+- `INTENTOS_TRUST_SNAPSHOT_POLICY=off|warn|enforce` (default `off`)
+  - Applies only when trust distribution is enabled.
+  - Uses transparency heads (when present) to evaluate monotonicity (`ahead/equal/behind/conflict`).
+  - `warn` emits diagnostics for rollback/fork-like candidates and proceeds.
+  - `enforce` rejects `behind/conflict` candidates before trust artifacts are applied.
 
 Adapter-related env vars:
 
@@ -381,6 +386,7 @@ Guarantees:
 - Adapter selection changes source-of-truth location only.
 - Bundle signature checks, revocation application, transparency verification, and receipt trust decisions are unchanged.
 - Default behavior remains unchanged unless `INTENTOS_TRUST_DISTRIBUTION` is set to `fs` or `http`.
+- Snapshot policy is opt-in and affects only distribution snapshot acceptance; receipt/trust crypto semantics are unchanged.
 
 ## v3 Transparency Log (Experimental)
 

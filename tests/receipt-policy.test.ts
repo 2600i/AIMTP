@@ -4,10 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Receipt, signReceipt } from "../src/protocol/intentos-receipts";
 import { processReceiptEnvelope, type ReceiptPolicyLogger } from "../src/runtime/intentos/receipt-policy";
-import {
-  HttpTrustAdapter,
-  validateTrustDistributionHttpUrl
-} from "../src/runtime/intentos/trust-distribution";
+import * as trustDistribution from "../src/runtime/intentos/trust-distribution";
+import { evaluateTrustSnapshot } from "../src/runtime/intentos/trust-snapshot-policy";
 import {
   appendTransparencyEntry,
   createCheckpoint,
@@ -1300,12 +1298,15 @@ describe("IntentOS receipt policy enforcement", () => {
 
   test("trust distribution URL validation rejects non-http URLs", () => {
     expect(() =>
-      validateTrustDistributionHttpUrl("file:///tmp/trust.json", "INTENTOS_TRUST_HTTP_BUNDLE_URL")
+      trustDistribution.validateTrustDistributionHttpUrl(
+        "file:///tmp/trust.json",
+        "INTENTOS_TRUST_HTTP_BUNDLE_URL"
+      )
     ).toThrow("invalid_trust_distribution_url:INTENTOS_TRUST_HTTP_BUNDLE_URL");
   });
 
   test("http trust distribution adapter surfaces fetch failures", () => {
-    const adapter = new HttpTrustAdapter(
+    const adapter = new trustDistribution.HttpTrustAdapter(
       {
         INTENTOS_TRUST_HTTP_BUNDLE_URL: "https://example.invalid/trust-bundle.json"
       },
@@ -1316,6 +1317,182 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(() => adapter.resolveSnapshot()).toThrow(
       "trust_distribution_http_fetch_failed:INTENTOS_TRUST_HTTP_BUNDLE_URL:network_unreachable"
     );
+  });
+
+  test("evaluateTrustSnapshot covers accept/warn/reject rules", () => {
+    const current = {
+      head: { size: 3, chainHash: "h3" },
+      source: "snapshot://current"
+    };
+
+    expect(evaluateTrustSnapshot(null, {}, "enforce")).toEqual({
+      decision: "accept",
+      reason: null,
+      relation: null
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "h3" } }, "enforce")).toEqual({
+      decision: "accept",
+      reason: null,
+      relation: "equal"
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 4, chainHash: "h4" } }, "enforce")).toEqual({
+      decision: "accept",
+      reason: null,
+      relation: "ahead"
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 2, chainHash: "h2" } }, "warn")).toEqual({
+      decision: "warn",
+      reason: "snapshot_behind",
+      relation: "behind"
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 2, chainHash: "h2" } }, "enforce")).toEqual({
+      decision: "reject",
+      reason: "snapshot_behind",
+      relation: "behind"
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 2, chainHash: "h2" } }, "off")).toEqual({
+      decision: "accept",
+      reason: "snapshot_behind",
+      relation: "behind"
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "other-h3" } }, "warn")).toEqual({
+      decision: "warn",
+      reason: "snapshot_conflict",
+      relation: "conflict"
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "other-h3" } }, "enforce")).toEqual({
+      decision: "reject",
+      reason: "snapshot_conflict",
+      relation: "conflict"
+    });
+    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "other-h3" } }, "off")).toEqual({
+      decision: "accept",
+      reason: "snapshot_conflict",
+      relation: "conflict"
+    });
+    expect(evaluateTrustSnapshot(current, {}, "warn")).toEqual({
+      decision: "warn",
+      reason: "snapshot_head_missing",
+      relation: null
+    });
+    expect(evaluateTrustSnapshot(current, {}, "enforce")).toEqual({
+      decision: "accept",
+      reason: null,
+      relation: null
+    });
+    expect(evaluateTrustSnapshot({ source: "snapshot://none" }, {}, "enforce")).toEqual({
+      decision: "accept",
+      reason: null,
+      relation: null
+    });
+  });
+
+  test("snapshot policy enforce rejects behind distribution head", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const snapshotSpy = jest
+      .spyOn(trustDistribution, "resolveTrustDistributionSnapshot")
+      .mockImplementationOnce(() => ({
+        bundlePath: trustBundlePath,
+        transparencyHead: { size: 5, chainHash: "head-5" }
+      }))
+      .mockImplementationOnce(() => ({
+        bundlePath: trustBundlePath,
+        transparencyHead: { size: 4, chainHash: "head-4" }
+      }));
+
+    try {
+      const first = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          logger,
+          env: {
+            INTENTOS_TRUST_DISTRIBUTION: "fs",
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "enforce"
+          }
+        }
+      );
+      expect(first.accepted).toBe(true);
+      expect(first.trusted).toBe(true);
+
+      const second = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          logger,
+          env: {
+            INTENTOS_TRUST_DISTRIBUTION: "fs",
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "enforce"
+          }
+        }
+      );
+      expect(second.accepted).toBe(false);
+      expect(second.trusted).toBe(false);
+      expect(second.reason).toContain("trusted key config: trust snapshot policy rejected: snapshot_behind");
+    } finally {
+      snapshotSpy.mockRestore();
+    }
+  });
+
+  test("snapshot policy warn logs conflict and continues", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const snapshotSpy = jest
+      .spyOn(trustDistribution, "resolveTrustDistributionSnapshot")
+      .mockImplementationOnce(() => ({
+        bundlePath: trustBundlePath,
+        transparencyHead: { size: 7, chainHash: "head-7-a" }
+      }))
+      .mockImplementationOnce(() => ({
+        bundlePath: trustBundlePath,
+        transparencyHead: { size: 7, chainHash: "head-7-b" }
+      }));
+
+    try {
+      const first = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          env: {
+            INTENTOS_TRUST_DISTRIBUTION: "fs",
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "warn"
+          }
+        }
+      );
+      expect(first.accepted).toBe(true);
+      expect(first.trusted).toBe(true);
+
+      const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+      const second = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          logger,
+          env: {
+            INTENTOS_TRUST_DISTRIBUTION: "fs",
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "warn"
+          }
+        }
+      );
+      expect(second.accepted).toBe(true);
+      expect(second.trusted).toBe(true);
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "intentos_trust_snapshot_policy",
+          mode: "warn",
+          decision: "warn",
+          reason: "snapshot_conflict"
+        })
+      );
+    } finally {
+      snapshotSpy.mockRestore();
+    }
   });
 
   test("backward compatible env JSON loading when bundle path is not set", () => {
