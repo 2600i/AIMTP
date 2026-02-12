@@ -5,6 +5,10 @@ import path from "node:path";
 import { Receipt, signReceipt } from "../src/protocol/intentos-receipts";
 import { processReceiptEnvelope, type ReceiptPolicyLogger } from "../src/runtime/intentos/receipt-policy";
 import {
+  HttpTrustAdapter,
+  validateTrustDistributionHttpUrl
+} from "../src/runtime/intentos/trust-distribution";
+import {
   appendTransparencyEntry,
   createCheckpoint,
   loadTransparencyLog
@@ -128,6 +132,14 @@ describe("IntentOS receipt policy enforcement", () => {
     const content =
       lines.length > 0 ? `${lines.map((line) => JSON.stringify(line)).join("\n")}\n` : "";
     writeFileSync(filePath, content, "utf8");
+    return filePath;
+  }
+
+  function writeTrustRevocations(payload: unknown): string {
+    const dirPath = mkdtempSync(path.join(tmpdir(), "intentos-trust-revocations-"));
+    tempDirs.push(dirPath);
+    const filePath = path.join(dirPath, "trust-revocations.json");
+    writeFileSync(filePath, JSON.stringify(payload), "utf8");
     return filePath;
   }
 
@@ -1255,6 +1267,55 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.trusted).toBe(true);
     expect(result.reason).toBe("signature valid");
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  test("fs trust distribution adapter applies revocations from file path", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const revocationsPath = writeTrustRevocations({
+      issuerKeys: {
+        [issuer]: [computeBundleKeyFingerprint(publicKeyPem)]
+      }
+    });
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_DISTRIBUTION: "fs",
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocationsPath
+        }
+      }
+    );
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(
+      ["no active key for issuer", "signature invalid for all active keys"].some((part) =>
+        result.reason.includes(part)
+      )
+    ).toBe(true);
+  });
+
+  test("trust distribution URL validation rejects non-http URLs", () => {
+    expect(() =>
+      validateTrustDistributionHttpUrl("file:///tmp/trust.json", "INTENTOS_TRUST_HTTP_BUNDLE_URL")
+    ).toThrow("invalid_trust_distribution_url:INTENTOS_TRUST_HTTP_BUNDLE_URL");
+  });
+
+  test("http trust distribution adapter surfaces fetch failures", () => {
+    const adapter = new HttpTrustAdapter(
+      {
+        INTENTOS_TRUST_HTTP_BUNDLE_URL: "https://example.invalid/trust-bundle.json"
+      },
+      () => {
+        throw new Error("network_unreachable");
+      }
+    );
+    expect(() => adapter.resolveSnapshot()).toThrow(
+      "trust_distribution_http_fetch_failed:INTENTOS_TRUST_HTTP_BUNDLE_URL:network_unreachable"
+    );
   });
 
   test("backward compatible env JSON loading when bundle path is not set", () => {

@@ -15,6 +15,10 @@ import {
   verifyTransparencyLog,
   verifyTransparencyLogIncremental
 } from "./trust-transparency";
+import {
+  resolveTrustDistributionSnapshot,
+  type TrustDistributionSnapshot
+} from "./trust-distribution";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -248,12 +252,13 @@ function normalizeTransparencyCheckpointMode(value: unknown): TransparencyCheckp
 
 function readTransparencyLogPolicy(
   bundlePath: string,
-  options: ProcessReceiptEnvelopeOptions
+  options: ProcessReceiptEnvelopeOptions,
+  logPathOverride?: string
 ): TransparencyLogPolicy | null {
   if (!bundlePath) {
     return null;
   }
-  const logPath = normalizeNonEmptyString(options.env?.INTENTOS_TRANSPARENCY_LOG_PATH);
+  const logPath = normalizeNonEmptyString(logPathOverride ?? options.env?.INTENTOS_TRANSPARENCY_LOG_PATH);
   if (!logPath) {
     return null;
   }
@@ -498,8 +503,20 @@ function parseTrustBundleRevocationsJson(raw: unknown): TrustBundleRevocations {
 
 function readTrustBundleRevocations(
   parsedBundle: ParsedTrustBundle,
-  options: ProcessReceiptEnvelopeOptions
+  options: ProcessReceiptEnvelopeOptions,
+  revocationsPathOverride?: string
 ): TrustBundleRevocations {
+  const revocationsPath = normalizeNonEmptyString(revocationsPathOverride);
+  if (revocationsPath) {
+    try {
+      const revocationsJson = readFileSync(revocationsPath, "utf8");
+      return parseTrustBundleRevocationsJson(revocationsJson);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`invalid_trust_bundle_revocations_path:${message}`);
+    }
+  }
+
   const overrideRevocationsJson =
     options.trustBundleRevocationsJson ?? options.env?.INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON;
   if (overrideRevocationsJson !== undefined) {
@@ -666,10 +683,32 @@ function readTrustedKeys(
     };
   }
 
+  let distributionSnapshot: TrustDistributionSnapshot | null = null;
+  const distributionMode = normalizeNonEmptyString(options.env?.INTENTOS_TRUST_DISTRIBUTION).toLowerCase();
+  if (distributionMode !== "off" && distributionMode.length > 0) {
+    try {
+      distributionSnapshot = resolveTrustDistributionSnapshot(options.env);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
+        bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog: null,
+        configError: message
+      };
+    }
+  }
+
   const bundlePath = normalizeNonEmptyString(
-    options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
+    distributionSnapshot?.bundlePath ?? options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
   );
-  const transparencyLog = readTransparencyLogPolicy(bundlePath, options);
+  const transparencyLog = readTransparencyLogPolicy(
+    bundlePath,
+    options,
+    distributionSnapshot?.transparencyLogPath
+  );
   if (bundlePath) {
     if (transparencyLog?.mode === "verify") {
       const useCheckpointIncrementalVerification =
@@ -707,7 +746,11 @@ function readTrustedKeys(
     try {
       const parsedBundle = loadTrustedReceiptKeysFromBundlePath(bundlePath);
       const bundleHash = computeTrustBundleHash(parsedBundle.bundle);
-      const bundleRevocations = readTrustBundleRevocations(parsedBundle, options);
+      const bundleRevocations = readTrustBundleRevocations(
+        parsedBundle,
+        options,
+        distributionSnapshot?.revocationsPath
+      );
       if (signaturePolicy.requireSignature) {
         const signatureError = verifyTrustBundleSignature(
           parsedBundle.bundle,

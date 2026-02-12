@@ -356,6 +356,32 @@ Signing helper:
 node tools/trust-bundle-sign.mjs --in examples/trust-bundle.json --out trust-bundle.signed.json --signer signer://relay-admin --private-key-pem /path/signer-private-key.pem
 ```
 
+## v3 Trust Distribution Adapters (Experimental)
+
+IntentOS v3 supports an opt-in trust distribution boundary for selecting where trust artifacts are sourced, without changing trust or receipt verification semantics.
+
+- `INTENTOS_TRUST_DISTRIBUTION=off|fs|http` (default `off`)
+  - `off`: existing trust loading path is unchanged.
+  - `fs`: uses local filesystem paths via adapter snapshot.
+  - `http`: fetches trust artifacts, writes local temp snapshots, then reuses the existing verification pipeline.
+
+Adapter-related env vars:
+
+- Filesystem mode:
+  - `INTENTOS_TRUST_BUNDLE_PATH=/path/to/trust-bundle.json`
+  - `INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH=/path/to/revocations.json` (optional)
+  - `INTENTOS_TRANSPARENCY_LOG_PATH=/path/to/trust-log.jsonl` (optional, existing transparency behavior)
+- HTTP mode:
+  - `INTENTOS_TRUST_HTTP_BUNDLE_URL=https://.../trust-bundle.json`
+  - `INTENTOS_TRUST_HTTP_REVOCATIONS_URL=https://.../revocations.json` (optional)
+  - `INTENTOS_TRUST_HTTP_HEAD_URL=https://.../trust-head.json` (optional)
+
+Guarantees:
+
+- Adapter selection changes source-of-truth location only.
+- Bundle signature checks, revocation application, transparency verification, and receipt trust decisions are unchanged.
+- Default behavior remains unchanged unless `INTENTOS_TRUST_DISTRIBUTION` is set to `fs` or `http`.
+
 ## v3 Transparency Log (Experimental)
 
 IntentOS v3 includes an opt-in local transparency log for trust-bundle and receipt-policy events. This is integrity-focused telemetry for operators and does not change trust or execution semantics.
