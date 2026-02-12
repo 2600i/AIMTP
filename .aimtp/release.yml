@@ -8,12 +8,16 @@
   ],
   "preflight rules": [
     "noDetachedHead",
-    "onMainOnly",
     "cleanWorkingTree",
-    "localMainMatchesRemote"
+    "fetchTags",
+    "onMainOnly",
+    "localMainMatchesRemote",
+    "prMergeForStable"
   ],
+  "requirePrMergeForStable": true,
   "preflight": {
-    "allowPrereleaseRelease": false
+    "allowPrereleaseRelease": false,
+    "requirePrMergeForStable": true
   },
   "githubRelease": {
     "enabled": false,
