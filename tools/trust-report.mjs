@@ -19,6 +19,7 @@ Options:
   --checkpoint-key <path>   Checkpoint public key PEM path
   --state <path>            Trust snapshot state JSON path
   --include-volatile        Include generatedAt timestamp
+  --pretty                  Pretty-print JSON output (2-space indent)
   --help                    Show this help
 `;
 
@@ -67,10 +68,32 @@ function stableStringify(value) {
   throw new Error(`unsupported_value_type:${typeof value}`);
 }
 
+function toStableValue(value) {
+  if (Array.isArray(value)) {
+    return value.map((entry) => toStableValue(entry));
+  }
+  if (isPlainObject(value)) {
+    const result = {};
+    Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort()
+      .forEach((key) => {
+        result[key] = toStableValue(value[key]);
+      });
+    return result;
+  }
+  return value;
+}
+
+function stableJsonStringify(value, pretty) {
+  const stableValue = toStableValue(value);
+  return JSON.stringify(stableValue, null, pretty ? 2 : 0);
+}
+
 function parseArgs(argv) {
   const options = {};
   const needsValue = new Set(["env-file", "bundle", "revocations", "log", "checkpoint-key", "state"]);
-  const booleanFlags = new Set(["include-volatile", "help"]);
+  const booleanFlags = new Set(["include-volatile", "pretty", "help"]);
 
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index];
@@ -131,9 +154,27 @@ function loadEnv(options) {
   };
 }
 
-function normalizeMode(value, allowed) {
-  const normalized = normalizeNonEmptyString(value)?.toLowerCase();
-  return normalized && allowed.has(normalized) ? normalized : "unknown";
+function resolveMode({
+  env,
+  key,
+  allowed,
+  defaultIfAbsent,
+  diagnostics
+}) {
+  const rawValue = env[key];
+  const normalized = normalizeNonEmptyString(rawValue)?.toLowerCase();
+  if (!normalized) {
+    return defaultIfAbsent;
+  }
+  if (allowed.has(normalized)) {
+    return normalized;
+  }
+  diagnostics.push({
+    key,
+    value: String(rawValue),
+    reason: "invalid_mode"
+  });
+  return "unknown";
 }
 
 function readJsonFileStrict(filePath) {
@@ -202,19 +243,61 @@ function main() {
       throw new Error("--checkpoint-key requires a transparency log path (--log or INTENTOS_TRANSPARENCY_LOG_PATH)");
     }
 
+    const invalidEnv = [];
     const modes = {
-      trustVersion: normalizeMode(env.INTENTOS_TRUST_VERSION, new Set(["v1", "v2"])),
-      receiptPolicy: normalizeMode(env.INTENTOS_RECEIPT_POLICY, new Set(["off", "warn", "enforce"])),
-      transparencyLogMode: normalizeMode(env.INTENTOS_TRANSPARENCY_LOG_MODE, new Set(["off", "append", "verify"])),
-      transparencyCheckpointMode: normalizeMode(env.INTENTOS_TRANSPARENCY_CHECKPOINT_MODE, new Set(["off", "append", "verify"])),
-      trustDistribution: normalizeMode(env.INTENTOS_TRUST_DISTRIBUTION, new Set(["off", "fs", "http"])),
-      trustSnapshotPolicy: normalizeMode(env.INTENTOS_TRUST_SNAPSHOT_POLICY, new Set(["off", "warn", "enforce"]))
+      trustVersion: resolveMode({
+        env,
+        key: "INTENTOS_TRUST_VERSION",
+        allowed: new Set(["v1", "v2"]),
+        defaultIfAbsent: "unknown",
+        diagnostics: invalidEnv
+      }),
+      receiptPolicy: resolveMode({
+        env,
+        key: "INTENTOS_RECEIPT_POLICY",
+        allowed: new Set(["off", "warn", "enforce"]),
+        defaultIfAbsent: "unknown",
+        diagnostics: invalidEnv
+      }),
+      transparencyLogMode: resolveMode({
+        env,
+        key: "INTENTOS_TRANSPARENCY_LOG_MODE",
+        allowed: new Set(["off", "append", "verify"]),
+        defaultIfAbsent: "off",
+        diagnostics: invalidEnv
+      }),
+      transparencyCheckpointMode: resolveMode({
+        env,
+        key: "INTENTOS_TRANSPARENCY_CHECKPOINT_MODE",
+        allowed: new Set(["off", "append", "verify"]),
+        defaultIfAbsent: "off",
+        diagnostics: invalidEnv
+      }),
+      trustDistribution: resolveMode({
+        env,
+        key: "INTENTOS_TRUST_DISTRIBUTION",
+        allowed: new Set(["off", "fs", "http"]),
+        defaultIfAbsent: "off",
+        diagnostics: invalidEnv
+      }),
+      trustSnapshotPolicy: resolveMode({
+        env,
+        key: "INTENTOS_TRUST_SNAPSHOT_POLICY",
+        allowed: new Set(["off", "warn", "enforce"]),
+        defaultIfAbsent: "off",
+        diagnostics: invalidEnv
+      })
     };
 
     const report = {
       version,
       modes
     };
+    if (invalidEnv.length > 0) {
+      report.diagnostics = {
+        invalidEnv
+      };
+    }
 
     const paths = {};
     if (bundlePath) {
@@ -325,7 +408,7 @@ function main() {
       report.generatedAt = new Date().toISOString();
     }
 
-    process.stdout.write(`${stableStringify(report)}\n`);
+    process.stdout.write(`${stableJsonStringify(report, Boolean(options.pretty))}\n`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(message);
