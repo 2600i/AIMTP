@@ -26,6 +26,12 @@ Run:
 - `npm run test:receipts`
 - `npm run trust:report -- --pretty`
 
+## RC Smoke Test
+
+Run:
+
+- `npm run smoke:rc`
+
 ## Verify-mode validation (optional)
 
 Example environment snippet:

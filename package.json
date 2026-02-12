@@ -20,6 +20,7 @@
     "verify:receipt:intentos": "node tools/intentos-receipt-verify.mjs",
     "verify:trust-log": "node tools/trust-log-verify.mjs",
     "trust:report": "node tools/trust-report.mjs",
+    "smoke:rc": "node tools/rc-smoke.mjs",
     "cli:send": "node cli/aimtp-send.mjs",
     "cap:mint": "node tools/aimtp-cap.mjs mint --help",
     "cap:inspect": "node tools/aimtp-cap.mjs inspect --help",
