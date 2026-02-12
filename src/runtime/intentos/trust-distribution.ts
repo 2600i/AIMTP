@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type {
+import {
+  computeTransparencyHead,
+  loadTransparencyLog,
   TransparencyCheckpointEntry,
   TransparencyEntryType,
   TransparencyHead,
@@ -11,6 +13,7 @@ import type {
 } from "./trust-transparency";
 
 export type TrustDistributionMode = "off" | "fs" | "http";
+type TrustSnapshotPolicyMode = "off" | "warn" | "enforce";
 
 export interface TrustDistributionSnapshot {
   readonly bundlePath?: string;
@@ -234,6 +237,14 @@ export function normalizeTrustDistributionMode(value: unknown): TrustDistributio
   return "off";
 }
 
+function normalizeTrustSnapshotPolicyMode(value: unknown): TrustSnapshotPolicyMode {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "warn" || normalized === "enforce" || normalized === "off") {
+    return normalized;
+  }
+  return "off";
+}
+
 export function validateTrustDistributionHttpUrl(value: unknown, envKey: string): string {
   const raw = normalizeNonEmptyString(value);
   if (!raw) {
@@ -262,12 +273,41 @@ export class LocalFilesystemTrustAdapter implements TrustDistributionAdapter {
     const bundlePath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_BUNDLE_PATH);
     const revocationsPath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH);
     const transparencyLogPath = normalizeNonEmptyString(this.env.INTENTOS_TRANSPARENCY_LOG_PATH);
-
-    return {
+    const snapshot: TrustDistributionSnapshot = {
       ...(bundlePath ? { bundlePath } : {}),
       ...(revocationsPath ? { revocationsPath } : {}),
       ...(transparencyLogPath ? { transparencyLogPath } : {})
     };
+
+    if (!transparencyLogPath) {
+      return snapshot;
+    }
+
+    try {
+      const entries = loadTransparencyLog(transparencyLogPath);
+      const transparencyHead = computeTransparencyHead(entries);
+      return {
+        ...snapshot,
+        transparencyHead
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const snapshotPolicyMode = normalizeTrustSnapshotPolicyMode(this.env.INTENTOS_TRUST_SNAPSHOT_POLICY);
+      const diagnostic = `trust_distribution_fs_transparency_head_failed:${message}`;
+      if (snapshotPolicyMode === "enforce") {
+        throw new Error(diagnostic);
+      }
+      console.warn(
+        JSON.stringify({
+          event: "intentos_trust_distribution",
+          adapter: "fs",
+          mode: snapshotPolicyMode,
+          diagnostic,
+          logPath: transparencyLogPath
+        })
+      );
+      return snapshot;
+    }
   }
 }
 
