@@ -23,7 +23,7 @@ function parseSnapshotState(raw: unknown): TrustSnapshotState {
   if (!isPlainObject(raw)) {
     throw new Error("trust_snapshot_state_must_be_object");
   }
-  const allowedKeys = new Set(["transparencyHead", "bundleId", "fetchedAtMs", "source"]);
+  const allowedKeys = new Set(["transparencyHead", "bundleId", "appliedSnapshotId", "fetchedAtMs", "source"]);
   const unknownKeys = Object.keys(raw).filter((key) => !allowedKeys.has(key));
   if (unknownKeys.length > 0) {
     throw new Error(`trust_snapshot_state_unknown_keys:${unknownKeys.join(",")}`);
@@ -55,6 +55,9 @@ function parseSnapshotState(raw: unknown): TrustSnapshotState {
   if (raw.bundleId !== undefined && normalizeNonEmptyString(raw.bundleId) === undefined) {
     throw new Error("trust_snapshot_state_bundle_id_invalid");
   }
+  if (raw.appliedSnapshotId !== undefined && normalizeNonEmptyString(raw.appliedSnapshotId) === undefined) {
+    throw new Error("trust_snapshot_state_applied_snapshot_id_invalid");
+  }
   if (
     raw.fetchedAtMs !== undefined &&
     (typeof raw.fetchedAtMs !== "number" || !Number.isFinite(raw.fetchedAtMs) || raw.fetchedAtMs < 0)
@@ -68,6 +71,9 @@ function parseSnapshotState(raw: unknown): TrustSnapshotState {
   return {
     ...(transparencyHead ? { transparencyHead } : {}),
     ...(normalizeNonEmptyString(raw.bundleId) ? { bundleId: normalizeNonEmptyString(raw.bundleId) } : {}),
+    ...(normalizeNonEmptyString(raw.appliedSnapshotId)
+      ? { appliedSnapshotId: normalizeNonEmptyString(raw.appliedSnapshotId) }
+      : {}),
     ...(typeof raw.fetchedAtMs === "number" ? { fetchedAtMs: Math.trunc(raw.fetchedAtMs) } : {}),
     ...(normalizeNonEmptyString(raw.source) ? { source: normalizeNonEmptyString(raw.source) } : {})
   };
@@ -98,6 +104,7 @@ export class FileTrustSnapshotStore implements TrustSnapshotStore {
     const normalized = parseSnapshotState({
       ...(state.transparencyHead ? { transparencyHead: state.transparencyHead } : {}),
       ...(state.bundleId ? { bundleId: state.bundleId } : {}),
+      ...(state.appliedSnapshotId ? { appliedSnapshotId: state.appliedSnapshotId } : {}),
       ...(typeof state.fetchedAtMs === "number" ? { fetchedAtMs: state.fetchedAtMs } : {}),
       ...(state.source ? { source: state.source } : {})
     });

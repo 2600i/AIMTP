@@ -8,6 +8,11 @@ import * as trustDistribution from "../src/runtime/intentos/trust-distribution";
 import { evaluateTrustSnapshot } from "../src/runtime/intentos/trust-snapshot-policy";
 import { FileTrustSnapshotStore } from "../src/runtime/intentos/trust-snapshot-store";
 import {
+  computeAppliedSnapshotId,
+  computeBundleId,
+  computeRevocationsId
+} from "../src/runtime/intentos/trust-ids";
+import {
   appendTransparencyEntry,
   createCheckpoint,
   loadTransparencyLog
@@ -532,6 +537,49 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.accepted).toBe(true);
     expect(result.trusted).toBe(true);
     expect(result.reason).toBe("signature valid");
+  });
+
+  test("trust ids are deterministic for equivalent content", () => {
+    const bundleA = baseUnsignedV3Bundle();
+    const bundleB = {
+      issuers: bundleA.issuers,
+      issuedAtSec: bundleA.issuedAtSec,
+      bundleId: bundleA.bundleId,
+      bundleVersion: bundleA.bundleVersion
+    };
+    const revocationsA = {
+      signers: ["signer://b", "signer://a"],
+      issuerKeys: {
+        [issuer]: ["fp-2", "fp-1"]
+      }
+    };
+    const revocationsB = {
+      issuerKeys: {
+        [issuer]: ["fp-2", "fp-1"]
+      },
+      signers: ["signer://b", "signer://a"]
+    };
+
+    const bundleIdA = computeBundleId(bundleA);
+    const bundleIdB = computeBundleId(bundleB);
+    const revocationsIdA = computeRevocationsId(revocationsA);
+    const revocationsIdB = computeRevocationsId(revocationsB);
+    expect(bundleIdA).toBe(bundleIdB);
+    expect(revocationsIdA).toBe(revocationsIdB);
+
+    const head = { size: 11, chainHash: "head-11" };
+    const appliedIdA = computeAppliedSnapshotId({
+      bundleId: bundleIdA,
+      revocationsId: revocationsIdA,
+      transparencyHead: head
+    });
+    const appliedIdB = computeAppliedSnapshotId({
+      bundleId: bundleIdB,
+      revocationsId: revocationsIdB,
+      transparencyHead: { chainHash: "head-11", size: 11 }
+    });
+    expect(appliedIdA).toBe(appliedIdB);
+    expect(appliedIdA.startsWith("sha256:")).toBe(true);
   });
 
   test("bundle validity window: active key accepts", () => {
@@ -1490,6 +1538,7 @@ describe("IntentOS receipt policy enforcement", () => {
     const state = {
       transparencyHead: { size: 9, chainHash: "head-9" },
       bundleId: "bundle-9",
+      appliedSnapshotId: "sha256:applied-9",
       fetchedAtMs: 1767225600000,
       source: "snapshot://source"
     };
@@ -1519,9 +1568,67 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(entries.some((entry) => entry.startsWith("snapshot-state.json.tmp-"))).toBe(false);
   });
 
+  test("distribution apply logs trust snapshot ids and persists appliedSnapshotId", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const bundle = baseUnsignedV3Bundle();
+    const trustBundlePath = writeTrustBundle(bundle);
+    const stateDir = mkdtempSync(path.join(tmpdir(), "intentos-trust-snapshot-state-"));
+    tempDirs.push(stateDir);
+    const statePath = path.join(stateDir, "snapshot-state.json");
+    const snapshotHead = { size: 12, chainHash: "head-12" };
+    const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+    const snapshotSpy = jest.spyOn(trustDistribution, "resolveTrustDistributionSnapshot").mockReturnValue({
+      bundlePath: trustBundlePath,
+      transparencyHead: snapshotHead
+    });
+
+    try {
+      const result = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          logger,
+          env: {
+            INTENTOS_TRUST_DISTRIBUTION: "fs",
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "warn",
+            INTENTOS_TRUST_SNAPSHOT_STATE_PATH: statePath
+          }
+        }
+      );
+      expect(result.accepted).toBe(true);
+      expect(result.trusted).toBe(true);
+
+      const expectedBundleId = computeBundleId(bundle);
+      const expectedAppliedSnapshotId = computeAppliedSnapshotId({
+        bundleId: expectedBundleId,
+        transparencyHead: snapshotHead
+      });
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "intentos_trust_snapshot_applied",
+          mode: "fs",
+          bundleId: expectedBundleId,
+          revocationsId: null,
+          appliedSnapshotId: expectedAppliedSnapshotId,
+          head: snapshotHead
+        })
+      );
+
+      const persisted = JSON.parse(readFileSync(statePath, "utf8")) as Record<string, unknown>;
+      expect(persisted.bundleId).toBe(expectedBundleId);
+      expect(persisted.appliedSnapshotId).toBe(expectedAppliedSnapshotId);
+    } finally {
+      snapshotSpy.mockRestore();
+    }
+  });
+
   test("snapshot policy enforce rejects behind distribution head", () => {
     const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
     const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const stateDir = mkdtempSync(path.join(tmpdir(), "intentos-trust-snapshot-state-enforce-"));
+    tempDirs.push(stateDir);
+    const statePath = path.join(stateDir, "snapshot-state.json");
     const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
     const snapshotSpy = jest
       .spyOn(trustDistribution, "resolveTrustDistributionSnapshot")
@@ -1543,7 +1650,8 @@ describe("IntentOS receipt policy enforcement", () => {
           logger,
           env: {
             INTENTOS_TRUST_DISTRIBUTION: "fs",
-            INTENTOS_TRUST_SNAPSHOT_POLICY: "enforce"
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "enforce",
+            INTENTOS_TRUST_SNAPSHOT_STATE_PATH: statePath
           }
         }
       );
@@ -1558,7 +1666,8 @@ describe("IntentOS receipt policy enforcement", () => {
           logger,
           env: {
             INTENTOS_TRUST_DISTRIBUTION: "fs",
-            INTENTOS_TRUST_SNAPSHOT_POLICY: "enforce"
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "enforce",
+            INTENTOS_TRUST_SNAPSHOT_STATE_PATH: statePath
           }
         }
       );
@@ -1573,6 +1682,9 @@ describe("IntentOS receipt policy enforcement", () => {
   test("snapshot policy warn logs conflict and continues", () => {
     const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
     const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const stateDir = mkdtempSync(path.join(tmpdir(), "intentos-trust-snapshot-state-warn-"));
+    tempDirs.push(stateDir);
+    const statePath = path.join(stateDir, "snapshot-state.json");
     const snapshotSpy = jest
       .spyOn(trustDistribution, "resolveTrustDistributionSnapshot")
       .mockImplementationOnce(() => ({
@@ -1592,7 +1704,8 @@ describe("IntentOS receipt policy enforcement", () => {
           trustVersion: "v2",
           env: {
             INTENTOS_TRUST_DISTRIBUTION: "fs",
-            INTENTOS_TRUST_SNAPSHOT_POLICY: "warn"
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "warn",
+            INTENTOS_TRUST_SNAPSHOT_STATE_PATH: statePath
           }
         }
       );
@@ -1608,7 +1721,8 @@ describe("IntentOS receipt policy enforcement", () => {
           logger,
           env: {
             INTENTOS_TRUST_DISTRIBUTION: "fs",
-            INTENTOS_TRUST_SNAPSHOT_POLICY: "warn"
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "warn",
+            INTENTOS_TRUST_SNAPSHOT_STATE_PATH: statePath
           }
         }
       );

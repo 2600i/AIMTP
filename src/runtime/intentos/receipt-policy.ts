@@ -31,6 +31,12 @@ import {
   createTrustSnapshotStoreFromEnv,
   type TrustSnapshotStore
 } from "./trust-snapshot-store";
+import {
+  canonicalizeTrustBundleForSigning,
+  computeAppliedSnapshotId,
+  computeBundleId,
+  computeRevocationsId
+} from "./trust-ids";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -598,14 +604,6 @@ function readTrustBundleSignaturePolicy(
   }
 }
 
-function canonicalizeTrustBundleForSigning(bundle: Record<string, unknown>): Buffer {
-  const canonicalPayload = {
-    ...bundle,
-    signature: undefined
-  };
-  return Buffer.from(stableStringifyJson(canonicalPayload), "utf8");
-}
-
 function verifyTrustBundleSignature(
   bundle: Record<string, unknown>,
   trustedSigners: TrustBundleSignerKeys,
@@ -680,6 +678,22 @@ function summarizeTrustBundleRevocations(revocations: TrustBundleRevocations): s
     0
   );
   return `signers=${revocations.signers.size}; issuerKeys=${issuerKeyCount}`;
+}
+
+function canonicalizeTrustBundleRevocationsForId(revocations: TrustBundleRevocations): {
+  readonly signers: ReadonlyArray<string>;
+  readonly issuerKeys: Readonly<Record<string, ReadonlyArray<string>>>;
+} {
+  const signers = Array.from(revocations.signers).sort();
+  const issuerKeys = Object.fromEntries(
+    Object.entries(revocations.issuerKeys)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([issuer, fingerprints]) => [issuer, Array.from(fingerprints).sort()])
+  );
+  return {
+    signers,
+    issuerKeys
+  };
 }
 
 function appendTransparencyPolicyEvent(
@@ -771,6 +785,9 @@ function readTrustedKeys(
     const nextState: TrustSnapshotState = {
       transparencyHead: snapshotCandidate.transparencyHead,
       ...(snapshotCandidate.bundleId ? { bundleId: snapshotCandidate.bundleId } : {}),
+      ...(snapshotCandidate.appliedSnapshotId
+        ? { appliedSnapshotId: snapshotCandidate.appliedSnapshotId }
+        : {}),
       ...(typeof snapshotCandidate.fetchedAtMs === "number"
         ? { fetchedAtMs: snapshotCandidate.fetchedAtMs }
         : {}),
@@ -908,6 +925,31 @@ function readTrustedKeys(
         }
       }
 
+      const revocationsOverrideJson = normalizeNonEmptyString(
+        options.trustBundleRevocationsJson ?? options.env?.INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON
+      );
+      const revocationsPresent =
+        Boolean(revocationsOverrideJson) ||
+        Boolean(distributionSnapshot?.revocationsPath) ||
+        parsedBundle.bundle.revocations !== undefined;
+      const bundleId = computeBundleId(parsedBundle.bundle);
+      const revocationsId = revocationsPresent
+        ? computeRevocationsId(canonicalizeTrustBundleRevocationsForId(bundleRevocations))
+        : undefined;
+      const appliedHead = distributionSnapshot?.transparencyHead;
+      const appliedSnapshotId = computeAppliedSnapshotId({
+        bundleId,
+        ...(revocationsId ? { revocationsId } : {}),
+        ...(appliedHead ? { transparencyHead: appliedHead } : {})
+      });
+      if (distributionMode !== "off" && distributionSnapshot && snapshotCandidate) {
+        snapshotCandidate = {
+          ...snapshotCandidate,
+          bundleId,
+          appliedSnapshotId
+        };
+      }
+
       appendTransparencyPolicyEvent(transparencyLog, "bundle_loaded", bundleHash);
       if (hasTrustBundleRevocations(bundleRevocations)) {
         appendTransparencyPolicyEvent(
@@ -928,6 +970,17 @@ function readTrustedKeys(
           transparencyLog,
           configError: snapshotCommitError
         };
+      }
+      if (distributionMode !== "off" && distributionSnapshot) {
+        logger.warn({
+          event: "intentos_trust_snapshot_applied",
+          mode: distributionMode,
+          bundleId,
+          revocationsId: revocationsId ?? null,
+          appliedSnapshotId,
+          head: appliedHead ?? null,
+          source: snapshotCandidate?.source ?? null
+        });
       }
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,

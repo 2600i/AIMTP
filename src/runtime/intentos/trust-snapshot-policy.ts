@@ -6,6 +6,7 @@ export type SnapshotDecision = "accept" | "warn" | "reject";
 export interface TrustSnapshotState {
   readonly transparencyHead?: TransparencyHead;
   readonly bundleId?: string;
+  readonly appliedSnapshotId?: string;
   readonly fetchedAtMs?: number;
   readonly source?: string;
 }
@@ -13,6 +14,7 @@ export interface TrustSnapshotState {
 export interface TrustSnapshotCandidate {
   readonly transparencyHead?: TransparencyHead;
   readonly bundleId?: string;
+  readonly appliedSnapshotId?: string;
   readonly fetchedAtMs?: number;
   readonly source?: string;
 }
