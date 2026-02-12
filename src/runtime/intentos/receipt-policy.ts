@@ -12,7 +12,8 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import {
   appendTransparencyEntry,
   type TransparencyEntryType,
-  verifyTransparencyLog
+  verifyTransparencyLog,
+  verifyTransparencyLogIncremental
 } from "./trust-transparency";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
@@ -113,10 +114,13 @@ interface TrustBundleRevocations {
 }
 
 type TransparencyLogMode = "off" | "append" | "verify";
+type TransparencyCheckpointMode = "off" | "append" | "verify";
 
 interface TransparencyLogPolicy {
   readonly mode: TransparencyLogMode;
   readonly path: string;
+  readonly checkpointMode: TransparencyCheckpointMode;
+  readonly checkpointPublicKeyPem: string;
 }
 
 const TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON = "bundle signature required";
@@ -234,6 +238,14 @@ function normalizeTransparencyLogMode(value: unknown): TransparencyLogMode {
   return "off";
 }
 
+function normalizeTransparencyCheckpointMode(value: unknown): TransparencyCheckpointMode {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "append" || normalized === "verify" || normalized === "off") {
+    return normalized;
+  }
+  return "off";
+}
+
 function readTransparencyLogPolicy(
   bundlePath: string,
   options: ProcessReceiptEnvelopeOptions
@@ -247,7 +259,13 @@ function readTransparencyLogPolicy(
   }
   return {
     mode: normalizeTransparencyLogMode(options.env?.INTENTOS_TRANSPARENCY_LOG_MODE),
-    path: logPath
+    path: logPath,
+    checkpointMode: normalizeTransparencyCheckpointMode(
+      options.env?.INTENTOS_TRANSPARENCY_CHECKPOINT_MODE
+    ),
+    checkpointPublicKeyPem: normalizeNonEmptyString(
+      options.env?.INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY
+    )
   };
 }
 
@@ -654,7 +672,13 @@ function readTrustedKeys(
   const transparencyLog = readTransparencyLogPolicy(bundlePath, options);
   if (bundlePath) {
     if (transparencyLog?.mode === "verify") {
-      const verification = verifyTransparencyLog(transparencyLog.path);
+      const useCheckpointIncrementalVerification =
+        transparencyLog.checkpointMode === "verify" && transparencyLog.checkpointPublicKeyPem.length > 0;
+      const verification = useCheckpointIncrementalVerification
+        ? verifyTransparencyLogIncremental(transparencyLog.path, {
+          checkpointPublicKeyPem: transparencyLog.checkpointPublicKeyPem
+        })
+        : verifyTransparencyLog(transparencyLog.path);
       if (!verification.valid) {
         return {
           trustedKeys: EMPTY_TRUSTED_KEYS,

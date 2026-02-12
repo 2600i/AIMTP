@@ -362,6 +362,9 @@ IntentOS v3 includes an opt-in local transparency log for trust-bundle and recei
 
 - `INTENTOS_TRANSPARENCY_LOG_PATH=/path/to/trust-log.jsonl`
 - `INTENTOS_TRANSPARENCY_LOG_MODE=off|append|verify` (default `off`)
+- `INTENTOS_TRANSPARENCY_CHECKPOINT_MODE=off|append|verify` (default `off`)
+- `INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY=<PEM>` (used in `verify` mode)
+- `INTENTOS_TRANSPARENCY_CHECKPOINT_SIGNING_KEY=<PEM>` (used in checkpoint append tooling)
 
 Behavior:
 
@@ -373,15 +376,31 @@ Behavior:
   - `policy_reject`
 - `verify`: verifies the full hash chain on bundle load and rejects bundle trust loading when the chain is broken.
 
+Optional checkpoints:
+
+- Checkpoints are signed integrity markers stored in the same JSONL log as `{"kind":"checkpoint",...}` records.
+- A checkpoint binds `size` and `chainHash` to an operator signer key (Ed25519 over canonical JSON).
+- In checkpoint verify mode, runtime can verify only entries after the latest valid checkpoint.
+- If no valid checkpoint is found (or checkpoint verify mode/key is not enabled), behavior falls back to full-chain verification.
+- Runtime does not sign checkpoints. Signing is performed only by operator tooling (for example, `tools/trust-log-checkpoint.mjs`).
+
 Use cases:
 
 - Audit trail for trust-bundle acceptance/rejection decisions.
 - Forensic review of bundle revocation and policy-rejection events after incidents.
+- Faster repeated integrity checks on long logs via incremental verification checkpoints.
 
 Scope note:
 
 - This is not a blockchain and does not provide global consensus.
 - It is a local append-only integrity chain (`prevHash -> entryHash -> chainHash`) intended for operator-controlled environments.
+- Checkpoint signer keys are operator keys and are separate from trust-bundle signer keys.
+
+Operational guidance (checkpoint key rotation):
+
+- Rotate checkpoint signing keys by publishing a new checkpoint signed by the new key.
+- During rotation windows, verify with the currently active public key configured in `INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY`.
+- Preserve old checkpoints for audit history; they remain historical artifacts even after key rotation.
 
 ## Trust Roadmap (v3, Non-binding)
 

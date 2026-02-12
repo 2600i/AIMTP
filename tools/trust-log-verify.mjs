@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import fs from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { createRequire } from "node:module";
@@ -9,6 +10,7 @@ const HELP = `IntentOS Trust Log Verify CLI
 
 Usage:
   node tools/trust-log-verify.mjs --log path/to/log.jsonl
+  node tools/trust-log-verify.mjs --log path/to/log.jsonl --checkpoint-key path/to/checkpoint-public.pem
 `;
 
 function parseArgs(argv) {
@@ -47,7 +49,7 @@ function loadTrustTransparencyModule() {
   }
 }
 
-function main() {
+async function main() {
   let options;
   try {
     options = parseArgs(process.argv.slice(2));
@@ -66,10 +68,25 @@ function main() {
     process.exit(1);
   }
 
-  const { verifyTransparencyLog } = loadTrustTransparencyModule();
-  const result = verifyTransparencyLog(path.resolve(options.log));
+  const {
+    verifyTransparencyLog,
+    verifyTransparencyLogIncremental
+  } = loadTrustTransparencyModule();
+  const checkpointKeyPath = options["checkpoint-key"];
+  const checkpointPublicKeyPem =
+    typeof checkpointKeyPath === "string"
+      ? await fs.readFile(path.resolve(checkpointKeyPath), "utf8")
+      : undefined;
+  const result = checkpointPublicKeyPem
+    ? verifyTransparencyLogIncremental(path.resolve(options.log), {
+      checkpointPublicKeyPem
+    })
+    : verifyTransparencyLog(path.resolve(options.log));
   if (result.valid) {
     console.log("VERIFIED: chain intact");
+    if (typeof result.checkpointUsedSize === "number") {
+      console.log(`checkpoint: used size=${result.checkpointUsedSize}`);
+    }
     return;
   }
 
@@ -78,4 +95,8 @@ function main() {
   process.exit(1);
 }
 
-main();
+main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+});

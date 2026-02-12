@@ -4,6 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { Receipt, signReceipt } from "../src/protocol/intentos-receipts";
 import { processReceiptEnvelope, type ReceiptPolicyLogger } from "../src/runtime/intentos/receipt-policy";
+import {
+  appendTransparencyEntry,
+  createCheckpoint,
+  loadTransparencyLog
+} from "../src/runtime/intentos/trust-transparency";
 
 function baseReceipt(): Receipt {
   return {
@@ -1363,6 +1368,110 @@ describe("IntentOS receipt policy enforcement", () => {
     expect(result.accepted).toBe(false);
     expect(result.trusted).toBe(false);
     expect(result.reason).toContain("trusted key config: transparency log chain broken at entry 1");
+  });
+
+  test("verify mode accepts valid checkpointed log when checkpoint verify is enabled", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const transparencyLogPath = writeTransparencyLog([]);
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        bundleHash: "abc"
+      },
+      { path: transparencyLogPath }
+    );
+    const { publicKey: checkpointPublicKey, privateKey: checkpointPrivateKey } =
+      generateKeyPairSync("ed25519");
+    const checkpointPublicKeyPem = checkpointPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const checkpointPrivateKeyPem = checkpointPrivateKey
+      .export({ type: "pkcs8", format: "pem" })
+      .toString();
+    const checkpoint = createCheckpoint({
+      logEntries: loadTransparencyLog(transparencyLogPath),
+      chainHash: loadTransparencyLog(transparencyLogPath)[0].chainHash,
+      signer: "signer://checkpoint-ops",
+      signingKeyPem: checkpointPrivateKeyPem
+    });
+    writeFileSync(
+      transparencyLogPath,
+      `${readFileSync(transparencyLogPath, "utf8")}${JSON.stringify(checkpoint)}\n`,
+      "utf8"
+    );
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRANSPARENCY_LOG_PATH: transparencyLogPath,
+          INTENTOS_TRANSPARENCY_LOG_MODE: "verify",
+          INTENTOS_TRANSPARENCY_CHECKPOINT_MODE: "verify",
+          INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY: checkpointPublicKeyPem
+        }
+      }
+    );
+
+    expect(result.accepted).toBe(true);
+    expect(result.trusted).toBe(true);
+    expect(result.reason).toBe("signature valid");
+  });
+
+  test("verify mode rejects invalid checkpoint signature when checkpoint verify is enabled", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const transparencyLogPath = writeTransparencyLog([]);
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        bundleHash: "abc"
+      },
+      { path: transparencyLogPath }
+    );
+    const { publicKey: checkpointPublicKey, privateKey: checkpointPrivateKey } =
+      generateKeyPairSync("ed25519");
+    const checkpointPublicKeyPem = checkpointPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const checkpointPrivateKeyPem = checkpointPrivateKey
+      .export({ type: "pkcs8", format: "pem" })
+      .toString();
+    const checkpoint = createCheckpoint({
+      logEntries: loadTransparencyLog(transparencyLogPath),
+      chainHash: loadTransparencyLog(transparencyLogPath)[0].chainHash,
+      signer: "signer://checkpoint-ops",
+      signingKeyPem: checkpointPrivateKeyPem
+    });
+    const invalidCheckpoint = {
+      ...checkpoint,
+      signature: `${checkpoint.signature.slice(0, -2)}AA`
+    };
+    writeFileSync(
+      transparencyLogPath,
+      `${readFileSync(transparencyLogPath, "utf8")}${JSON.stringify(invalidCheckpoint)}\n`,
+      "utf8"
+    );
+
+    const result = processReceiptEnvelope(
+      { receipt: signed },
+      {
+        mode: "enforce",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_BUNDLE_PATH: trustBundlePath,
+          INTENTOS_TRANSPARENCY_LOG_PATH: transparencyLogPath,
+          INTENTOS_TRANSPARENCY_LOG_MODE: "verify",
+          INTENTOS_TRANSPARENCY_CHECKPOINT_MODE: "verify",
+          INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY: checkpointPublicKeyPem
+        }
+      }
+    );
+
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
+    expect(result.reason).toContain("trusted key config: transparency log chain broken at entry 2");
   });
 
   test("bundle signature env is ignored when bundle path is not set", () => {
