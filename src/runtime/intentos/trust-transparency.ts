@@ -36,6 +36,13 @@ export interface TransparencyCheckpointEntry {
 
 export type TransparencyLogRecord = TransparencyLogEntry | TransparencyCheckpointEntry;
 
+export interface TransparencyHead {
+  readonly size: number;
+  readonly chainHash: string;
+}
+
+export type HeadCompare = "equal" | "ahead" | "behind" | "conflict";
+
 export interface AppendTransparencyEntryOptions {
   readonly path: string;
 }
@@ -428,6 +435,36 @@ export function computeChainHash(prevHash: string | undefined, entryHash: string
       entryHash: normalizeNonEmptyString(entryHash) ?? ""
     })
   );
+}
+
+export function computeTransparencyHead(entries: ReadonlyArray<TransparencyLogRecord>): TransparencyHead {
+  let size = 0;
+  let chainHash = "";
+
+  for (const record of entries) {
+    if (isCheckpointRecord(record)) {
+      continue;
+    }
+    const prevHash = chainHash.length > 0 ? chainHash : undefined;
+    const entryHash = computeEntryHash({
+      timestamp: record.timestamp,
+      type: record.type,
+      ...(normalizeNonEmptyString(record.bundleHash) ? { bundleHash: normalizeNonEmptyString(record.bundleHash) } : {}),
+      ...(normalizeNonEmptyString(record.reason) ? { reason: normalizeNonEmptyString(record.reason) } : {}),
+      ...(prevHash ? { prevHash } : {})
+    });
+    chainHash = computeChainHash(prevHash, entryHash);
+    size += 1;
+  }
+
+  return { size, chainHash };
+}
+
+export function compareTransparencyHeads(a: TransparencyHead, b: TransparencyHead): HeadCompare {
+  if (a.size === b.size) {
+    return a.chainHash === b.chainHash ? "equal" : "conflict";
+  }
+  return a.size > b.size ? "ahead" : "behind";
 }
 
 export function createCheckpoint(

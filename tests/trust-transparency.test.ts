@@ -6,8 +6,10 @@ import { type Receipt, signReceipt } from "../src/protocol/intentos-receipts";
 import { processReceiptEnvelope } from "../src/runtime/intentos/receipt-policy";
 import {
   appendTransparencyEntry,
+  compareTransparencyHeads,
   createCheckpoint,
   computeEntryHash,
+  computeTransparencyHead,
   findLatestValidCheckpoint,
   loadTransparencyLog,
   verifyCheckpoint,
@@ -128,6 +130,63 @@ describe("IntentOS trust transparency log", () => {
       timestamp: "2026-02-11T12:00:00.000Z"
     });
     expect(hashA).toBe(hashB);
+  });
+
+  test("compute transparency head ignores checkpoints", () => {
+    const logPath = makeTempLogPath();
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        bundleHash: "bundle-a"
+      },
+      { path: logPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:01.000Z",
+        type: "policy_reject",
+        reason: "blocked"
+      },
+      { path: logPath }
+    );
+
+    const { privateKey } = generateKeyPairSync("ed25519");
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const entries = loadTransparencyLog(logPath);
+    const checkpoint = createCheckpoint({
+      logEntries: entries,
+      chainHash: entries[entries.length - 1].chainHash,
+      signer: "signer://transparency-ops",
+      signingKeyPem: privateKeyPem
+    });
+    const records = [...entries, checkpoint];
+
+    expect(computeTransparencyHead(records)).toEqual({
+      size: 2,
+      chainHash: entries[1].chainHash
+    });
+  });
+
+  test("compare transparency heads equal/ahead/behind/conflict", () => {
+    const equalA = { size: 2, chainHash: "hash-2" };
+    const equalB = { size: 2, chainHash: "hash-2" };
+    const ahead = { size: 3, chainHash: "hash-3" };
+    const behind = { size: 1, chainHash: "hash-1" };
+    const conflict = { size: 2, chainHash: "other-hash-2" };
+
+    expect(compareTransparencyHeads(equalA, equalB)).toBe("equal");
+    expect(compareTransparencyHeads(ahead, behind)).toBe("ahead");
+    expect(compareTransparencyHeads(behind, ahead)).toBe("behind");
+    expect(compareTransparencyHeads(equalA, conflict)).toBe("conflict");
+  });
+
+  test("compare transparency heads is symmetric for ahead/behind", () => {
+    const a = { size: 7, chainHash: "hash-7" };
+    const b = { size: 3, chainHash: "hash-3" };
+
+    expect(compareTransparencyHeads(a, b)).toBe("ahead");
+    expect(compareTransparencyHeads(b, a)).toBe("behind");
   });
 
   test("checkpoint signature verify pass/fail", () => {
