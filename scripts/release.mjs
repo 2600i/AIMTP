@@ -4,13 +4,20 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { execFileSync, spawnSync } from "node:child_process";
+import {
+  evaluateStablePrMergeRequirement,
+  isStableVersion,
+  parseParentCountFromRevList
+} from "./release-guardrails.mjs";
 
 const CONFIG_PATH = path.resolve(process.cwd(), ".aimtp", "release.yml");
 const REQUIRED_PREFLIGHT_RULES = [
   "noDetachedHead",
-  "onMainOnly",
   "cleanWorkingTree",
-  "localMainMatchesRemote"
+  "fetchTags",
+  "onMainOnly",
+  "localMainMatchesRemote",
+  "prMergeForStable"
 ];
 
 function fail(message) {
@@ -33,6 +40,25 @@ function run(command, args, options = {}) {
   }
 }
 
+function runCaptured(command, args) {
+  const printable = `${command} ${args.join(" ")}`.trim();
+  console.log(`$ ${printable}`);
+  const result = spawnSync(command, args, { encoding: "utf8" });
+  if (result.error) {
+    fail(`Failed to run "${printable}": ${result.error.message}`);
+  }
+  return result;
+}
+
+function printCaptured(result) {
+  if (result.stdout) {
+    process.stdout.write(result.stdout);
+  }
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+}
+
 function read(command, args) {
   try {
     return execFileSync(command, args, { encoding: "utf8" }).trim();
@@ -49,6 +75,7 @@ function parseArgs(argv) {
       "Usage: node scripts/release.mjs <preflight|release|github-release> [options]\n" +
       "Examples:\n" +
       "  node scripts/release.mjs preflight\n" +
+      "  node scripts/release.mjs preflight --version 0.3.0-rc.1\n" +
       "  node scripts/release.mjs release --version 0.3.0\n" +
       "  node scripts/release.mjs release --use-current-version\n" +
       "  node scripts/release.mjs github-release --use-current-tag"
@@ -108,6 +135,12 @@ function parseReleaseConfig() {
       Array.isArray(config.preflight?.rules) ? config.preflight.rules : [];
   const preflightRules = preflightRulesRaw.map((entry) => String(entry).trim()).filter(Boolean);
   const allowPrereleaseRelease = Boolean(config.preflight?.allowPrereleaseRelease);
+  const requirePrMergeForStable =
+    config.requirePrMergeForStable === undefined
+      ? config.preflight?.requirePrMergeForStable === undefined
+        ? true
+        : Boolean(config.preflight.requirePrMergeForStable)
+      : Boolean(config.requirePrMergeForStable);
   const githubReleaseEnabled = Boolean(config.githubRelease?.enabled);
   const githubGenerateNotes =
     config.githubRelease?.generateNotes === undefined ? true : Boolean(config.githubRelease.generateNotes);
@@ -127,6 +160,7 @@ function parseReleaseConfig() {
   if (preflightRules.length === 0) {
     fail(`Invalid ${CONFIG_PATH}: missing "preflight rules"`);
   }
+
   const missingRequiredRules = REQUIRED_PREFLIGHT_RULES.filter((rule) => !preflightRules.includes(rule));
   if (missingRequiredRules.length > 0) {
     fail(`Invalid ${CONFIG_PATH}: missing required preflight rules: ${missingRequiredRules.join(", ")}`);
@@ -139,6 +173,7 @@ function parseReleaseConfig() {
     checks,
     preflightRules,
     allowPrereleaseRelease,
+    requirePrMergeForStable,
     githubReleaseEnabled,
     githubGenerateNotes
   };
@@ -157,7 +192,7 @@ function ensureNoDetachedHead() {
 function ensureOnConfiguredBranch(config) {
   const branch = gitCurrentBranch();
   if (branch !== config.branch) {
-    fail(`Preflight failed: current branch is "${branch}", expected "${config.branch}".`);
+    fail(`Preflight failed: stable release requires branch \"${config.branch}\" (found \"${branch}\").`);
   }
 }
 
@@ -168,28 +203,142 @@ function ensureCleanWorkingTree() {
   }
 }
 
-function fetchRemoteState(config) {
-  run("git", ["fetch", config.remote, "--tags"]);
+function isFetchHeadPermissionError(message) {
+  const text = String(message ?? "");
+  return /FETCH_HEAD/i.test(text) && /(permission denied|operation not permitted|eacces|eperm)/i.test(text);
 }
 
-function ensureLocalMainMatchesRemote(config) {
+function parseRemoteTagSet(lsRemoteOutput) {
+  const tags = new Set();
+  for (const line of String(lsRemoteOutput ?? "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const [sha, ref] = trimmed.split(/\s+/);
+    if (!sha || !ref || !ref.startsWith("refs/tags/")) {
+      continue;
+    }
+    const rawTag = ref.slice("refs/tags/".length);
+    const tag = rawTag.endsWith("^{}") ? rawTag.slice(0, -3) : rawTag;
+    if (tag) {
+      tags.add(tag);
+    }
+  }
+  return tags;
+}
+
+function readRemoteBranchRefViaLsRemote(config) {
+  const branchRef = `refs/heads/${config.branch}`;
+  const result = runCaptured("git", ["ls-remote", config.remote, branchRef]);
+  if (result.status !== 0) {
+    printCaptured(result);
+    fail(`Preflight failed: unable to read ${config.remote}/${config.branch} via ls-remote.`);
+  }
+  const firstLine = String(result.stdout ?? "").trim().split("\n").find((line) => line.trim().length > 0) ?? "";
+  const [sha] = firstLine.split(/\s+/);
+  if (!sha || !/^[0-9a-f]{40}$/i.test(sha)) {
+    fail(`Preflight failed: unable to parse ${config.remote}/${config.branch} SHA from ls-remote output.`);
+  }
+  return sha;
+}
+
+function fetchRemoteState(config) {
+  const fetchResult = runCaptured("git", ["fetch", config.remote, "--tags"]);
+  if (fetchResult.status === 0) {
+    printCaptured(fetchResult);
+    return {
+      fallbackUsed: false,
+      remoteTagSet: null
+    };
+  }
+
+  const details = `${fetchResult.stdout ?? ""}\n${fetchResult.stderr ?? ""}`;
+  if (!isFetchHeadPermissionError(details)) {
+    printCaptured(fetchResult);
+    fail(`Preflight failed: git fetch ${config.remote} --tags failed.`);
+  }
+
+  console.warn(
+    `Preflight warning: unable to write FETCH_HEAD during git fetch; ` +
+    `falling back to \"git ls-remote --tags ${config.remote}\" for tag existence checks.`
+  );
+
+  const lsRemoteResult = runCaptured("git", ["ls-remote", "--tags", config.remote]);
+  if (lsRemoteResult.status !== 0) {
+    printCaptured(lsRemoteResult);
+    fail(`Preflight failed: fallback tag lookup via ls-remote failed for remote \"${config.remote}\".`);
+  }
+
+  const remoteTagSet = parseRemoteTagSet(lsRemoteResult.stdout ?? "");
+  return {
+    fallbackUsed: true,
+    remoteTagSet
+  };
+}
+
+function ensureLocalMainMatchesRemote(config, fetchState) {
   const localRef = read("git", ["rev-parse", config.branch]);
-  const remoteRef = read("git", ["rev-parse", `${config.remote}/${config.branch}`]);
+  const remoteRef = fetchState.fallbackUsed
+    ? readRemoteBranchRefViaLsRemote(config)
+    : read("git", ["rev-parse", `${config.remote}/${config.branch}`]);
+
   if (localRef !== remoteRef) {
     fail(
-      `Preflight failed: ${config.branch} (${localRef}) does not match ${config.remote}/${config.branch} (${remoteRef}).`
+      `Preflight failed: stable release requires ${config.branch} to match ${config.remote}/${config.branch} ` +
+      `(local=${localRef}, remote=${remoteRef}).`
     );
   }
 }
 
-function runPreflight(config) {
+function ensureStablePrMergeRequirement(version, config) {
+  const parentLine = read("git", ["rev-list", "--parents", "-n", "1", "HEAD"]);
+  const parentCount = parseParentCountFromRevList(parentLine);
+  const subject = read("git", ["show", "-s", "--format=%s", "HEAD"]);
+
+  const decision = evaluateStablePrMergeRequirement({
+    version,
+    requirePrMergeForStable: config.requirePrMergeForStable,
+    parentCount,
+    subject
+  });
+
+  if (!decision.allowed) {
+    fail(`Preflight failed: ${decision.message}`);
+  }
+}
+
+function runPreflight(config, options = {}) {
+  const packageVersion = readPackageVersion();
+  const releaseVersion = typeof options.releaseVersion === "string" && options.releaseVersion.trim().length > 0
+    ? options.releaseVersion.trim()
+    : packageVersion;
+  const stable = isStableVersion(releaseVersion);
+  let fetchState = null;
+
   const ruleHandlers = {
     noDetachedHead: () => ensureNoDetachedHead(),
-    onMainOnly: () => ensureOnConfiguredBranch(config),
     cleanWorkingTree: () => ensureCleanWorkingTree(),
+    fetchTags: () => {
+      fetchState = fetchRemoteState(config);
+    },
+    onMainOnly: () => {
+      if (stable) {
+        ensureOnConfiguredBranch(config);
+      }
+    },
     localMainMatchesRemote: () => {
-      fetchRemoteState(config);
-      ensureLocalMainMatchesRemote(config);
+      if (stable) {
+        if (!fetchState) {
+          fetchState = fetchRemoteState(config);
+        }
+        ensureLocalMainMatchesRemote(config, fetchState);
+      }
+    },
+    prMergeForStable: () => {
+      if (stable && config.requirePrMergeForStable) {
+        ensureStablePrMergeRequirement(releaseVersion, config);
+      }
     }
   };
 
@@ -200,6 +349,13 @@ function runPreflight(config) {
     }
     handler();
   }
+
+  return {
+    packageVersion,
+    releaseVersion,
+    stable,
+    fetchState
+  };
 }
 
 function readPackageVersion() {
@@ -225,10 +381,14 @@ function assertSemver(version) {
   }
 }
 
-function ensureTagDoesNotExist(tagName) {
+function ensureTagDoesNotExist(tagName, fetchState) {
   const existing = read("git", ["tag", "-l", tagName]);
   if (existing === tagName) {
-    fail(`Tag already exists: ${tagName}`);
+    fail(`Tag already exists locally: ${tagName}`);
+  }
+
+  if (fetchState?.fallbackUsed && fetchState.remoteTagSet?.has(tagName)) {
+    fail(`Tag already exists on remote: ${tagName}`);
   }
 }
 
@@ -331,21 +491,23 @@ function runRelease(config, options) {
     fail("Use exactly one of --version <X.Y.Z> or --use-current-version.");
   }
 
-  runPreflight(config);
-
   let version = "";
   if (explicitVersion) {
     assertSemver(explicitVersion);
     version = explicitVersion;
-    setPackageVersion(version);
   } else {
     version = readPackageVersion();
-    if (isPrerelease(version) && !config.allowPrereleaseRelease) {
-      fail(
-        `Refusing prerelease version "${version}" with --use-current-version. ` +
-        "Set preflight.allowPrereleaseRelease=true to override."
-      );
-    }
+  }
+
+  runPreflight(config, { releaseVersion: version });
+
+  if (explicitVersion) {
+    setPackageVersion(version);
+  } else if (isPrerelease(version) && !config.allowPrereleaseRelease) {
+    fail(
+      `Refusing prerelease version "${version}" with --use-current-version. ` +
+      "Set preflight.allowPrereleaseRelease=true to override."
+    );
   }
 
   const packageVersion = readPackageVersion();
@@ -354,10 +516,10 @@ function runRelease(config, options) {
   }
 
   runReleaseChecks(config);
-  fetchRemoteState(config);
+  const fetchState = fetchRemoteState(config);
 
   const tagName = `${config.tagPrefix}${version}`;
-  ensureTagDoesNotExist(tagName);
+  ensureTagDoesNotExist(tagName, fetchState);
   createAnnotatedTag(tagName);
   pushRelease(config, tagName);
   printReleaseSuccess(version, tagName);
@@ -368,7 +530,13 @@ function main() {
   const config = parseReleaseConfig();
 
   if (subcommand === "preflight") {
-    runPreflight(config);
+    const overrideVersion = typeof options.version === "string" ? options.version.trim() : "";
+    if (overrideVersion) {
+      assertSemver(overrideVersion);
+    }
+    runPreflight(config, {
+      releaseVersion: overrideVersion || undefined
+    });
     console.log("Preflight checks passed.");
     return;
   }

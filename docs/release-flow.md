@@ -24,6 +24,19 @@ This document defines the hardened release process for AIMTP and the tooling add
 6. Optionally publish a GitHub release (config-gated):
    - `npm run release:gh`
 
+## Stable Release Requirements
+
+Stable versions (`X.Y.Z` with no prerelease suffix) have additional preflight gates:
+
+- Current branch must be `main`.
+- Local `main` must match `origin/main` exactly.
+- `HEAD` must represent a PR-style merge:
+  - a merge commit (2+ parents), or
+  - a subject that starts with `merge:`.
+- Stable tags are only cut from `main`.
+- If the PR-merge gate fails, preflight exits nonzero with:
+  - `Stable cuts require a PR merge into main (merge commit or 'merge:' subject).`
+
 ## What Hardened Release Enforces
 
 - Rejects detached HEAD.
@@ -44,6 +57,8 @@ This document defines the hardened release process for AIMTP and the tooling add
 - `release --use-current-version`:
   - Uses `package.json` version as-is.
   - Blocks prerelease versions (`-alpha`, `-beta`, etc.) unless config allows it.
+
+Prerelease guidance remains unchanged: prerelease versions continue to use the existing flow and checks.
 
 ## GitHub Release
 
