@@ -12,8 +12,31 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import {
   appendTransparencyEntry,
   type TransparencyEntryType,
-  verifyTransparencyLog
+  verifyTransparencyProof,
+  verifyTransparencyLog,
+  verifyTransparencyLogIncremental
 } from "./trust-transparency";
+import {
+  normalizeTrustDistributionMode,
+  resolveTrustDistributionSnapshot,
+  type TrustDistributionSnapshot
+} from "./trust-distribution";
+import {
+  evaluateTrustSnapshot,
+  type SnapshotPolicyMode,
+  type TrustSnapshotCandidate,
+  type TrustSnapshotState
+} from "./trust-snapshot-policy";
+import {
+  createTrustSnapshotStoreFromEnv,
+  type TrustSnapshotStore
+} from "./trust-snapshot-store";
+import {
+  canonicalizeTrustBundleForSigning,
+  computeAppliedSnapshotId,
+  computeBundleId,
+  computeRevocationsId
+} from "./trust-ids";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -113,10 +136,13 @@ interface TrustBundleRevocations {
 }
 
 type TransparencyLogMode = "off" | "append" | "verify";
+type TransparencyCheckpointMode = "off" | "append" | "verify";
 
 interface TransparencyLogPolicy {
   readonly mode: TransparencyLogMode;
   readonly path: string;
+  readonly checkpointMode: TransparencyCheckpointMode;
+  readonly checkpointPublicKeyPem: string;
 }
 
 const TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON = "bundle signature required";
@@ -131,6 +157,9 @@ const EMPTY_TRUST_BUNDLE_REVOCATIONS: TrustBundleRevocations = Object.freeze({
   issuerKeys: Object.freeze({})
 });
 const EMPTY_TRUST_BUNDLE_KEY_REVOCATIONS: ReadonlySet<string> = Object.freeze(new Set<string>());
+let currentTrustSnapshotState: TrustSnapshotState | null = null;
+let currentTrustSnapshotStore: TrustSnapshotStore | null = null;
+let currentTrustSnapshotStorePath = "";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -234,20 +263,57 @@ function normalizeTransparencyLogMode(value: unknown): TransparencyLogMode {
   return "off";
 }
 
+function normalizeTransparencyCheckpointMode(value: unknown): TransparencyCheckpointMode {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "append" || normalized === "verify" || normalized === "off") {
+    return normalized;
+  }
+  return "off";
+}
+
+function normalizeTrustSnapshotPolicyMode(value: unknown): SnapshotPolicyMode {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "warn" || normalized === "enforce" || normalized === "off") {
+    return normalized;
+  }
+  return "off";
+}
+
+function warnTrustSnapshotStore(
+  logger: ReceiptPolicyLogger,
+  operation: "load" | "save",
+  mode: SnapshotPolicyMode,
+  message: string
+): void {
+  logger.warn({
+    event: "intentos_trust_snapshot_store",
+    operation,
+    mode,
+    message
+  });
+}
+
 function readTransparencyLogPolicy(
   bundlePath: string,
-  options: ProcessReceiptEnvelopeOptions
+  options: ProcessReceiptEnvelopeOptions,
+  logPathOverride?: string
 ): TransparencyLogPolicy | null {
   if (!bundlePath) {
     return null;
   }
-  const logPath = normalizeNonEmptyString(options.env?.INTENTOS_TRANSPARENCY_LOG_PATH);
+  const logPath = normalizeNonEmptyString(logPathOverride ?? options.env?.INTENTOS_TRANSPARENCY_LOG_PATH);
   if (!logPath) {
     return null;
   }
   return {
     mode: normalizeTransparencyLogMode(options.env?.INTENTOS_TRANSPARENCY_LOG_MODE),
-    path: logPath
+    path: logPath,
+    checkpointMode: normalizeTransparencyCheckpointMode(
+      options.env?.INTENTOS_TRANSPARENCY_CHECKPOINT_MODE
+    ),
+    checkpointPublicKeyPem: normalizeNonEmptyString(
+      options.env?.INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY
+    )
   };
 }
 
@@ -480,8 +546,20 @@ function parseTrustBundleRevocationsJson(raw: unknown): TrustBundleRevocations {
 
 function readTrustBundleRevocations(
   parsedBundle: ParsedTrustBundle,
-  options: ProcessReceiptEnvelopeOptions
+  options: ProcessReceiptEnvelopeOptions,
+  revocationsPathOverride?: string
 ): TrustBundleRevocations {
+  const revocationsPath = normalizeNonEmptyString(revocationsPathOverride);
+  if (revocationsPath) {
+    try {
+      const revocationsJson = readFileSync(revocationsPath, "utf8");
+      return parseTrustBundleRevocationsJson(revocationsJson);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`invalid_trust_bundle_revocations_path:${message}`);
+    }
+  }
+
   const overrideRevocationsJson =
     options.trustBundleRevocationsJson ?? options.env?.INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON;
   if (overrideRevocationsJson !== undefined) {
@@ -524,14 +602,6 @@ function readTrustBundleSignaturePolicy(
       configError: TRUST_BUNDLE_MALFORMED_REASON
     };
   }
-}
-
-function canonicalizeTrustBundleForSigning(bundle: Record<string, unknown>): Buffer {
-  const canonicalPayload = {
-    ...bundle,
-    signature: undefined
-  };
-  return Buffer.from(stableStringifyJson(canonicalPayload), "utf8");
 }
 
 function verifyTrustBundleSignature(
@@ -610,6 +680,22 @@ function summarizeTrustBundleRevocations(revocations: TrustBundleRevocations): s
   return `signers=${revocations.signers.size}; issuerKeys=${issuerKeyCount}`;
 }
 
+function canonicalizeTrustBundleRevocationsForId(revocations: TrustBundleRevocations): {
+  readonly signers: ReadonlyArray<string>;
+  readonly issuerKeys: Readonly<Record<string, ReadonlyArray<string>>>;
+} {
+  const signers = Array.from(revocations.signers).sort();
+  const issuerKeys = Object.fromEntries(
+    Object.entries(revocations.issuerKeys)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([issuer, fingerprints]) => [issuer, Array.from(fingerprints).sort()])
+  );
+  return {
+    signers,
+    issuerKeys
+  };
+}
+
 function appendTransparencyPolicyEvent(
   transparencyLog: TransparencyLogPolicy | null,
   type: TransparencyEntryType,
@@ -648,22 +734,153 @@ function readTrustedKeys(
     };
   }
 
+  let distributionSnapshot: TrustDistributionSnapshot | null = null;
+  const distributionMode = normalizeTrustDistributionMode(options.env?.INTENTOS_TRUST_DISTRIBUTION);
+  if (distributionMode !== "off") {
+    try {
+      distributionSnapshot = resolveTrustDistributionSnapshot(options.env);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
+        bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog: null,
+        configError: message
+      };
+    }
+  }
+
   const bundlePath = normalizeNonEmptyString(
-    options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
+    distributionSnapshot?.bundlePath ?? options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
   );
-  const transparencyLog = readTransparencyLogPolicy(bundlePath, options);
+  const transparencyLog = readTransparencyLogPolicy(
+    bundlePath,
+    options,
+    distributionSnapshot?.transparencyLogPath
+  );
+  const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
+  const snapshotPolicyMode = normalizeTrustSnapshotPolicyMode(options.env?.INTENTOS_TRUST_SNAPSHOT_POLICY);
+  const snapshotStorePath = normalizeNonEmptyString(options.env?.INTENTOS_TRUST_SNAPSHOT_STATE_PATH);
+  if (snapshotStorePath) {
+    if (!currentTrustSnapshotStore || currentTrustSnapshotStorePath !== snapshotStorePath) {
+      currentTrustSnapshotStore = createTrustSnapshotStoreFromEnv(options.env);
+      currentTrustSnapshotStorePath = snapshotStorePath;
+      try {
+        const loadedState = currentTrustSnapshotStore?.load() ?? null;
+        currentTrustSnapshotState = loadedState;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        warnTrustSnapshotStore(logger, "load", snapshotPolicyMode, message);
+      }
+    }
+  }
+  let snapshotCandidate: TrustSnapshotCandidate | null = null;
+  const commitSnapshotCandidate = (): string | null => {
+    if (!snapshotCandidate?.transparencyHead) {
+      return null;
+    }
+
+    const nextState: TrustSnapshotState = {
+      transparencyHead: snapshotCandidate.transparencyHead,
+      ...(snapshotCandidate.bundleId ? { bundleId: snapshotCandidate.bundleId } : {}),
+      ...(snapshotCandidate.appliedSnapshotId
+        ? { appliedSnapshotId: snapshotCandidate.appliedSnapshotId }
+        : {}),
+      ...(typeof snapshotCandidate.fetchedAtMs === "number"
+        ? { fetchedAtMs: snapshotCandidate.fetchedAtMs }
+        : {}),
+      ...(snapshotCandidate.source ? { source: snapshotCandidate.source } : {})
+    };
+    const previousState = currentTrustSnapshotState;
+    currentTrustSnapshotState = nextState;
+
+    if (!currentTrustSnapshotStore || !snapshotStorePath) {
+      return null;
+    }
+
+    try {
+      currentTrustSnapshotStore.save(nextState);
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      currentTrustSnapshotState = previousState;
+      warnTrustSnapshotStore(logger, "save", snapshotPolicyMode, message);
+      if (snapshotPolicyMode === "enforce") {
+        return `trust snapshot state save failed: ${message}`;
+      }
+      return null;
+    }
+    return null;
+  };
+  if (distributionMode !== "off" && distributionSnapshot) {
+    snapshotCandidate = {
+      ...(distributionSnapshot.transparencyHead
+        ? { transparencyHead: distributionSnapshot.transparencyHead }
+        : {}),
+      source: `${distributionMode}:${distributionSnapshot.bundlePath ?? bundlePath ?? "none"}`,
+      fetchedAtMs: Date.now()
+    };
+    const evaluation = evaluateTrustSnapshot(currentTrustSnapshotState, snapshotCandidate, snapshotPolicyMode);
+    if (evaluation.reason) {
+      logger.warn({
+        event: "intentos_trust_snapshot_policy",
+        mode: snapshotPolicyMode,
+        decision: evaluation.decision,
+        reason: evaluation.reason,
+        relation: evaluation.relation,
+        current: currentTrustSnapshotState ?? null,
+        next: snapshotCandidate
+      });
+    }
+    if (evaluation.decision === "reject") {
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
+        bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog,
+        configError: `trust snapshot policy rejected: ${evaluation.reason ?? "snapshot_rejected"}`
+      };
+    }
+  }
+
   if (bundlePath) {
     if (transparencyLog?.mode === "verify") {
-      const verification = verifyTransparencyLog(transparencyLog.path);
-      if (!verification.valid) {
-        return {
-          trustedKeys: EMPTY_TRUSTED_KEYS,
-          bundleIssuerKeys: null,
-          bundleRevocations: null,
-          bundleHash: null,
-          transparencyLog,
-          configError: `${TRANSPARENCY_LOG_CHAIN_BROKEN_REASON} at entry ${verification.brokenAt ?? 1}`
-        };
+      const checkpointVerificationEnabled =
+        transparencyLog.checkpointMode === "verify" && transparencyLog.checkpointPublicKeyPem.length > 0;
+      const transparencyProof = distributionSnapshot?.transparencyProof;
+      if (checkpointVerificationEnabled && transparencyProof) {
+        const verification = verifyTransparencyProof(transparencyProof, {
+          checkpointPublicKeyPem: transparencyLog.checkpointPublicKeyPem
+        });
+        if (!verification.ok) {
+          return {
+            trustedKeys: EMPTY_TRUSTED_KEYS,
+            bundleIssuerKeys: null,
+            bundleRevocations: null,
+            bundleHash: null,
+            transparencyLog,
+            configError: `${TRANSPARENCY_LOG_CHAIN_BROKEN_REASON} at entry ${verification.brokenAt ?? 1}`
+          };
+        }
+      } else {
+        const verification = checkpointVerificationEnabled
+          ? verifyTransparencyLogIncremental(transparencyLog.path, {
+            checkpointPublicKeyPem: transparencyLog.checkpointPublicKeyPem
+          })
+          : verifyTransparencyLog(transparencyLog.path);
+        if (!verification.valid) {
+          return {
+            trustedKeys: EMPTY_TRUSTED_KEYS,
+            bundleIssuerKeys: null,
+            bundleRevocations: null,
+            bundleHash: null,
+            transparencyLog,
+            configError: `${TRANSPARENCY_LOG_CHAIN_BROKEN_REASON} at entry ${verification.brokenAt ?? 1}`
+          };
+        }
       }
     }
 
@@ -683,7 +900,11 @@ function readTrustedKeys(
     try {
       const parsedBundle = loadTrustedReceiptKeysFromBundlePath(bundlePath);
       const bundleHash = computeTrustBundleHash(parsedBundle.bundle);
-      const bundleRevocations = readTrustBundleRevocations(parsedBundle, options);
+      const bundleRevocations = readTrustBundleRevocations(
+        parsedBundle,
+        options,
+        distributionSnapshot?.revocationsPath
+      );
       if (signaturePolicy.requireSignature) {
         const signatureError = verifyTrustBundleSignature(
           parsedBundle.bundle,
@@ -704,6 +925,31 @@ function readTrustedKeys(
         }
       }
 
+      const revocationsOverrideJson = normalizeNonEmptyString(
+        options.trustBundleRevocationsJson ?? options.env?.INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON
+      );
+      const revocationsPresent =
+        Boolean(revocationsOverrideJson) ||
+        Boolean(distributionSnapshot?.revocationsPath) ||
+        parsedBundle.bundle.revocations !== undefined;
+      const bundleId = computeBundleId(parsedBundle.bundle);
+      const revocationsId = revocationsPresent
+        ? computeRevocationsId(canonicalizeTrustBundleRevocationsForId(bundleRevocations))
+        : undefined;
+      const appliedHead = distributionSnapshot?.transparencyHead;
+      const appliedSnapshotId = computeAppliedSnapshotId({
+        bundleId,
+        ...(revocationsId ? { revocationsId } : {}),
+        ...(appliedHead ? { transparencyHead: appliedHead } : {})
+      });
+      if (distributionMode !== "off" && distributionSnapshot && snapshotCandidate) {
+        snapshotCandidate = {
+          ...snapshotCandidate,
+          bundleId,
+          appliedSnapshotId
+        };
+      }
+
       appendTransparencyPolicyEvent(transparencyLog, "bundle_loaded", bundleHash);
       if (hasTrustBundleRevocations(bundleRevocations)) {
         appendTransparencyPolicyEvent(
@@ -714,6 +960,28 @@ function readTrustedKeys(
         );
       }
 
+      const snapshotCommitError = commitSnapshotCandidate();
+      if (snapshotCommitError) {
+        return {
+          trustedKeys: EMPTY_TRUSTED_KEYS,
+          bundleIssuerKeys: null,
+          bundleRevocations: null,
+          bundleHash,
+          transparencyLog,
+          configError: snapshotCommitError
+        };
+      }
+      if (distributionMode !== "off" && distributionSnapshot) {
+        logger.warn({
+          event: "intentos_trust_snapshot_applied",
+          mode: distributionMode,
+          bundleId,
+          revocationsId: revocationsId ?? null,
+          appliedSnapshotId,
+          head: appliedHead ?? null,
+          source: snapshotCandidate?.source ?? null
+        });
+      }
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: parsedBundle.issuerKeys,
@@ -739,8 +1007,20 @@ function readTrustedKeys(
   const trustedKeysJson =
     options.trustedReceiptKeysJson ?? options.env?.INTENTOS_TRUSTED_RECEIPT_KEYS_JSON;
   try {
+    const parsedTrustedKeys = parseTrustedReceiptKeysJson(trustedKeysJson);
+    const snapshotCommitError = commitSnapshotCandidate();
+    if (snapshotCommitError) {
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
+        bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog: null,
+        configError: snapshotCommitError
+      };
+    }
     return {
-      trustedKeys: parseTrustedReceiptKeysJson(trustedKeysJson),
+      trustedKeys: parsedTrustedKeys,
       bundleIssuerKeys: null,
       bundleRevocations: null,
       bundleHash: null,

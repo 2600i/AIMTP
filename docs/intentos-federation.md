@@ -356,12 +356,54 @@ Signing helper:
 node tools/trust-bundle-sign.mjs --in examples/trust-bundle.json --out trust-bundle.signed.json --signer signer://relay-admin --private-key-pem /path/signer-private-key.pem
 ```
 
+## v3 Trust Distribution Adapters (Experimental)
+
+IntentOS v3 supports an opt-in trust distribution boundary for selecting where trust artifacts are sourced, without changing trust or receipt verification semantics.
+
+- `INTENTOS_TRUST_DISTRIBUTION=off|fs|http` (default `off`)
+  - `off`: existing trust loading path is unchanged.
+  - `fs`: uses local filesystem paths via adapter snapshot.
+  - `http`: fetches trust artifacts, writes local temp snapshots, then reuses the existing verification pipeline.
+- `INTENTOS_TRUST_SNAPSHOT_POLICY=off|warn|enforce` (default `off`)
+  - Applies only when trust distribution is enabled.
+  - Uses transparency heads (when present) to evaluate monotonicity (`ahead/equal/behind/conflict`).
+  - `warn` emits diagnostics for rollback/fork-like candidates and proceeds.
+  - `enforce` rejects `behind/conflict` candidates before trust artifacts are applied.
+- `INTENTOS_TRUST_SNAPSHOT_STATE_PATH=/path/to/trust-snapshot-state.json` (optional)
+  - Enables persisted snapshot state across process restarts.
+  - State file is used to seed last accepted transparency head for rollback/fork checks.
+  - In `INTENTOS_TRUST_SNAPSHOT_POLICY=enforce`, snapshot state save failures reject trust loading.
+
+Adapter-related env vars:
+
+- Filesystem mode:
+  - `INTENTOS_TRUST_BUNDLE_PATH=/path/to/trust-bundle.json`
+  - `INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH=/path/to/revocations.json` (optional)
+  - `INTENTOS_TRANSPARENCY_LOG_PATH=/path/to/trust-log.jsonl` (optional, existing transparency behavior)
+- HTTP mode:
+  - `INTENTOS_TRUST_HTTP_BUNDLE_URL=https://.../trust-bundle.json`
+  - `INTENTOS_TRUST_HTTP_REVOCATIONS_URL=https://.../revocations.json` (optional)
+  - `INTENTOS_TRUST_HTTP_HEAD_URL=https://.../trust-head.json` (optional)
+  - `INTENTOS_TRUST_HTTP_CHECKPOINT_URL=https://.../trust-checkpoint.json` (optional)
+  - `INTENTOS_TRUST_HTTP_LOGTAIL_URL=https://.../trust-log-tail.jsonl` (optional, non-checkpoint entries only)
+
+Guarantees:
+
+- Adapter selection changes source-of-truth location only.
+- Bundle signature checks, revocation application, transparency verification, and receipt trust decisions are unchanged.
+- Default behavior remains unchanged unless `INTENTOS_TRUST_DISTRIBUTION` is set to `fs` or `http`.
+- Snapshot policy is opt-in and affects only distribution snapshot acceptance; receipt/trust crypto semantics are unchanged.
+- In transparency verify mode with checkpoint verify enabled, a distribution snapshot MAY provide a transparency proof (`head + optional checkpoint + log tail`) so runtime can verify the head without downloading a full local JSONL log.
+
 ## v3 Transparency Log (Experimental)
 
 IntentOS v3 includes an opt-in local transparency log for trust-bundle and receipt-policy events. This is integrity-focused telemetry for operators and does not change trust or execution semantics.
 
 - `INTENTOS_TRANSPARENCY_LOG_PATH=/path/to/trust-log.jsonl`
 - `INTENTOS_TRANSPARENCY_LOG_MODE=off|append|verify` (default `off`)
+- `INTENTOS_TRANSPARENCY_CHECKPOINT_MODE=off|append|verify` (default `off`)
+- `INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY=<PEM>` (used in `verify` mode)
+- `INTENTOS_TRANSPARENCY_CHECKPOINT_SIGNING_KEY=<PEM>` (used in checkpoint append tooling)
 
 Behavior:
 
@@ -373,15 +415,40 @@ Behavior:
   - `policy_reject`
 - `verify`: verifies the full hash chain on bundle load and rejects bundle trust loading when the chain is broken.
 
+Optional distribution transparency proof:
+
+- When trust distribution is enabled, snapshots can include an in-memory proof containing:
+  - `head` (`size`, `chainHash`)
+  - optional signed checkpoint
+  - tail log entries (non-checkpoint entries only)
+- If transparency verify mode and checkpoint verify mode are enabled with a checkpoint public key, runtime verifies this proof first.
+- If the proof is missing or proof verification preconditions are not enabled, runtime behavior falls back to existing log-path verification.
+
+Optional checkpoints:
+
+- Checkpoints are signed integrity markers stored in the same JSONL log as `{"kind":"checkpoint",...}` records.
+- A checkpoint binds `size` and `chainHash` to an operator signer key (Ed25519 over canonical JSON).
+- In checkpoint verify mode, runtime can verify only entries after the latest valid checkpoint.
+- If no valid checkpoint is found (or checkpoint verify mode/key is not enabled), behavior falls back to full-chain verification.
+- Runtime does not sign checkpoints. Signing is performed only by operator tooling (for example, `tools/trust-log-checkpoint.mjs`).
+
 Use cases:
 
 - Audit trail for trust-bundle acceptance/rejection decisions.
 - Forensic review of bundle revocation and policy-rejection events after incidents.
+- Faster repeated integrity checks on long logs via incremental verification checkpoints.
 
 Scope note:
 
 - This is not a blockchain and does not provide global consensus.
 - It is a local append-only integrity chain (`prevHash -> entryHash -> chainHash`) intended for operator-controlled environments.
+- Checkpoint signer keys are operator keys and are separate from trust-bundle signer keys.
+
+Operational guidance (checkpoint key rotation):
+
+- Rotate checkpoint signing keys by publishing a new checkpoint signed by the new key.
+- During rotation windows, verify with the currently active public key configured in `INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY`.
+- Preserve old checkpoints for audit history; they remain historical artifacts even after key rotation.
 
 ## Trust Roadmap (v3, Non-binding)
 
