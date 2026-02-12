@@ -26,6 +26,10 @@ import {
   type TrustSnapshotCandidate,
   type TrustSnapshotState
 } from "./trust-snapshot-policy";
+import {
+  createTrustSnapshotStoreFromEnv,
+  type TrustSnapshotStore
+} from "./trust-snapshot-store";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -147,6 +151,8 @@ const EMPTY_TRUST_BUNDLE_REVOCATIONS: TrustBundleRevocations = Object.freeze({
 });
 const EMPTY_TRUST_BUNDLE_KEY_REVOCATIONS: ReadonlySet<string> = Object.freeze(new Set<string>());
 let currentTrustSnapshotState: TrustSnapshotState | null = null;
+let currentTrustSnapshotStore: TrustSnapshotStore | null = null;
+let currentTrustSnapshotStorePath = "";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -264,6 +270,20 @@ function normalizeTrustSnapshotPolicyMode(value: unknown): SnapshotPolicyMode {
     return normalized;
   }
   return "off";
+}
+
+function warnTrustSnapshotStore(
+  logger: ReceiptPolicyLogger,
+  operation: "load" | "save",
+  mode: SnapshotPolicyMode,
+  message: string
+): void {
+  logger.warn({
+    event: "intentos_trust_snapshot_store",
+    operation,
+    mode,
+    message
+  });
 }
 
 function readTransparencyLogPolicy(
@@ -725,27 +745,68 @@ function readTrustedKeys(
     options,
     distributionSnapshot?.transparencyLogPath
   );
+  const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
   const snapshotPolicyMode = normalizeTrustSnapshotPolicyMode(options.env?.INTENTOS_TRUST_SNAPSHOT_POLICY);
-  let snapshotCandidate: TrustSnapshotCandidate | null = null;
-  const commitSnapshotCandidate = (): void => {
-    if (!snapshotCandidate?.head) {
-      return;
+  const snapshotStorePath = normalizeNonEmptyString(options.env?.INTENTOS_TRUST_SNAPSHOT_STATE_PATH);
+  if (snapshotStorePath) {
+    if (!currentTrustSnapshotStore || currentTrustSnapshotStorePath !== snapshotStorePath) {
+      currentTrustSnapshotStore = createTrustSnapshotStoreFromEnv(options.env);
+      currentTrustSnapshotStorePath = snapshotStorePath;
+      try {
+        const loadedState = currentTrustSnapshotStore?.load() ?? null;
+        currentTrustSnapshotState = loadedState;
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        warnTrustSnapshotStore(logger, "load", snapshotPolicyMode, message);
+      }
     }
-    currentTrustSnapshotState = {
-      head: snapshotCandidate.head,
-      source: snapshotCandidate.source,
-      observedAt: snapshotCandidate.observedAt
+  }
+  let snapshotCandidate: TrustSnapshotCandidate | null = null;
+  const commitSnapshotCandidate = (): string | null => {
+    if (!snapshotCandidate?.transparencyHead) {
+      return null;
+    }
+
+    const nextState: TrustSnapshotState = {
+      transparencyHead: snapshotCandidate.transparencyHead,
+      ...(snapshotCandidate.bundleId ? { bundleId: snapshotCandidate.bundleId } : {}),
+      ...(typeof snapshotCandidate.fetchedAtMs === "number"
+        ? { fetchedAtMs: snapshotCandidate.fetchedAtMs }
+        : {}),
+      ...(snapshotCandidate.source ? { source: snapshotCandidate.source } : {})
     };
+    const previousState = currentTrustSnapshotState;
+    currentTrustSnapshotState = nextState;
+
+    if (!currentTrustSnapshotStore || !snapshotStorePath) {
+      return null;
+    }
+
+    try {
+      currentTrustSnapshotStore.save(nextState);
+      return null;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      currentTrustSnapshotState = previousState;
+      warnTrustSnapshotStore(logger, "save", snapshotPolicyMode, message);
+      if (snapshotPolicyMode === "enforce") {
+        return `trust snapshot state save failed: ${message}`;
+      }
+      return null;
+    }
+    return null;
   };
   if (distributionMode !== "off" && distributionSnapshot) {
     snapshotCandidate = {
-      ...(distributionSnapshot.transparencyHead ? { head: distributionSnapshot.transparencyHead } : {}),
+      ...(distributionSnapshot.transparencyHead
+        ? { transparencyHead: distributionSnapshot.transparencyHead }
+        : {}),
       source: `${distributionMode}:${distributionSnapshot.bundlePath ?? bundlePath ?? "none"}`,
-      observedAt: new Date().toISOString()
+      fetchedAtMs: Date.now()
     };
     const evaluation = evaluateTrustSnapshot(currentTrustSnapshotState, snapshotCandidate, snapshotPolicyMode);
     if (evaluation.reason) {
-      (options.logger ?? DEFAULT_POLICY_LOGGER).warn({
+      logger.warn({
         event: "intentos_trust_snapshot_policy",
         mode: snapshotPolicyMode,
         decision: evaluation.decision,
@@ -839,7 +900,17 @@ function readTrustedKeys(
         );
       }
 
-      commitSnapshotCandidate();
+      const snapshotCommitError = commitSnapshotCandidate();
+      if (snapshotCommitError) {
+        return {
+          trustedKeys: EMPTY_TRUSTED_KEYS,
+          bundleIssuerKeys: null,
+          bundleRevocations: null,
+          bundleHash,
+          transparencyLog,
+          configError: snapshotCommitError
+        };
+      }
       return {
         trustedKeys: EMPTY_TRUSTED_KEYS,
         bundleIssuerKeys: parsedBundle.issuerKeys,
@@ -866,7 +937,17 @@ function readTrustedKeys(
     options.trustedReceiptKeysJson ?? options.env?.INTENTOS_TRUSTED_RECEIPT_KEYS_JSON;
   try {
     const parsedTrustedKeys = parseTrustedReceiptKeysJson(trustedKeysJson);
-    commitSnapshotCandidate();
+    const snapshotCommitError = commitSnapshotCandidate();
+    if (snapshotCommitError) {
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
+        bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog: null,
+        configError: snapshotCommitError
+      };
+    }
     return {
       trustedKeys: parsedTrustedKeys,
       bundleIssuerKeys: null,

@@ -369,6 +369,10 @@ IntentOS v3 supports an opt-in trust distribution boundary for selecting where t
   - Uses transparency heads (when present) to evaluate monotonicity (`ahead/equal/behind/conflict`).
   - `warn` emits diagnostics for rollback/fork-like candidates and proceeds.
   - `enforce` rejects `behind/conflict` candidates before trust artifacts are applied.
+- `INTENTOS_TRUST_SNAPSHOT_STATE_PATH=/path/to/trust-snapshot-state.json` (optional)
+  - Enables persisted snapshot state across process restarts.
+  - State file is used to seed last accepted transparency head for rollback/fork checks.
+  - In `INTENTOS_TRUST_SNAPSHOT_POLICY=enforce`, snapshot state save failures reject trust loading.
 
 Adapter-related env vars:
 

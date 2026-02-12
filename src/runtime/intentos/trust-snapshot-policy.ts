@@ -4,15 +4,17 @@ export type SnapshotPolicyMode = "off" | "warn" | "enforce";
 export type SnapshotDecision = "accept" | "warn" | "reject";
 
 export interface TrustSnapshotState {
-  readonly head?: TransparencyHead;
+  readonly transparencyHead?: TransparencyHead;
+  readonly bundleId?: string;
+  readonly fetchedAtMs?: number;
   readonly source?: string;
-  readonly observedAt?: string;
 }
 
 export interface TrustSnapshotCandidate {
-  readonly head?: TransparencyHead;
+  readonly transparencyHead?: TransparencyHead;
+  readonly bundleId?: string;
+  readonly fetchedAtMs?: number;
   readonly source?: string;
-  readonly observedAt?: string;
 }
 
 export interface SnapshotEvaluation {
@@ -56,8 +58,8 @@ export function evaluateTrustSnapshot(
     };
   }
 
-  const currentHead = current.head;
-  const nextHead = next.head;
+  const currentHead = current.transparencyHead;
+  const nextHead = next.transparencyHead;
   if (!currentHead && !nextHead) {
     return {
       decision: "accept",

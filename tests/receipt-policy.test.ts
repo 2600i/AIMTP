@@ -1,11 +1,12 @@
 import { createHash, generateKeyPairSync, sign as signBytes } from "node:crypto";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { Receipt, signReceipt } from "../src/protocol/intentos-receipts";
 import { processReceiptEnvelope, type ReceiptPolicyLogger } from "../src/runtime/intentos/receipt-policy";
 import * as trustDistribution from "../src/runtime/intentos/trust-distribution";
 import { evaluateTrustSnapshot } from "../src/runtime/intentos/trust-snapshot-policy";
+import { FileTrustSnapshotStore } from "../src/runtime/intentos/trust-snapshot-store";
 import {
   appendTransparencyEntry,
   createCheckpoint,
@@ -1321,7 +1322,7 @@ describe("IntentOS receipt policy enforcement", () => {
 
   test("evaluateTrustSnapshot covers accept/warn/reject rules", () => {
     const current = {
-      head: { size: 3, chainHash: "h3" },
+      transparencyHead: { size: 3, chainHash: "h3" },
       source: "snapshot://current"
     };
 
@@ -1330,42 +1331,48 @@ describe("IntentOS receipt policy enforcement", () => {
       reason: null,
       relation: null
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "h3" } }, "enforce")).toEqual({
+    expect(evaluateTrustSnapshot(current, { transparencyHead: { size: 3, chainHash: "h3" } }, "enforce")).toEqual({
       decision: "accept",
       reason: null,
       relation: "equal"
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 4, chainHash: "h4" } }, "enforce")).toEqual({
+    expect(evaluateTrustSnapshot(current, { transparencyHead: { size: 4, chainHash: "h4" } }, "enforce")).toEqual({
       decision: "accept",
       reason: null,
       relation: "ahead"
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 2, chainHash: "h2" } }, "warn")).toEqual({
+    expect(evaluateTrustSnapshot(current, { transparencyHead: { size: 2, chainHash: "h2" } }, "warn")).toEqual({
       decision: "warn",
       reason: "snapshot_behind",
       relation: "behind"
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 2, chainHash: "h2" } }, "enforce")).toEqual({
+    expect(evaluateTrustSnapshot(current, { transparencyHead: { size: 2, chainHash: "h2" } }, "enforce")).toEqual({
       decision: "reject",
       reason: "snapshot_behind",
       relation: "behind"
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 2, chainHash: "h2" } }, "off")).toEqual({
+    expect(evaluateTrustSnapshot(current, { transparencyHead: { size: 2, chainHash: "h2" } }, "off")).toEqual({
       decision: "accept",
       reason: "snapshot_behind",
       relation: "behind"
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "other-h3" } }, "warn")).toEqual({
+    expect(
+      evaluateTrustSnapshot(current, { transparencyHead: { size: 3, chainHash: "other-h3" } }, "warn")
+    ).toEqual({
       decision: "warn",
       reason: "snapshot_conflict",
       relation: "conflict"
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "other-h3" } }, "enforce")).toEqual({
+    expect(
+      evaluateTrustSnapshot(current, { transparencyHead: { size: 3, chainHash: "other-h3" } }, "enforce")
+    ).toEqual({
       decision: "reject",
       reason: "snapshot_conflict",
       relation: "conflict"
     });
-    expect(evaluateTrustSnapshot(current, { head: { size: 3, chainHash: "other-h3" } }, "off")).toEqual({
+    expect(
+      evaluateTrustSnapshot(current, { transparencyHead: { size: 3, chainHash: "other-h3" } }, "off")
+    ).toEqual({
       decision: "accept",
       reason: "snapshot_conflict",
       relation: "conflict"
@@ -1385,6 +1392,43 @@ describe("IntentOS receipt policy enforcement", () => {
       reason: null,
       relation: null
     });
+  });
+
+  test("trust snapshot store save/load roundtrip", () => {
+    const dirPath = mkdtempSync(path.join(tmpdir(), "intentos-trust-snapshot-store-"));
+    tempDirs.push(dirPath);
+    const statePath = path.join(dirPath, "snapshot-state.json");
+    const store = new FileTrustSnapshotStore(statePath);
+    const state = {
+      transparencyHead: { size: 9, chainHash: "head-9" },
+      bundleId: "bundle-9",
+      fetchedAtMs: 1767225600000,
+      source: "snapshot://source"
+    };
+    store.save(state);
+    expect(store.load()).toEqual(state);
+  });
+
+  test("trust snapshot store corrupt file read fails", () => {
+    const dirPath = mkdtempSync(path.join(tmpdir(), "intentos-trust-snapshot-store-"));
+    tempDirs.push(dirPath);
+    const statePath = path.join(dirPath, "snapshot-state.json");
+    writeFileSync(statePath, "{not-json", "utf8");
+    const store = new FileTrustSnapshotStore(statePath);
+    expect(() => store.load()).toThrow();
+  });
+
+  test("trust snapshot store atomic write does not leave temp files", () => {
+    const dirPath = mkdtempSync(path.join(tmpdir(), "intentos-trust-snapshot-store-"));
+    tempDirs.push(dirPath);
+    const statePath = path.join(dirPath, "snapshot-state.json");
+    const store = new FileTrustSnapshotStore(statePath);
+    store.save({
+      transparencyHead: { size: 1, chainHash: "head-1" },
+      source: "snapshot://source"
+    });
+    const entries = readdirSync(dirPath);
+    expect(entries.some((entry) => entry.startsWith("snapshot-state.json.tmp-"))).toBe(false);
   });
 
   test("snapshot policy enforce rejects behind distribution head", () => {
@@ -1488,6 +1532,47 @@ describe("IntentOS receipt policy enforcement", () => {
           mode: "warn",
           decision: "warn",
           reason: "snapshot_conflict"
+        })
+      );
+    } finally {
+      snapshotSpy.mockRestore();
+    }
+  });
+
+  test("snapshot policy enforce rejects when state save fails", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const stateDir = mkdtempSync(path.join(tmpdir(), "intentos-trust-snapshot-state-dir-"));
+    tempDirs.push(stateDir);
+
+    const snapshotSpy = jest.spyOn(trustDistribution, "resolveTrustDistributionSnapshot").mockReturnValue({
+      bundlePath: trustBundlePath,
+      transparencyHead: { size: 11, chainHash: "head-11" }
+    });
+
+    try {
+      const logger = { warn: jest.fn() } satisfies ReceiptPolicyLogger;
+      const result = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          logger,
+          env: {
+            INTENTOS_TRUST_DISTRIBUTION: "fs",
+            INTENTOS_TRUST_SNAPSHOT_POLICY: "enforce",
+            INTENTOS_TRUST_SNAPSHOT_STATE_PATH: stateDir
+          }
+        }
+      );
+      expect(result.accepted).toBe(false);
+      expect(result.trusted).toBe(false);
+      expect(result.reason).toContain("trust snapshot state save failed");
+      expect(logger.warn).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event: "intentos_trust_snapshot_store",
+          operation: "save",
+          mode: "enforce"
         })
       );
     } finally {
