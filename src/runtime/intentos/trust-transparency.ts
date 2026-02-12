@@ -67,6 +67,22 @@ export interface TransparencyLogVerificationResult {
   readonly checkpointUsedSize?: number;
 }
 
+export interface TransparencyProof {
+  readonly head: TransparencyHead;
+  readonly checkpoint?: TransparencyCheckpointEntry;
+  readonly entries: ReadonlyArray<TransparencyLogEntry>;
+}
+
+export interface VerifyTransparencyProofOptions {
+  readonly checkpointPublicKeyPem?: string;
+}
+
+export interface TransparencyProofVerificationResult {
+  readonly ok: boolean;
+  readonly brokenAt: number | null;
+  readonly reason: string | null;
+}
+
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -690,6 +706,87 @@ export function verifyTransparencyLogIncremental(
     brokenAt: latestInvalid?.lineNumber ?? indexedCheckpoints[indexedCheckpoints.length - 1].lineNumber,
     reason: latestInvalid?.reason ?? "checkpoint_invalid",
     entryCount: indexedEntries.length
+  };
+}
+
+export function verifyTransparencyProof(
+  proof: TransparencyProof,
+  options: VerifyTransparencyProofOptions = {}
+): TransparencyProofVerificationResult {
+  const checkpointPublicKeyPem = normalizeNonEmptyString(options.checkpointPublicKeyPem);
+  const checkpoint = proof.checkpoint;
+
+  let baseSize = 0;
+  let previousChainHash: string | undefined = undefined;
+  if (checkpoint) {
+    try {
+      verifyCheckpoint(checkpoint, checkpointPublicKeyPem ?? "");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        brokenAt: checkpoint.size + 1,
+        reason: message
+      };
+    }
+    baseSize = checkpoint.size;
+    previousChainHash = checkpoint.chainHash;
+  }
+
+  for (let index = 0; index < proof.entries.length; index += 1) {
+    const entry = proof.entries[index];
+    const actualPrevHash = normalizeNonEmptyString(entry.prevHash);
+    if ((previousChainHash ?? undefined) !== (actualPrevHash ?? undefined)) {
+      return {
+        ok: false,
+        brokenAt: baseSize + index + 1,
+        reason: "prev_hash_mismatch"
+      };
+    }
+
+    const expectedEntryHash = computeEntryHash(entry);
+    if (entry.entryHash !== expectedEntryHash) {
+      return {
+        ok: false,
+        brokenAt: baseSize + index + 1,
+        reason: "entry_hash_mismatch"
+      };
+    }
+
+    const expectedChainHash = computeChainHash(actualPrevHash, entry.entryHash);
+    if (entry.chainHash !== expectedChainHash) {
+      return {
+        ok: false,
+        brokenAt: baseSize + index + 1,
+        reason: "chain_hash_mismatch"
+      };
+    }
+
+    previousChainHash = entry.chainHash;
+  }
+
+  const resultingSize = baseSize + proof.entries.length;
+  if (resultingSize !== proof.head.size) {
+    return {
+      ok: false,
+      brokenAt: baseSize + proof.entries.length + 1,
+      reason: "proof_size_mismatch"
+    };
+  }
+
+  const resultingChainHash = previousChainHash ?? "";
+  if (resultingChainHash !== proof.head.chainHash) {
+    return {
+      ok: false,
+      brokenAt: baseSize + proof.entries.length + 1,
+      reason: "proof_chain_hash_mismatch"
+    };
+  }
+
+  return {
+    ok: true,
+    brokenAt: null,
+    reason: null
   };
 }
 

@@ -1320,6 +1320,94 @@ describe("IntentOS receipt policy enforcement", () => {
     );
   });
 
+  test("distribution snapshot proof path is used when transparency verify + checkpoint verify are enabled", () => {
+    const signed = signReceipt(baseReceipt(), privateKeyPem, issuer, { trustVersion: "v2" });
+    const trustBundlePath = writeTrustBundle(baseUnsignedV3Bundle());
+    const brokenTransparencyLogPath = writeTransparencyLog([
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        entryHash: "invalid-entry-hash",
+        chainHash: "invalid-chain-hash"
+      }
+    ]);
+    const proofLogPath = writeTransparencyLog([]);
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        bundleHash: "bundle-a"
+      },
+      { path: proofLogPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:01.000Z",
+        type: "bundle_rejected",
+        reason: "unknown signer"
+      },
+      { path: proofLogPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:02.000Z",
+        type: "policy_reject",
+        reason: "denied"
+      },
+      { path: proofLogPath }
+    );
+    const proofEntries = loadTransparencyLog(proofLogPath);
+    const { publicKey: checkpointPublicKey, privateKey: checkpointPrivateKey } =
+      generateKeyPairSync("ed25519");
+    const checkpointPublicKeyPem = checkpointPublicKey.export({ type: "spki", format: "pem" }).toString();
+    const checkpointPrivateKeyPem = checkpointPrivateKey
+      .export({ type: "pkcs8", format: "pem" })
+      .toString();
+    const checkpoint = createCheckpoint({
+      logEntries: proofEntries.slice(0, 2),
+      chainHash: proofEntries[1].chainHash,
+      signer: "signer://checkpoint-ops",
+      signingKeyPem: checkpointPrivateKeyPem
+    });
+    const snapshotSpy = jest.spyOn(trustDistribution, "resolveTrustDistributionSnapshot").mockReturnValue({
+      bundlePath: trustBundlePath,
+      transparencyLogPath: brokenTransparencyLogPath,
+      transparencyHead: {
+        size: 3,
+        chainHash: proofEntries[2].chainHash
+      },
+      transparencyProof: {
+        head: {
+          size: 3,
+          chainHash: proofEntries[2].chainHash
+        },
+        checkpoint,
+        entries: [proofEntries[2]]
+      }
+    });
+
+    try {
+      const result = processReceiptEnvelope(
+        { receipt: signed },
+        {
+          mode: "enforce",
+          trustVersion: "v2",
+          env: {
+            INTENTOS_TRUST_DISTRIBUTION: "http",
+            INTENTOS_TRANSPARENCY_LOG_MODE: "verify",
+            INTENTOS_TRANSPARENCY_CHECKPOINT_MODE: "verify",
+            INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY: checkpointPublicKeyPem
+          }
+        }
+      );
+      expect(result.accepted).toBe(true);
+      expect(result.trusted).toBe(true);
+      expect(result.reason).toBe("signature valid");
+    } finally {
+      snapshotSpy.mockRestore();
+    }
+  });
+
   test("evaluateTrustSnapshot covers accept/warn/reject rules", () => {
     const current = {
       transparencyHead: { size: 3, chainHash: "h3" },

@@ -12,6 +12,7 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import {
   appendTransparencyEntry,
   type TransparencyEntryType,
+  verifyTransparencyProof,
   verifyTransparencyLog,
   verifyTransparencyLogIncremental
 } from "./trust-transparency";
@@ -830,22 +831,39 @@ function readTrustedKeys(
 
   if (bundlePath) {
     if (transparencyLog?.mode === "verify") {
-      const useCheckpointIncrementalVerification =
+      const checkpointVerificationEnabled =
         transparencyLog.checkpointMode === "verify" && transparencyLog.checkpointPublicKeyPem.length > 0;
-      const verification = useCheckpointIncrementalVerification
-        ? verifyTransparencyLogIncremental(transparencyLog.path, {
+      const transparencyProof = distributionSnapshot?.transparencyProof;
+      if (checkpointVerificationEnabled && transparencyProof) {
+        const verification = verifyTransparencyProof(transparencyProof, {
           checkpointPublicKeyPem: transparencyLog.checkpointPublicKeyPem
-        })
-        : verifyTransparencyLog(transparencyLog.path);
-      if (!verification.valid) {
-        return {
-          trustedKeys: EMPTY_TRUSTED_KEYS,
-          bundleIssuerKeys: null,
-          bundleRevocations: null,
-          bundleHash: null,
-          transparencyLog,
-          configError: `${TRANSPARENCY_LOG_CHAIN_BROKEN_REASON} at entry ${verification.brokenAt ?? 1}`
-        };
+        });
+        if (!verification.ok) {
+          return {
+            trustedKeys: EMPTY_TRUSTED_KEYS,
+            bundleIssuerKeys: null,
+            bundleRevocations: null,
+            bundleHash: null,
+            transparencyLog,
+            configError: `${TRANSPARENCY_LOG_CHAIN_BROKEN_REASON} at entry ${verification.brokenAt ?? 1}`
+          };
+        }
+      } else {
+        const verification = checkpointVerificationEnabled
+          ? verifyTransparencyLogIncremental(transparencyLog.path, {
+            checkpointPublicKeyPem: transparencyLog.checkpointPublicKeyPem
+          })
+          : verifyTransparencyLog(transparencyLog.path);
+        if (!verification.valid) {
+          return {
+            trustedKeys: EMPTY_TRUSTED_KEYS,
+            bundleIssuerKeys: null,
+            bundleRevocations: null,
+            bundleHash: null,
+            transparencyLog,
+            configError: `${TRANSPARENCY_LOG_CHAIN_BROKEN_REASON} at entry ${verification.brokenAt ?? 1}`
+          };
+        }
       }
     }
 

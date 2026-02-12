@@ -2,7 +2,13 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import type { TransparencyCheckpointEntry, TransparencyHead } from "./trust-transparency";
+import type {
+  TransparencyCheckpointEntry,
+  TransparencyEntryType,
+  TransparencyHead,
+  TransparencyLogEntry,
+  TransparencyProof
+} from "./trust-transparency";
 
 export type TrustDistributionMode = "off" | "fs" | "http";
 
@@ -12,6 +18,7 @@ export interface TrustDistributionSnapshot {
   readonly transparencyLogPath?: string;
   readonly transparencyHead?: TransparencyHead;
   readonly checkpoint?: TransparencyCheckpointEntry;
+  readonly transparencyProof?: TransparencyProof;
 }
 
 export interface TrustDistributionAdapter {
@@ -54,6 +61,11 @@ function parseTransparencyCheckpoint(raw: unknown): TransparencyCheckpointEntry 
   if (!isPlainObject(raw)) {
     throw new Error("trust_distribution_checkpoint_must_be_object");
   }
+  const allowedKeys = new Set(["kind", "size", "chainHash", "createdAt", "signer", "signature"]);
+  const unknownKeys = Object.keys(raw).filter((key) => !allowedKeys.has(key));
+  if (unknownKeys.length > 0) {
+    throw new Error(`trust_distribution_checkpoint_unknown_keys:${unknownKeys.join(",")}`);
+  }
   if (raw.kind !== "checkpoint") {
     throw new Error("trust_distribution_checkpoint_kind_invalid");
   }
@@ -75,6 +87,75 @@ function parseTransparencyCheckpoint(raw: unknown): TransparencyCheckpointEntry 
     signer,
     signature
   };
+}
+
+function parseTransparencyEntryType(raw: unknown): TransparencyEntryType {
+  const normalized = normalizeNonEmptyString(raw);
+  if (
+    normalized === "bundle_loaded" ||
+    normalized === "bundle_rejected" ||
+    normalized === "revocation_applied" ||
+    normalized === "policy_reject"
+  ) {
+    return normalized;
+  }
+  throw new Error("trust_distribution_logtail_entry_type_invalid");
+}
+
+function parseTransparencyLogEntry(raw: unknown, lineNumber: number): TransparencyLogEntry {
+  if (!isPlainObject(raw)) {
+    throw new Error(`trust_distribution_logtail_entry_must_be_object:${lineNumber}`);
+  }
+  const allowedKeys = new Set([
+    "timestamp",
+    "type",
+    "bundleHash",
+    "reason",
+    "prevHash",
+    "entryHash",
+    "chainHash"
+  ]);
+  const unknownKeys = Object.keys(raw).filter((key) => !allowedKeys.has(key));
+  if (unknownKeys.length > 0) {
+    throw new Error(`trust_distribution_logtail_unknown_keys:${lineNumber}:${unknownKeys.join(",")}`);
+  }
+  const timestamp = normalizeNonEmptyString(raw.timestamp);
+  const entryHash = normalizeNonEmptyString(raw.entryHash);
+  const chainHash = normalizeNonEmptyString(raw.chainHash);
+  if (!timestamp || !entryHash || !chainHash) {
+    throw new Error(`trust_distribution_logtail_missing_required_fields:${lineNumber}`);
+  }
+  const prevHash = normalizeNonEmptyString(raw.prevHash);
+  const bundleHash = normalizeNonEmptyString(raw.bundleHash);
+  const reason = normalizeNonEmptyString(raw.reason);
+  return {
+    timestamp,
+    type: parseTransparencyEntryType(raw.type),
+    ...(bundleHash ? { bundleHash } : {}),
+    ...(reason ? { reason } : {}),
+    ...(prevHash ? { prevHash } : {}),
+    entryHash,
+    chainHash
+  };
+}
+
+function parseTransparencyLogTailJsonl(raw: string, source: string): ReadonlyArray<TransparencyLogEntry> {
+  const lines = raw
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  const entries: TransparencyLogEntry[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(lines[index]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`trust_distribution_invalid_jsonl:${source}:line_${index + 1}:${message}`);
+    }
+    entries.push(parseTransparencyLogEntry(parsed, index + 1));
+  }
+  return entries;
 }
 
 function writeJsonTempFile(prefix: string, filename: string, payload: unknown): string {
@@ -213,6 +294,20 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
     return parseJsonObject(raw, envKey);
   }
 
+  private fetchRawText(url: string, timeoutMs: number, envKey: string): string {
+    let raw = "";
+    try {
+      raw = this.fetchJsonText(url, timeoutMs, envKey);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (message.startsWith(`trust_distribution_http_fetch_failed:${envKey}:`)) {
+        throw new Error(message);
+      }
+      throw new Error(`trust_distribution_http_fetch_failed:${envKey}:${message}`);
+    }
+    return raw;
+  }
+
   resolveSnapshot(): TrustDistributionSnapshot {
     const timeoutMs = DEFAULT_HTTP_TIMEOUT_MS;
     const bundleUrl = validateTrustDistributionHttpUrl(
@@ -228,6 +323,7 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
     let revocationsPath: string | undefined;
     let transparencyHead: TransparencyHead | undefined;
     let checkpoint: TransparencyCheckpointEntry | undefined;
+    let transparencyProof: TransparencyProof | undefined;
 
     const revocationsUrlRaw = normalizeNonEmptyString(this.env.INTENTOS_TRUST_HTTP_REVOCATIONS_URL);
     if (revocationsUrlRaw) {
@@ -261,13 +357,49 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
       }
     }
 
+    const checkpointUrlRaw = normalizeNonEmptyString(this.env.INTENTOS_TRUST_HTTP_CHECKPOINT_URL);
+    if (checkpointUrlRaw) {
+      const checkpointUrl = validateTrustDistributionHttpUrl(
+        checkpointUrlRaw,
+        "INTENTOS_TRUST_HTTP_CHECKPOINT_URL"
+      );
+      const checkpointPayload = this.fetchJsonObject(
+        checkpointUrl,
+        timeoutMs,
+        "INTENTOS_TRUST_HTTP_CHECKPOINT_URL"
+      );
+      checkpoint = parseTransparencyCheckpoint(checkpointPayload);
+    }
+
+    let proofEntries: ReadonlyArray<TransparencyLogEntry> | undefined;
+    const logTailUrlRaw = normalizeNonEmptyString(this.env.INTENTOS_TRUST_HTTP_LOGTAIL_URL);
+    if (logTailUrlRaw) {
+      const logTailUrl = validateTrustDistributionHttpUrl(logTailUrlRaw, "INTENTOS_TRUST_HTTP_LOGTAIL_URL");
+      proofEntries = parseTransparencyLogTailJsonl(
+        this.fetchRawText(logTailUrl, timeoutMs, "INTENTOS_TRUST_HTTP_LOGTAIL_URL"),
+        "INTENTOS_TRUST_HTTP_LOGTAIL_URL"
+      );
+    }
+
+    if (proofEntries !== undefined || checkpoint !== undefined) {
+      if (!transparencyHead) {
+        throw new Error("trust_distribution_transparency_proof_requires_head");
+      }
+      transparencyProof = {
+        head: transparencyHead,
+        ...(checkpoint ? { checkpoint } : {}),
+        entries: proofEntries ?? []
+      };
+    }
+
     const transparencyLogPath = normalizeNonEmptyString(this.env.INTENTOS_TRANSPARENCY_LOG_PATH);
     return {
       bundlePath: writeJsonTempFile("intentos-trust-bundle-http-", "trust-bundle.json", bundlePayload),
       ...(revocationsPath ? { revocationsPath } : {}),
       ...(transparencyLogPath ? { transparencyLogPath } : {}),
       ...(transparencyHead ? { transparencyHead } : {}),
-      ...(checkpoint ? { checkpoint } : {})
+      ...(checkpoint ? { checkpoint } : {}),
+      ...(transparencyProof ? { transparencyProof } : {})
     };
   }
 }

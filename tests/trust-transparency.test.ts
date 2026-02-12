@@ -13,6 +13,7 @@ import {
   findLatestValidCheckpoint,
   loadTransparencyLog,
   verifyCheckpoint,
+  verifyTransparencyProof,
   verifyTransparencyLogIncremental,
   verifyTransparencyLog
 } from "../src/runtime/intentos/trust-transparency";
@@ -187,6 +188,171 @@ describe("IntentOS trust transparency log", () => {
 
     expect(compareTransparencyHeads(a, b)).toBe("ahead");
     expect(compareTransparencyHeads(b, a)).toBe("behind");
+  });
+
+  test("verify transparency proof with checkpoint and tail entries passes", () => {
+    const logPath = makeTempLogPath();
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        bundleHash: "bundle-a"
+      },
+      { path: logPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:01.000Z",
+        type: "bundle_rejected",
+        reason: "unknown signer"
+      },
+      { path: logPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:02.000Z",
+        type: "policy_reject",
+        reason: "denied"
+      },
+      { path: logPath }
+    );
+    const entries = loadTransparencyLog(logPath);
+
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const checkpoint = createCheckpoint({
+      logEntries: entries.slice(0, 2),
+      chainHash: entries[1].chainHash,
+      signer: "signer://transparency-ops",
+      signingKeyPem: privateKeyPem
+    });
+
+    const proof = {
+      head: {
+        size: 3,
+        chainHash: entries[2].chainHash
+      },
+      checkpoint,
+      entries: [entries[2]]
+    } as const;
+    expect(
+      verifyTransparencyProof(proof, {
+        checkpointPublicKeyPem: publicKeyPem
+      })
+    ).toEqual({
+      ok: true,
+      brokenAt: null,
+      reason: null
+    });
+  });
+
+  test("verify transparency proof fails when tail entry is tampered", () => {
+    const logPath = makeTempLogPath();
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        bundleHash: "bundle-a"
+      },
+      { path: logPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:01.000Z",
+        type: "bundle_rejected",
+        reason: "unknown signer"
+      },
+      { path: logPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:02.000Z",
+        type: "policy_reject",
+        reason: "denied"
+      },
+      { path: logPath }
+    );
+    const entries = loadTransparencyLog(logPath);
+
+    const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+    const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
+    const privateKeyPem = privateKey.export({ type: "pkcs8", format: "pem" }).toString();
+    const checkpoint = createCheckpoint({
+      logEntries: entries.slice(0, 2),
+      chainHash: entries[1].chainHash,
+      signer: "signer://transparency-ops",
+      signingKeyPem: privateKeyPem
+    });
+
+    const tamperedTail = {
+      ...entries[2],
+      reason: "tampered"
+    };
+    const result = verifyTransparencyProof(
+      {
+        head: {
+          size: 3,
+          chainHash: entries[2].chainHash
+        },
+        checkpoint,
+        entries: [tamperedTail]
+      },
+      {
+        checkpointPublicKeyPem: publicKeyPem
+      }
+    );
+    expect(result.ok).toBe(false);
+    expect(result.brokenAt).toBe(3);
+    expect(result.reason).toBe("entry_hash_mismatch");
+  });
+
+  test("verify transparency proof fails when head size or hash mismatches", () => {
+    const logPath = makeTempLogPath();
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:00.000Z",
+        type: "bundle_loaded",
+        bundleHash: "bundle-a"
+      },
+      { path: logPath }
+    );
+    appendTransparencyEntry(
+      {
+        timestamp: "2026-02-11T12:00:01.000Z",
+        type: "bundle_rejected",
+        reason: "unknown signer"
+      },
+      { path: logPath }
+    );
+    const entries = loadTransparencyLog(logPath);
+
+    expect(
+      verifyTransparencyProof({
+        head: {
+          size: 3,
+          chainHash: entries[1].chainHash
+        },
+        entries
+      })
+    ).toEqual({
+      ok: false,
+      brokenAt: 3,
+      reason: "proof_size_mismatch"
+    });
+    expect(
+      verifyTransparencyProof({
+        head: {
+          size: 2,
+          chainHash: "wrong-chain-hash"
+        },
+        entries
+      })
+    ).toEqual({
+      ok: false,
+      brokenAt: 3,
+      reason: "proof_chain_hash_mismatch"
+    });
   });
 
   test("checkpoint signature verify pass/fail", () => {

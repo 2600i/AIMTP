@@ -384,6 +384,8 @@ Adapter-related env vars:
   - `INTENTOS_TRUST_HTTP_BUNDLE_URL=https://.../trust-bundle.json`
   - `INTENTOS_TRUST_HTTP_REVOCATIONS_URL=https://.../revocations.json` (optional)
   - `INTENTOS_TRUST_HTTP_HEAD_URL=https://.../trust-head.json` (optional)
+  - `INTENTOS_TRUST_HTTP_CHECKPOINT_URL=https://.../trust-checkpoint.json` (optional)
+  - `INTENTOS_TRUST_HTTP_LOGTAIL_URL=https://.../trust-log-tail.jsonl` (optional, non-checkpoint entries only)
 
 Guarantees:
 
@@ -391,6 +393,7 @@ Guarantees:
 - Bundle signature checks, revocation application, transparency verification, and receipt trust decisions are unchanged.
 - Default behavior remains unchanged unless `INTENTOS_TRUST_DISTRIBUTION` is set to `fs` or `http`.
 - Snapshot policy is opt-in and affects only distribution snapshot acceptance; receipt/trust crypto semantics are unchanged.
+- In transparency verify mode with checkpoint verify enabled, a distribution snapshot MAY provide a transparency proof (`head + optional checkpoint + log tail`) so runtime can verify the head without downloading a full local JSONL log.
 
 ## v3 Transparency Log (Experimental)
 
@@ -411,6 +414,15 @@ Behavior:
   - `revocation_applied`
   - `policy_reject`
 - `verify`: verifies the full hash chain on bundle load and rejects bundle trust loading when the chain is broken.
+
+Optional distribution transparency proof:
+
+- When trust distribution is enabled, snapshots can include an in-memory proof containing:
+  - `head` (`size`, `chainHash`)
+  - optional signed checkpoint
+  - tail log entries (non-checkpoint entries only)
+- If transparency verify mode and checkpoint verify mode are enabled with a checkpoint public key, runtime verifies this proof first.
+- If the proof is missing or proof verification preconditions are not enabled, runtime behavior falls back to existing log-path verification.
 
 Optional checkpoints:
 
