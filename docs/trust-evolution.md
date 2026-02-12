@@ -55,6 +55,33 @@
 - Metadata-only (no semantic impact).
 - Logged as: `intentos_trust_snapshot_applied`.
 
+## Phase 10 – Deterministic Trust Report Tool
+
+- Tool: `tools/trust-report.mjs`.
+- NPM script: `npm run trust:report`.
+- Outputs stable JSON to stdout with:
+  - configured policy/distribution/transparency modes from environment;
+  - resolved trust paths;
+  - computed trust IDs (when inputs are available);
+  - transparency head and optional checkpoint usage (when log/key are provided);
+  - optional snapshot state from runtime-format state files.
+- No network access is required.
+- Volatile timestamp output is opt-in only via `--include-volatile`.
+
+### Usage
+
+```bash
+npm run trust:report
+```
+
+```bash
+node tools/trust-report.mjs --bundle ./examples/trust-bundle.json --log ./tmp/trust-log.jsonl
+```
+
+```bash
+node tools/trust-report.mjs --env-file ./.env.trust --state ./tmp/trust-snapshot-state.json --include-volatile
+```
+
 ## Invariants Preserved
 
 - IntentOS execution semantics unchanged.
