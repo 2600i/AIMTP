@@ -7,6 +7,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import {
   evaluateOfflineTagLookupFallback,
   evaluateStablePrMergeRequirement,
+  isStableMergeStrategy,
   isStableVersion,
   parseParentCountFromRevList
 } from "./release-guardrails.mjs";
@@ -77,7 +78,7 @@ function parseArgs(argv) {
       "Examples:\n" +
       "  node scripts/release.mjs preflight\n" +
       "  node scripts/release.mjs preflight --version 0.3.0-rc.1\n" +
-      "  node scripts/release.mjs release --version 0.3.0\n" +
+      "  node scripts/release.mjs release --version 0.3.0-rc.1\n" +
       "  node scripts/release.mjs release --use-current-version\n" +
       "  node scripts/release.mjs github-release --use-current-tag"
     );
@@ -145,6 +146,19 @@ function parseReleaseConfig() {
   const githubReleaseEnabled = Boolean(config.githubRelease?.enabled);
   const githubGenerateNotes =
     config.githubRelease?.generateNotes === undefined ? true : Boolean(config.githubRelease.generateNotes);
+  const stableMergeStrategy = String(
+    config.stableMergeStrategy ?? config.preflight?.stableMergeStrategy ?? "merge_commit"
+  )
+    .trim()
+    .toLowerCase();
+  const squashMarkersRaw = Array.isArray(config.squashMarkers)
+    ? config.squashMarkers
+    : Array.isArray(config.preflight?.squashMarkers)
+      ? config.preflight.squashMarkers
+      : [];
+  const squashMarkers = squashMarkersRaw
+    .map((entry) => String(entry ?? "").trim())
+    .filter((entry) => entry.length > 0);
 
   if (!branch) {
     fail(`Invalid ${CONFIG_PATH}: missing "branch"`);
@@ -161,6 +175,12 @@ function parseReleaseConfig() {
   if (preflightRules.length === 0) {
     fail(`Invalid ${CONFIG_PATH}: missing "preflight rules"`);
   }
+  if (!isStableMergeStrategy(stableMergeStrategy)) {
+    fail(
+      `Invalid ${CONFIG_PATH}: "stableMergeStrategy" must be one of ` +
+      `"merge_commit", "merge_or_squash".`
+    );
+  }
 
   const missingRequiredRules = REQUIRED_PREFLIGHT_RULES.filter((rule) => !preflightRules.includes(rule));
   if (missingRequiredRules.length > 0) {
@@ -175,6 +195,8 @@ function parseReleaseConfig() {
     preflightRules,
     allowPrereleaseRelease,
     requirePrMergeForStable,
+    stableMergeStrategy,
+    squashMarkers,
     githubReleaseEnabled,
     githubGenerateNotes
   };
@@ -334,12 +356,16 @@ function ensureStablePrMergeRequirement(version, config) {
   const parentLine = read("git", ["rev-list", "--parents", "-n", "1", "HEAD"]);
   const parentCount = parseParentCountFromRevList(parentLine);
   const subject = read("git", ["show", "-s", "--format=%s", "HEAD"]);
+  const message = read("git", ["log", "-1", "--pretty=%B"]);
 
   const decision = evaluateStablePrMergeRequirement({
     version,
     requirePrMergeForStable: config.requirePrMergeForStable,
+    stableMergeStrategy: config.stableMergeStrategy,
+    squashMarkers: config.squashMarkers,
     parentCount,
-    subject
+    subject,
+    message
   });
 
   if (!decision.allowed) {
@@ -554,6 +580,13 @@ function runRelease(config, options) {
     version = explicitVersion;
   } else {
     version = readPackageVersion();
+  }
+
+  if (explicitVersion && isStableVersion(version)) {
+    fail(
+      "Stable releases must use --use-current-version after version bump is merged into main. " +
+      "Use prerelease --version only for alpha/beta/rc cuts."
+    );
   }
 
   runPreflight(config, { releaseVersion: version });

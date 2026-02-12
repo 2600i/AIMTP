@@ -15,6 +15,11 @@
     "prMergeForStable"
   ],
   "requirePrMergeForStable": true,
+  "stableMergeStrategy": "merge_or_squash",
+  "squashMarkers": [
+    "(#",
+    "merge:"
+  ],
   "preflight": {
     "allowPrereleaseRelease": false,
     "requirePrMergeForStable": true

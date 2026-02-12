@@ -1,73 +1,51 @@
 # Hardened Release Flow
 
-This document defines the hardened release process for AIMTP and the tooling added in `scripts/release.mjs`.
+This document describes what release tooling enforces. For operator procedures,
+see `docs/release-governance.md`.
 
-## Policy
+## Tooling Entry Points
 
-- Never commit on `main` during feature development.
-- Never create release tags from feature branches.
-- Only perform hardened releases from `main` after merge.
-- Release commands must run with a clean working tree and attached HEAD.
+- `npm run release:preflight`
+- `npm run release:verify`
+- `npm run release` (`--use-current-version`)
+- `npm run release:version -- <version>` (prerelease only)
+- `npm run release:gh`
 
-## Workflow
+## Stable Guardrails
 
-1. Develop and review on a feature branch.
-2. Merge to `main`.
-3. Sync local `main` with `origin/main`.
-4. Run preflight:
-   - `npm run release:preflight`
-5. Run release:
-   - Use current package version:
-     - `npm run release`
-   - Or set explicit version:
-     - `npm run release:version -- 0.3.0`
-6. Optionally publish a GitHub release (config-gated):
-   - `npm run release:gh`
+Stable versions (`X.Y.Z`) must satisfy:
 
-## Stable Release Requirements
+- branch is `main`
+- clean working tree
+- local `main` matches `origin/main`
+- PR-first merge check from `.aimtp/release.yml`:
+  - `stableMergeStrategy=merge_commit`: `HEAD` is merge commit (`2+` parents) or subject starts with `merge:`
+  - `stableMergeStrategy=merge_or_squash`: `HEAD` is merge commit (`2+` parents) or full commit message contains one of `squashMarkers` (for example `(#123)`)
+- tag is annotated (`vX.Y.Z`)
 
-Stable versions (`X.Y.Z` with no prerelease suffix) have additional preflight gates:
+Stable releases are cut with `npm run release` after the version bump PR has
+already merged into `main`.
 
-- Current branch must be `main`.
-- Local `main` must match `origin/main` exactly.
-- `HEAD` must represent a PR-style merge:
-  - a merge commit (2+ parents), or
-  - a subject that starts with `merge:`.
-- Stable tags are only cut from `main`.
-- If the PR-merge gate fails, preflight exits nonzero with:
-  - `Stable cuts require a PR merge into main (merge commit or 'merge:' subject).`
+## Prerelease Guardrails
 
-## What Hardened Release Enforces
+Prerelease versions (`-alpha.N`, `-beta.N`, `-rc.N`) can be cut with:
 
-- Rejects detached HEAD.
-- Rejects if current branch is not `main`.
-- Rejects dirty working tree.
-- Fetches tags and validates `main` exactly matches `origin/main`.
-- Runs `npm test` and `npm run build` before tagging.
-- Creates annotated tag `vX.Y.Z`.
-- Rejects existing tags.
-- Pushes release commit and tag to `origin`.
+```sh
+npm run release:version -- 0.3.1-rc.1
+```
 
-## Version Modes
+Preflight still enforces detached-head, clean-tree, and tag safety checks.
 
-- `release --version X.Y.Z`:
-  - Applies `npm version X.Y.Z --no-git-tag-version`.
-  - Commits version files.
-  - Runs checks, tags, and pushes.
-- `release --use-current-version`:
-  - Uses `package.json` version as-is.
-  - Blocks prerelease versions (`-alpha`, `-beta`, etc.) unless config allows it.
+## Offline-safe Tag Checks
 
-Prerelease guidance remains unchanged: prerelease versions continue to use the existing flow and checks.
+Preflight attempts:
 
-## GitHub Release
+1. `git fetch <remote> --tags`
+2. fallback to `git ls-remote --tags <remote>`
+3. offline fallback to local tag-only checks when `FETCH_HEAD` and DNS/network
+   access are unavailable and branch-sync gates already prove safety
 
-- `github-release` is optional and controlled by `.aimtp/release.yml`.
-- When enabled, it runs:
-  - `gh release create <tag> --verify-tag [--generate-notes]`
-- It fails clearly when `gh` is missing or authentication is not configured.
+## CI Tag Guardrails
 
-## Legacy Script
-
-- `npm run ship` (`scripts/ship.js`) is retained as legacy/dev automation.
-- It is not the hardened release flow and should not be used for production release policy.
+On `v*` tag push, CI runs `scripts/release-tag-guardrails.mjs` to enforce the
+same stable policy without GitHub API dependencies.

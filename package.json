@@ -11,6 +11,8 @@
     "release:preflight": "node scripts/release.mjs preflight",
     "release": "node scripts/release.mjs release --use-current-version",
     "release:version": "node scripts/release.mjs release --version",
+    "release:verify": "node scripts/release-verify.mjs",
+    "release:tag-guardrails": "node scripts/release-tag-guardrails.mjs",
     "release:gh": "node scripts/release.mjs github-release --use-current-tag",
     "demo": "npm run build && node dist/runtime/demo-run.js",
     "demo:federation": "sh -c 'docker compose -f docker-compose.federation.yml up --build -d && node tools/federation-demo.mjs; status=$?; docker compose -f docker-compose.federation.yml down --remove-orphans; exit $status'",
