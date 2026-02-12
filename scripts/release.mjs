@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { execFileSync, spawnSync } from "node:child_process";
 import {
+  evaluateOfflineTagLookupFallback,
   evaluateStablePrMergeRequirement,
   isStableVersion,
   parseParentCountFromRevList
@@ -228,6 +229,16 @@ function parseRemoteTagSet(lsRemoteOutput) {
   return tags;
 }
 
+function readTrackedMainRefs(config) {
+  const localRef = read("git", ["rev-parse", config.branch]);
+  const trackedRemoteRef = read("git", ["rev-parse", `${config.remote}/${config.branch}`]);
+  return {
+    localRef,
+    trackedRemoteRef,
+    matches: localRef === trackedRemoteRef
+  };
+}
+
 function readRemoteBranchRefViaLsRemote(config) {
   const branchRef = `refs/heads/${config.branch}`;
   const result = runCaptured("git", ["ls-remote", config.remote, branchRef]);
@@ -249,7 +260,8 @@ function fetchRemoteState(config) {
     printCaptured(fetchResult);
     return {
       fallbackUsed: false,
-      remoteTagSet: null
+      remoteTagSet: null,
+      offlineLocalTagCheckOnly: false
     };
   }
 
@@ -266,22 +278,49 @@ function fetchRemoteState(config) {
 
   const lsRemoteResult = runCaptured("git", ["ls-remote", "--tags", config.remote]);
   if (lsRemoteResult.status !== 0) {
-    printCaptured(lsRemoteResult);
-    fail(`Preflight failed: fallback tag lookup via ls-remote failed for remote \"${config.remote}\".`);
+    const currentBranch = gitCurrentBranch();
+    let mainMatchesRemote = false;
+    if (currentBranch === config.branch) {
+      const refs = readTrackedMainRefs(config);
+      mainMatchesRemote = refs.matches;
+    }
+
+    const decision = evaluateOfflineTagLookupFallback({
+      fetchHeadPermissionError: true,
+      lsRemoteFailed: true,
+      onMain: currentBranch === config.branch,
+      mainMatchesRemote,
+      localTagExists: false
+    });
+
+    if (!decision.proceed) {
+      printCaptured(lsRemoteResult);
+      fail(`Preflight failed: fallback tag lookup via ls-remote failed for remote \"${config.remote}\".`);
+    }
+
+    console.warn(decision.warning);
+    return {
+      fallbackUsed: false,
+      remoteTagSet: null,
+      offlineLocalTagCheckOnly: true
+    };
   }
 
   const remoteTagSet = parseRemoteTagSet(lsRemoteResult.stdout ?? "");
   return {
     fallbackUsed: true,
-    remoteTagSet
+    remoteTagSet,
+    offlineLocalTagCheckOnly: false
   };
 }
 
 function ensureLocalMainMatchesRemote(config, fetchState) {
   const localRef = read("git", ["rev-parse", config.branch]);
-  const remoteRef = fetchState.fallbackUsed
-    ? readRemoteBranchRefViaLsRemote(config)
-    : read("git", ["rev-parse", `${config.remote}/${config.branch}`]);
+  const remoteRef = fetchState.offlineLocalTagCheckOnly
+    ? read("git", ["rev-parse", `${config.remote}/${config.branch}`])
+    : fetchState.fallbackUsed
+      ? readRemoteBranchRefViaLsRemote(config)
+      : read("git", ["rev-parse", `${config.remote}/${config.branch}`]);
 
   if (localRef !== remoteRef) {
     fail(
@@ -381,10 +420,28 @@ function assertSemver(version) {
   }
 }
 
+function localTagExists(tagName) {
+  const ref = `refs/tags/${tagName}`;
+  const result = spawnSync("git", ["show-ref", "--tags", "--verify", "--quiet", ref], { stdio: "pipe" });
+  if (result.error) {
+    fail(`Failed to run "git show-ref --tags --verify --quiet ${ref}": ${result.error.message}`);
+  }
+  if (result.status === 0) {
+    return true;
+  }
+  if (result.status === 1) {
+    return false;
+  }
+  fail(`Failed to run "git show-ref --tags --verify --quiet ${ref}": exit code ${result.status ?? "unknown"}`);
+}
+
 function ensureTagDoesNotExist(tagName, fetchState) {
-  const existing = read("git", ["tag", "-l", tagName]);
-  if (existing === tagName) {
+  if (localTagExists(tagName)) {
     fail(`Tag already exists locally: ${tagName}`);
+  }
+
+  if (fetchState?.offlineLocalTagCheckOnly) {
+    return;
   }
 
   if (fetchState?.fallbackUsed && fetchState.remoteTagSet?.has(tagName)) {

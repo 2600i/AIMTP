@@ -2,6 +2,7 @@
 
 import assert from "node:assert/strict";
 import {
+  evaluateOfflineTagLookupFallback,
   evaluateStablePrMergeRequirement,
   isStableVersion,
   parseParentCountFromRevList
@@ -60,5 +61,42 @@ const stableGateDisabled = evaluateStablePrMergeRequirement({
 });
 assert.equal(stableGateDisabled.allowed, true);
 assert.equal(stableGateDisabled.required, false);
+
+const offlineFallbackProceeds = evaluateOfflineTagLookupFallback({
+  fetchHeadPermissionError: true,
+  lsRemoteFailed: true,
+  onMain: true,
+  mainMatchesRemote: true,
+  localTagExists: false,
+  tagName: "v0.3.0"
+});
+assert.equal(offlineFallbackProceeds.proceed, true);
+assert.equal(offlineFallbackProceeds.mode, "local-only");
+assert.equal(
+  offlineFallbackProceeds.warning,
+  "Preflight warning: remote tag lookup unavailable (offline). Falling back to local tag check only."
+);
+
+const offlineFallbackLocalTagExists = evaluateOfflineTagLookupFallback({
+  fetchHeadPermissionError: true,
+  lsRemoteFailed: true,
+  onMain: true,
+  mainMatchesRemote: true,
+  localTagExists: true,
+  tagName: "v0.3.0"
+});
+assert.equal(offlineFallbackLocalTagExists.proceed, false);
+assert.equal(offlineFallbackLocalTagExists.error, "Tag already exists locally: v0.3.0");
+
+const offlineFallbackBlockedOnBranchOrSync = evaluateOfflineTagLookupFallback({
+  fetchHeadPermissionError: true,
+  lsRemoteFailed: true,
+  onMain: false,
+  mainMatchesRemote: true,
+  localTagExists: false,
+  tagName: "v0.3.0"
+});
+assert.equal(offlineFallbackBlockedOnBranchOrSync.proceed, false);
+assert.equal(offlineFallbackBlockedOnBranchOrSync.error, "offline_fallback_not_allowed");
 
 console.log("OK: release guardrails tests");

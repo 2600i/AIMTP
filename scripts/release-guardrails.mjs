@@ -44,3 +44,47 @@ export function evaluateStablePrMergeRequirement(input) {
       : "Stable cuts require a PR merge into main (merge commit or 'merge:' subject)."
   };
 }
+
+export function evaluateOfflineTagLookupFallback(input) {
+  const fetchHeadPermissionError = Boolean(input?.fetchHeadPermissionError);
+  const lsRemoteFailed = Boolean(input?.lsRemoteFailed);
+  const onMain = Boolean(input?.onMain);
+  const mainMatchesRemote = Boolean(input?.mainMatchesRemote);
+  const localTagExists = Boolean(input?.localTagExists);
+  const tagName = String(input?.tagName ?? "").trim();
+
+  if (!fetchHeadPermissionError || !lsRemoteFailed) {
+    return {
+      mode: "remote",
+      proceed: true,
+      warning: "",
+      error: ""
+    };
+  }
+
+  if (!onMain || !mainMatchesRemote) {
+    return {
+      mode: "remote",
+      proceed: false,
+      warning: "",
+      error: "offline_fallback_not_allowed"
+    };
+  }
+
+  const warning = "Preflight warning: remote tag lookup unavailable (offline). Falling back to local tag check only.";
+  if (localTagExists) {
+    return {
+      mode: "local-only",
+      proceed: false,
+      warning,
+      error: tagName ? `Tag already exists locally: ${tagName}` : "Tag already exists locally."
+    };
+  }
+
+  return {
+    mode: "local-only",
+    proceed: true,
+    warning,
+    error: ""
+  };
+}
