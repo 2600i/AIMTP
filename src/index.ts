@@ -2,6 +2,7 @@ export * from "./protocol/message";
 export * from "./protocol/agent";
 export * from "./protocol/task";
 export * from "./protocol/capabilities";
+export * from "./protocol/federation-handshake";
 export * from "./protocol/intentos-execution";
 export * from "./protocol/intentos-receipts";
 export * from "./runtime/registry";
