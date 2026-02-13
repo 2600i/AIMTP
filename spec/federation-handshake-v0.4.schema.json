@@ -74,6 +74,13 @@
           "type": "string",
           "minLength": 1
         },
+        "nonce": {
+          "type": "string",
+          "minLength": 1
+        },
+        "helloTimestamp": {
+          "type": "string"
+        },
         "accepted": {
           "type": "boolean"
         },
@@ -87,6 +94,8 @@
         "helloId",
         "senderPeerId",
         "recipientPeerId",
+        "nonce",
+        "helloTimestamp",
         "accepted",
         "timestamp"
       ]

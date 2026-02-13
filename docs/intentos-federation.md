@@ -22,6 +22,15 @@ IntentOS 0.4.0 introduces an opt-in handshake skeleton for federation bootstrapp
 - The local demo handshake only runs when both `INTENTOS_PROTOCOL_VERSION=0.4` and `INTENTOS_FEDERATION=on` are set.
 - Draft payload schema: [`spec/federation-handshake-v0.4.schema.json`](../spec/federation-handshake-v0.4.schema.json)
 
+## 0.4.0 handshake over HTTP (draft)
+
+IntentOS 0.4.0 includes an opt-in local HTTP handshake endpoint for federation draft testing.
+
+- Endpoint: `POST /intentos/federation/handshake`
+- Gate: active only when both `INTENTOS_PROTOCOL_VERSION=0.4` and `INTENTOS_FEDERATION=on` are set.
+- Default behavior is inert: when not gated, the endpoint remains unavailable (`404`).
+- Request/response payloads use the same draft schema: [`spec/federation-handshake-v0.4.schema.json`](../spec/federation-handshake-v0.4.schema.json)
+
 ## 0.4.0 identity anchors (draft)
 
 IntentOS 0.4.0 also introduces an opt-in identity anchor skeleton for stable peer identity bootstrapping.

@@ -3,6 +3,7 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+const Ajv = require("ajv");
 const { RelayError } = require("./relay");
 const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
 const { validateEnvelope } = require("./validation");
@@ -32,7 +33,10 @@ const INTENTOS_INTENTS_PATH = "/intentos/intents";
 const INTENTOS_TASKS_PATH = "/intentos/tasks";
 const INTENTOS_INTENT_PREFIX = "/intentos/intent/";
 const INTENTOS_TASK_PREFIX = "/intentos/task/";
+const INTENTOS_FEDERATION_HANDSHAKE_PATH = "/intentos/federation/handshake";
 const INTENTOS_CAPABILITY_HEADER = "x-aimtp-capability";
+
+let federationHandshakeValidator = null;
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -901,6 +905,51 @@ function requireIntentosCapability(req, options) {
   return { ok: true };
 }
 
+function isFederationHandshakeEnabledFromEnv(env) {
+  return (
+    env.INTENTOS_PROTOCOL_VERSION === "0.4" &&
+    String(env.INTENTOS_FEDERATION || "").trim().toLowerCase() === "on"
+  );
+}
+
+function getFederationHandshakeValidator() {
+  if (federationHandshakeValidator) {
+    return federationHandshakeValidator;
+  }
+  const schemaPath = path.resolve(__dirname, "..", "spec", "federation-handshake-v0.4.schema.json");
+  const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  federationHandshakeValidator = ajv.compile(schema);
+  return federationHandshakeValidator;
+}
+
+function validateFederationHandshakePayload(payload) {
+  let validate;
+  try {
+    validate = getFederationHandshakeValidator();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: "handshake_schema_unavailable",
+      errors: [message]
+    };
+  }
+  if (validate(payload)) {
+    return { ok: true, code: "", errors: [] };
+  }
+  const errors = (validate.errors || []).map((entry) => {
+    const pointer = entry.instancePath || "/";
+    const message = entry.message || "invalid";
+    return `${pointer} ${message}`;
+  });
+  return {
+    ok: false,
+    code: "invalid_schema",
+    errors
+  };
+}
+
 function createWebhookRelayServer(relay, options = {}) {
   const relayBasePath =
     options.path ||
@@ -1067,6 +1116,7 @@ function createWebhookRelayServer(relay, options = {}) {
   const intentosCapabilitiesEnabled =
     String(process.env.AIMTP_CAPABILITIES || "").trim().toLowerCase() === "on";
   const intentosCapabilityPublicKey = readOptionalPemEnv(process.env.AIMTP_CAP_PUBLIC_KEY);
+  const federationHandshakeEnabled = isFederationHandshakeEnabledFromEnv(process.env);
   let intentosUiAssets = null;
   if (intentosEnabled) {
     try {
@@ -1168,6 +1218,73 @@ function createWebhookRelayServer(relay, options = {}) {
         return;
       }
       sendError(res, 404, "not_found", "Intent not found");
+      return;
+    }
+
+    if (requestPath === INTENTOS_FEDERATION_HANDSHAKE_PATH) {
+      if (!federationHandshakeEnabled) {
+        sendError(res, 404, "not_found", "Not Found");
+        return;
+      }
+      if (req.method !== "POST") {
+        sendError(res, 405, "method_not_allowed", "Method not allowed");
+        return;
+      }
+
+      let payload;
+      try {
+        const raw = await readRequestBody(req, maxBytes);
+        payload = JSON.parse(raw);
+      } catch (err) {
+        if (err instanceof RelayError && err.code === "payload_too_large") {
+          sendError(res, 413, "payload_too_large", err.message);
+          return;
+        }
+        sendError(res, 400, "invalid_json", "Invalid JSON payload");
+        return;
+      }
+
+      const helloValidation = validateFederationHandshakePayload(payload);
+      if (!helloValidation.ok) {
+        sendError(
+          res,
+          helloValidation.code === "handshake_schema_unavailable" ? 500 : 400,
+          helloValidation.code,
+          "Handshake payload validation failed",
+          { errors: helloValidation.errors }
+        );
+        return;
+      }
+      if (!payload || payload.type !== "HandshakeHello") {
+        sendError(res, 400, "invalid_request", "HandshakeHello is required");
+        return;
+      }
+
+      const ack = {
+        type: "HandshakeAck",
+        protocolVersion: "0.4",
+        helloId: payload.helloId,
+        senderPeerId: payload.recipientPeerId,
+        recipientPeerId: payload.senderPeerId,
+        nonce: payload.nonce,
+        helloTimestamp: payload.timestamp,
+        accepted: true,
+        timestamp: new Date().toISOString()
+      };
+
+      const ackValidation = validateFederationHandshakePayload(ack);
+      if (!ackValidation.ok) {
+        sendError(
+          res,
+          500,
+          "handshake_ack_invalid",
+          "Handshake ack construction failed schema validation",
+          { errors: ackValidation.errors }
+        );
+        return;
+      }
+
+      sendJson(res, 200, ack);
       return;
     }
 
