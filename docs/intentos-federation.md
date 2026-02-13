@@ -27,9 +27,30 @@ IntentOS 0.4.0 introduces an opt-in handshake skeleton for federation bootstrapp
 IntentOS 0.4.0 includes an opt-in local HTTP handshake endpoint for federation draft testing.
 
 - Endpoint: `POST /intentos/federation/handshake`
-- Gate: active only when both `INTENTOS_PROTOCOL_VERSION=0.4` and `INTENTOS_FEDERATION=on` are set.
+- Gate: active only when all of the following are set:
+  - `INTENTOS_PROTOCOL_VERSION=0.4`
+  - `INTENTOS_FEDERATION=on`
+  - `INTENTOS_IDENTITY=on`
 - Default behavior is inert: when not gated, the endpoint remains unavailable (`404`).
 - Request/response payloads use the same draft schema: [`spec/federation-handshake-v0.4.schema.json`](../spec/federation-handshake-v0.4.schema.json)
+
+## 0.4.0 handshake: identity anchor exchange (draft)
+
+The v0.4 HTTP handshake draft can optionally carry identity anchor exchange hints and inline anchors.
+
+- `HandshakeHello` optional fields:
+  - `identityAnchorSetId` (string)
+  - `identityAnchorsInline` (array of signed `IdentityAnchor`)
+- `HandshakeAck` fields:
+  - `acceptedIdentityAnchors` (boolean)
+  - `resolvedAnchorSetId` (string or `null`)
+- Inline mode:
+  - Server validates each inline anchor schema and Ed25519 signature before acceptance.
+- Set-id mode:
+  - Server attempts to load the identity anchor set from configured trust distribution source (`fs`/`http`) and validates the set payload.
+  - Current draft only validates/responds; it does not persist accepted anchors.
+- Demo control:
+  - `INTENTOS_HANDSHAKE_SEND_ANCHORS=off|inline|setid`
 
 ## 0.4.0 identity anchors (draft)
 

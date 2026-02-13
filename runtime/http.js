@@ -3,6 +3,7 @@
 const fs = require("fs");
 const http = require("http");
 const path = require("path");
+const crypto = require("crypto");
 const Ajv = require("ajv");
 const { RelayError } = require("./relay");
 const { createMailboxStore, parseMailboxStoreType } = require("./mailbox");
@@ -37,6 +38,8 @@ const INTENTOS_FEDERATION_HANDSHAKE_PATH = "/intentos/federation/handshake";
 const INTENTOS_CAPABILITY_HEADER = "x-aimtp-capability";
 
 let federationHandshakeValidator = null;
+let identityAnchorValidator = null;
+let identityAnchorSetValidator = null;
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -950,6 +953,299 @@ function validateFederationHandshakePayload(payload) {
   };
 }
 
+function normalizeNonEmptyString(value) {
+  if (typeof value !== "string") {
+    return "";
+  }
+  return value.trim();
+}
+
+function normalizeTrustDistributionMode(value) {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (normalized === "fs" || normalized === "http" || normalized === "off") {
+    return normalized;
+  }
+  return "off";
+}
+
+function isIdentityAnchorExchangeEnabledFromEnv(env) {
+  return (
+    isFederationHandshakeEnabledFromEnv(env) &&
+    normalizeNonEmptyString(env.INTENTOS_IDENTITY).toLowerCase() === "on"
+  );
+}
+
+function getIdentityAnchorValidator() {
+  if (identityAnchorValidator) {
+    return identityAnchorValidator;
+  }
+  const schemaPath = path.resolve(__dirname, "..", "spec", "identity-anchor-v0.4.schema.json");
+  const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  identityAnchorValidator = ajv.compile(schema);
+  return identityAnchorValidator;
+}
+
+function getIdentityAnchorSetValidator() {
+  if (identityAnchorSetValidator) {
+    return identityAnchorSetValidator;
+  }
+  const anchorSchemaPath = path.resolve(__dirname, "..", "spec", "identity-anchor-v0.4.schema.json");
+  const anchorSetSchemaPath = path.resolve(__dirname, "..", "spec", "identity-anchor-set-v0.4.schema.json");
+  const anchorSchema = JSON.parse(fs.readFileSync(anchorSchemaPath, "utf8"));
+  const anchorSetSchema = JSON.parse(fs.readFileSync(anchorSetSchemaPath, "utf8"));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  ajv.addSchema(anchorSchema, anchorSchema.$id);
+  identityAnchorSetValidator = ajv.compile(anchorSetSchema);
+  return identityAnchorSetValidator;
+}
+
+function collectAjvErrors(validateFn) {
+  return (validateFn.errors || []).map((entry) => {
+    const pointer = entry.instancePath || "/";
+    const message = entry.message || "invalid";
+    return `${pointer} ${message}`;
+  });
+}
+
+function canonicalizeIdentityAnchor(anchor) {
+  return Buffer.from(
+    JSON.stringify({
+      type: anchor.type,
+      protocolVersion: anchor.protocolVersion,
+      anchorId: anchor.anchorId,
+      peerId: anchor.peerId,
+      publicKeyPem: anchor.publicKeyPem,
+      timestamp: anchor.timestamp
+    }),
+    "utf8"
+  );
+}
+
+function validateAndVerifyInlineIdentityAnchors(anchors) {
+  if (!Array.isArray(anchors)) {
+    return {
+      ok: false,
+      code: "handshake_identity_anchors_inline_invalid",
+      errors: ["identityAnchorsInline must be an array"]
+    };
+  }
+  if (anchors.length === 0) {
+    return {
+      ok: false,
+      code: "handshake_identity_anchors_inline_invalid",
+      errors: ["identityAnchorsInline must not be empty"]
+    };
+  }
+  if (anchors.length > 8) {
+    return {
+      ok: false,
+      code: "handshake_identity_anchors_inline_invalid",
+      errors: ["identityAnchorsInline exceeds max inline count of 8"]
+    };
+  }
+  let validateAnchor;
+  try {
+    validateAnchor = getIdentityAnchorValidator();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: "handshake_identity_anchor_schema_unavailable",
+      errors: [message]
+    };
+  }
+  for (let index = 0; index < anchors.length; index += 1) {
+    const anchor = anchors[index];
+    if (!validateAnchor(anchor)) {
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_invalid",
+        errors: collectAjvErrors(validateAnchor).map((message) => `anchor[${index}] ${message}`)
+      };
+    }
+    if (
+      !anchor ||
+      normalizeNonEmptyString(anchor.alg).toLowerCase() !== "ed25519" ||
+      !normalizeNonEmptyString(anchor.kid) ||
+      !normalizeNonEmptyString(anchor.signature)
+    ) {
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_signature_missing",
+        errors: [`anchor[${index}] signed identity anchor fields are required`]
+      };
+    }
+    let signatureBytes;
+    try {
+      signatureBytes = Buffer.from(anchor.signature, "base64");
+    } catch {
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_signature_invalid",
+        errors: [`anchor[${index}] signature must be base64`]
+      };
+    }
+    let verified = false;
+    try {
+      verified = crypto.verify(
+        null,
+        canonicalizeIdentityAnchor(anchor),
+        anchor.publicKeyPem,
+        signatureBytes
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_signature_invalid",
+        errors: [`anchor[${index}] verification failed: ${message}`]
+      };
+    }
+    if (!verified) {
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_signature_invalid",
+        errors: [`anchor[${index}] signature verification failed`]
+      };
+    }
+  }
+  return { ok: true, code: "", errors: [] };
+}
+
+function computeAnchorSetId(anchorSetPayload, rawPayload) {
+  const declared = normalizeNonEmptyString(anchorSetPayload && anchorSetPayload.setId);
+  if (declared) {
+    return declared;
+  }
+  const stableRaw = typeof rawPayload === "string" ? rawPayload : JSON.stringify(anchorSetPayload);
+  return `sha256:${crypto.createHash("sha256").update(stableRaw, "utf8").digest("hex")}`;
+}
+
+async function fetchTextFromHttp(urlValue, timeoutMs = 5000) {
+  let parsed;
+  try {
+    parsed = new URL(urlValue);
+  } catch {
+    throw new Error("handshake_identity_anchor_set_url_invalid");
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("handshake_identity_anchor_set_url_invalid");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(parsed, {
+      method: "GET",
+      headers: { accept: "application/json" },
+      signal: controller.signal
+    });
+    if (!response.ok) {
+      throw new Error(`handshake_identity_anchor_set_http_status_${response.status}`);
+    }
+    return await response.text();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function loadIdentityAnchorSetFromDistribution(env) {
+  const mode = normalizeTrustDistributionMode(env.INTENTOS_TRUST_DISTRIBUTION);
+  if (mode !== "fs" && mode !== "http") {
+    return {
+      ok: false,
+      code: "handshake_identity_anchor_distribution_disabled",
+      errors: ["INTENTOS_TRUST_DISTRIBUTION must be fs or http"],
+      anchorSetId: null
+    };
+  }
+  let rawPayload = "";
+  if (mode === "fs") {
+    const anchorPath = normalizeNonEmptyString(env.INTENTOS_TRUST_IDENTITY_ANCHORS_PATH);
+    if (!anchorPath) {
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_set_missing",
+        errors: ["INTENTOS_TRUST_IDENTITY_ANCHORS_PATH is required in fs mode"],
+        anchorSetId: null
+      };
+    }
+    try {
+      rawPayload = fs.readFileSync(anchorPath, "utf8");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_set_load_failed",
+        errors: [message],
+        anchorSetId: null
+      };
+    }
+  } else {
+    const anchorUrl = normalizeNonEmptyString(env.INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL);
+    if (!anchorUrl) {
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_set_missing",
+        errors: ["INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL is required in http mode"],
+        anchorSetId: null
+      };
+    }
+    try {
+      rawPayload = await fetchTextFromHttp(anchorUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        code: "handshake_identity_anchor_set_load_failed",
+        errors: [message],
+        anchorSetId: null
+      };
+    }
+  }
+  let parsedPayload;
+  try {
+    parsedPayload = JSON.parse(rawPayload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: "handshake_identity_anchor_set_invalid_json",
+      errors: [message],
+      anchorSetId: null
+    };
+  }
+
+  let validateSet;
+  try {
+    validateSet = getIdentityAnchorSetValidator();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: "handshake_identity_anchor_schema_unavailable",
+      errors: [message],
+      anchorSetId: null
+    };
+  }
+
+  if (!validateSet(parsedPayload)) {
+    return {
+      ok: false,
+      code: "handshake_identity_anchor_set_invalid",
+      errors: collectAjvErrors(validateSet),
+      anchorSetId: null
+    };
+  }
+
+  return {
+    ok: true,
+    code: "",
+    errors: [],
+    anchorSetId: computeAnchorSetId(parsedPayload, rawPayload)
+  };
+}
+
 function createWebhookRelayServer(relay, options = {}) {
   const relayBasePath =
     options.path ||
@@ -1116,7 +1412,7 @@ function createWebhookRelayServer(relay, options = {}) {
   const intentosCapabilitiesEnabled =
     String(process.env.AIMTP_CAPABILITIES || "").trim().toLowerCase() === "on";
   const intentosCapabilityPublicKey = readOptionalPemEnv(process.env.AIMTP_CAP_PUBLIC_KEY);
-  const federationHandshakeEnabled = isFederationHandshakeEnabledFromEnv(process.env);
+  const federationHandshakeEnabled = isIdentityAnchorExchangeEnabledFromEnv(process.env);
   let intentosUiAssets = null;
   if (intentosEnabled) {
     try {
@@ -1260,6 +1556,45 @@ function createWebhookRelayServer(relay, options = {}) {
         return;
       }
 
+      let acceptedIdentityAnchors = false;
+      let resolvedAnchorSetId = null;
+      const hasInlineAnchors = Array.isArray(payload.identityAnchorsInline);
+      const hasAnchorSetId = normalizeNonEmptyString(payload.identityAnchorSetId).length > 0;
+
+      if (hasInlineAnchors) {
+        const inlineValidation = validateAndVerifyInlineIdentityAnchors(payload.identityAnchorsInline);
+        if (!inlineValidation.ok) {
+          sendError(
+            res,
+            400,
+            inlineValidation.code,
+            "Inline identity anchor validation failed",
+            {
+              acceptedIdentityAnchors: false,
+              errors: inlineValidation.errors
+            }
+          );
+          return;
+        }
+        acceptedIdentityAnchors = true;
+      }
+
+      if (hasAnchorSetId) {
+        const requestedSetId = normalizeNonEmptyString(payload.identityAnchorSetId);
+        const loadedSet = await loadIdentityAnchorSetFromDistribution(process.env);
+        if (!loadedSet.ok) {
+          acceptedIdentityAnchors = false;
+        } else if (loadedSet.anchorSetId === requestedSetId) {
+          acceptedIdentityAnchors = true;
+          resolvedAnchorSetId = loadedSet.anchorSetId;
+        } else {
+          acceptedIdentityAnchors = false;
+          resolvedAnchorSetId = loadedSet.anchorSetId;
+        }
+      } else if (!hasInlineAnchors) {
+        acceptedIdentityAnchors = false;
+      }
+
       const ack = {
         type: "HandshakeAck",
         protocolVersion: "0.4",
@@ -1269,6 +1604,8 @@ function createWebhookRelayServer(relay, options = {}) {
         nonce: payload.nonce,
         helloTimestamp: payload.timestamp,
         accepted: true,
+        acceptedIdentityAnchors,
+        resolvedAnchorSetId,
         timestamp: new Date().toISOString()
       };
 

@@ -38,6 +38,16 @@
           "type": "string",
           "minLength": 1
         },
+        "identityAnchorSetId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "identityAnchorsInline": {
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
+        },
         "timestamp": {
           "type": "string"
         }
@@ -84,6 +94,15 @@
         "accepted": {
           "type": "boolean"
         },
+        "acceptedIdentityAnchors": {
+          "type": "boolean"
+        },
+        "resolvedAnchorSetId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "timestamp": {
           "type": "string"
         }
@@ -97,6 +116,8 @@
         "nonce",
         "helloTimestamp",
         "accepted",
+        "acceptedIdentityAnchors",
+        "resolvedAnchorSetId",
         "timestamp"
       ]
     }
