@@ -390,6 +390,15 @@ function ensureStablePrMergeRequirement(version, config) {
   }
 }
 
+function ensureStableVersionMatchesPackage(releaseVersion, packageVersion) {
+  if (isStableVersion(releaseVersion) && packageVersion !== releaseVersion) {
+    fail(
+      `Preflight failed: stable tag version ${releaseVersion} must match package.json version ` +
+      `(found ${packageVersion}).`
+    );
+  }
+}
+
 function runPreflight(config, options = {}) {
   const packageVersion = readPackageVersion();
   const releaseVersion = typeof options.releaseVersion === "string" && options.releaseVersion.trim().length > 0
@@ -432,6 +441,8 @@ function runPreflight(config, options = {}) {
     }
     handler();
   }
+
+  ensureStableVersionMatchesPackage(releaseVersion, packageVersion);
 
   return {
     packageVersion,
@@ -490,6 +501,20 @@ function ensureTagDoesNotExist(tagName, fetchState) {
 
   if (fetchState?.fallbackUsed && fetchState.remoteTagSet?.has(tagName)) {
     fail(`Tag already exists on remote: ${tagName}`);
+  }
+}
+
+function ensureStableTagTargetMatchesRemoteHead(config, version) {
+  if (!isStableVersion(version)) {
+    return;
+  }
+  const targetSha = read("git", ["rev-parse", "HEAD"]);
+  const remoteSha = read("git", ["rev-parse", `${config.remote}/${config.branch}`]);
+  if (targetSha !== remoteSha) {
+    fail(
+      `Refusing to tag stable ${config.tagPrefix}${version}: target commit ${targetSha} ` +
+      `does not equal ${config.remote}/${config.branch} HEAD ${remoteSha}.`
+    );
   }
 }
 
@@ -627,6 +652,7 @@ function runRelease(config, options) {
   const tagName = `${config.tagPrefix}${version}`;
   const fetchState = fetchRemoteState(config, { tagName });
   ensureTagDoesNotExist(tagName, fetchState);
+  ensureStableTagTargetMatchesRemoteHead(config, version);
   createAnnotatedTag(tagName);
   pushRelease(config, tagName);
   printReleaseSuccess(version, tagName);

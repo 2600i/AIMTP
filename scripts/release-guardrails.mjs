@@ -136,9 +136,11 @@ export function evaluateStableTagGuardrails(input) {
   const tagPrefix = String(input?.tagPrefix ?? "v");
   const isAnnotatedTag = input?.isAnnotatedTag !== false;
   const commitOnMain = Boolean(input?.commitOnMain);
+  const commitMatchesMainHead = input?.commitMatchesMainHead !== false;
   const parentCount = Number.isInteger(input?.parentCount) ? input.parentCount : 0;
   const subject = String(input?.subject ?? "");
   const message = String(input?.message ?? subject);
+  const packageVersion = String(input?.packageVersion ?? "").trim();
   const requirePrMergeForStable = input?.requirePrMergeForStable !== false;
   const stableMergeStrategy = normalizeStableMergeStrategy(input?.stableMergeStrategy);
   const squashMarkers = normalizeSquashMarkers(input?.squashMarkers);
@@ -174,6 +176,28 @@ export function evaluateStableTagGuardrails(input) {
       stableMergeStrategy,
       allowed: false,
       message: "Stable tags must reference a commit reachable from origin/main."
+    };
+  }
+
+  if (!commitMatchesMainHead) {
+    return {
+      stable,
+      required: stable && requirePrMergeForStable,
+      stableMergeStrategy,
+      allowed: false,
+      message: "Stable tags must target the current origin/main HEAD commit."
+    };
+  }
+
+  if (packageVersion !== version) {
+    return {
+      stable,
+      required: stable && requirePrMergeForStable,
+      stableMergeStrategy,
+      allowed: false,
+      message:
+        `Stable tag ${tagName} must match package.json version at target commit ` +
+        `(expected ${version}, found ${packageVersion || "n/a"}).`
     };
   }
 

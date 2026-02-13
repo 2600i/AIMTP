@@ -122,6 +122,32 @@ function isCommitReachableFromRemoteMain(commitSha, remoteRef) {
   fail(`Failed to run "git merge-base --is-ancestor": ${stderr || "unknown error"}`);
 }
 
+function readPackageVersionAtCommit(commitSha, tagName) {
+  const spec = `${commitSha}:package.json`;
+  const result = spawnSync("git", ["show", spec], { encoding: "utf8" });
+  if (result.error) {
+    fail(`Tag guardrails failed for ${tagName}: unable to read ${spec}: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    const details = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+    fail(`Tag guardrails failed for ${tagName}: unable to read ${spec}${details ? `\n${details}` : ""}`);
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(String(result.stdout ?? ""));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    fail(`Tag guardrails failed for ${tagName}: package.json at ${commitSha} is invalid JSON (${message}).`);
+  }
+
+  const version = String(parsed?.version ?? "").trim();
+  if (!version) {
+    fail(`Tag guardrails failed for ${tagName}: package.json at ${commitSha} is missing version.`);
+  }
+  return version;
+}
+
 function main() {
   const { tag: cliTag } = parseArgs(process.argv.slice(2));
   const tagName = resolveTagName(cliTag);
@@ -133,6 +159,8 @@ function main() {
   const commitSha = read("git", ["rev-list", "-n", "1", tagName]);
 
   run("git", ["fetch", config.remote, config.branch, "--no-tags"]);
+  const remoteMainHeadSha = read("git", ["rev-parse", remoteMainRef]);
+  const packageVersion = readPackageVersionAtCommit(commitSha, tagName);
 
   const parentLine = read("git", ["rev-list", "--parents", "-n", "1", commitSha]);
   const subject = read("git", ["show", "-s", "--format=%s", commitSha]);
@@ -142,6 +170,8 @@ function main() {
     tagPrefix: config.tagPrefix,
     isAnnotatedTag: tagObjectType === "tag",
     commitOnMain: isCommitReachableFromRemoteMain(commitSha, remoteMainRef),
+    commitMatchesMainHead: commitSha === remoteMainHeadSha,
+    packageVersion,
     parentCount: parseParentCountFromRevList(parentLine),
     subject,
     message,

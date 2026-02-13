@@ -121,6 +121,8 @@ const stableTagPass = evaluateStableTagGuardrails({
   tagPrefix: "v",
   isAnnotatedTag: true,
   commitOnMain: true,
+  commitMatchesMainHead: true,
+  packageVersion: "0.3.1",
   requirePrMergeForStable: true,
   stableMergeStrategy: "merge_commit",
   parentCount: 2,
@@ -128,11 +130,49 @@ const stableTagPass = evaluateStableTagGuardrails({
 });
 assert.equal(stableTagPass.allowed, true);
 
+const stableTagTargetMismatch = evaluateStableTagGuardrails({
+  tagName: "v0.3.1",
+  tagPrefix: "v",
+  isAnnotatedTag: true,
+  commitOnMain: true,
+  commitMatchesMainHead: false,
+  packageVersion: "0.3.1",
+  requirePrMergeForStable: true,
+  stableMergeStrategy: "merge_commit",
+  parentCount: 2,
+  subject: "merge pull request #42 from team/release"
+});
+assert.equal(stableTagTargetMismatch.allowed, false);
+assert.equal(
+  stableTagTargetMismatch.message,
+  "Stable tags must target the current origin/main HEAD commit."
+);
+
+const stableTagVersionMismatch = evaluateStableTagGuardrails({
+  tagName: "v0.3.1",
+  tagPrefix: "v",
+  isAnnotatedTag: true,
+  commitOnMain: true,
+  commitMatchesMainHead: true,
+  packageVersion: "0.3.0",
+  requirePrMergeForStable: true,
+  stableMergeStrategy: "merge_commit",
+  parentCount: 2,
+  subject: "merge pull request #42 from team/release"
+});
+assert.equal(stableTagVersionMismatch.allowed, false);
+assert.equal(
+  stableTagVersionMismatch.message,
+  "Stable tag v0.3.1 must match package.json version at target commit (expected 0.3.1, found 0.3.0)."
+);
+
 const stableTagLightweight = evaluateStableTagGuardrails({
   tagName: "v0.3.1",
   tagPrefix: "v",
   isAnnotatedTag: false,
   commitOnMain: true,
+  commitMatchesMainHead: true,
+  packageVersion: "0.3.1",
   requirePrMergeForStable: true,
   stableMergeStrategy: "merge_commit",
   parentCount: 2,
@@ -146,6 +186,8 @@ const stableTagOffMain = evaluateStableTagGuardrails({
   tagPrefix: "v",
   isAnnotatedTag: true,
   commitOnMain: false,
+  commitMatchesMainHead: false,
+  packageVersion: "0.3.1",
   requirePrMergeForStable: true,
   stableMergeStrategy: "merge_commit",
   parentCount: 2,
