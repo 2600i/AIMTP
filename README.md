@@ -36,6 +36,7 @@ npm ci
 npm test
 npm run build
 npm run smoke:rc
+npm run smoke:dist
 ```
 
 ## Getting Started
@@ -173,6 +174,11 @@ store choices, and scaling guidance.
 
 ```sh
 npm test
+```
+
+Opt-in trust distribution smoke (local FS + local HTTP only):
+```sh
+npm run smoke:dist
 ```
 
 ## Troubleshooting
