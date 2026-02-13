@@ -1,12 +1,23 @@
 # AIMTP — Agentic Intelligent Message Transfer Protocol
 
-**Status:** v0.1 candidate — protocol surface frozen except for errata
+**Status:** stable `v0.3.0`; active branch `codex/v0.3.1-work` for controlled hardening/polish.
 
 AIMTP is a **schema-first, transport-agnostic** protocol for structured
 agent-to-agent message and task exchange. It defines **what is sent and why**,
 not **how it is transported**. Implementations can pick their own transports
 (HTTP, queues, files, etc.) while sharing a consistent envelope, message model,
 and task semantics.
+
+## Current Track
+- Stable release: `v0.3.0`
+- Work branch: `codex/v0.3.1-work` (controlled hardening/polish)
+
+## Trust Surface (Operator Summary)
+- `v1` trust semantics are the frozen baseline.
+- `v2` is opt-in via `INTENTOS_TRUST_VERSION=v2` with policy modes `off|warn|enforce`.
+- `v3+` trust features are additive/experimental opt-ins (transparency, snapshots, distribution adapters, content-addressed IDs).
+
+Execution semantics and receipt/crypto behavior are unchanged; trust additions are opt-in and default inert.
 
 **Goals**
 - Protocol stability with explicit versioning
@@ -15,22 +26,22 @@ and task semantics.
 - Interop across runtimes and teams
 - Extensible metadata without breaking changes
 
-## Getting Started
+## Quick Start
 
 **Prerequisites**
 - Node.js and npm
 
-**Install dependencies**
 ```sh
 npm ci
-```
-
-**Build**
-```sh
+npm test
 npm run build
+npm run smoke:rc
+npm run smoke:dist
 ```
 
-**Run the relay**
+## Getting Started
+
+**Run the relay (optional)**
 ```sh
 AIMTP_API_KEY=dev-key node dist/runtime/relay.js
 ```
@@ -88,20 +99,31 @@ curl "http://127.0.0.1:8787/aimtp/dead?recipient=agent-b&max=1" \
 ```
 
 For full request/response schemas and error codes, see
-`/Users/solo446/Documents/AIMTP/docs/runtime.md`.
+[`docs/runtime.md`](docs/runtime.md).
 
 ## Documentation
-- Runtime + API reference: `/Users/solo446/Documents/AIMTP/docs/runtime.md`
-- IntentOS v2.1 receipts contract (frozen): `/Users/solo446/Documents/AIMTP/docs/intentos-receipts.md`
-- IntentOS federation trust boundaries (receipts): `/Users/solo446/Documents/AIMTP/docs/intentos-federation.md`
-- IntentOS v1 trust semantics (frozen): [`/Users/solo446/Documents/AIMTP/docs/intentos-federation.md#intentos-v1-trust-semantics-frozen`](/Users/solo446/Documents/AIMTP/docs/intentos-federation.md#intentos-v1-trust-semantics-frozen)
-- System architecture: `/Users/solo446/Documents/AIMTP/docs/architecture.md`
-- Security model: `/Users/solo446/Documents/AIMTP/docs/security.md`
-- Protocol spec: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.1.md`
+- [Release flow](docs/release-flow.md)
+- [Release governance](docs/release-governance.md)
+- [Trust evolution](docs/trust-evolution.md)
+- [IntentOS federation trust boundaries](docs/intentos-federation.md)
+- Runtime + API reference: [docs/runtime.md](docs/runtime.md)
+- IntentOS v2.1 receipts contract (frozen): [docs/intentos-receipts.md](docs/intentos-receipts.md)
+- IntentOS v1 trust semantics (frozen): [docs/intentos-federation.md#intentos-v1-trust-semantics-frozen](docs/intentos-federation.md#intentos-v1-trust-semantics-frozen)
+- System architecture: [docs/architecture.md](docs/architecture.md)
+- Security model: [docs/security.md](docs/security.md)
+- Protocol spec: [spec/aimtp-v0.1.md](spec/aimtp-v0.1.md)
 
 ## Operations
 For deployment, environment configuration, and recovery guidance, see
-`/Users/solo446/Documents/AIMTP/docs/operations.md`.
+[`docs/operations.md`](docs/operations.md).
+
+## Trust Diagnostics
+```sh
+npm run trust:diag
+npm run trust:diag -- --json
+npm run trust:diag -- --strict
+npm run trust:diag -- --ci
+```
 
 ## Operator Recipe: Enable v2 Trust
 Set `INTENTOS_TRUST_VERSION=v2` and `INTENTOS_RECEIPT_POLICY=enforce`.
@@ -109,7 +131,7 @@ Set `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON='{"relay://X":"<PUBLIC_KEY_PEM>"}'`.
 Optional hardening: `INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC=300`.
 Recommended rollout: start with `INTENTOS_RECEIPT_POLICY=warn`, then switch to `enforce`.
 Execution semantics do not change; only receipt trust acceptance changes.
-Details: [`/Users/solo446/Documents/AIMTP/docs/ops-v2-trust.md`](/Users/solo446/Documents/AIMTP/docs/ops-v2-trust.md).
+Details: [`docs/ops-v2-trust.md`](docs/ops-v2-trust.md).
 
 ## Authentication and Signatures
 
@@ -145,7 +167,7 @@ AIMTP separates protocol semantics from transport. The reference relay accepts
 HTTP requests, validates envelopes, and stores messages in a mailbox backend.
 Recipients poll and lease messages, then acknowledge or fail them.
 
-See `/Users/solo446/Documents/AIMTP/docs/architecture.md` for a detailed flow,
+See [`docs/architecture.md`](docs/architecture.md) for a detailed flow,
 store choices, and scaling guidance.
 
 ## Testing
@@ -154,10 +176,15 @@ store choices, and scaling guidance.
 npm test
 ```
 
+Opt-in trust distribution smoke (local FS + local HTTP only):
+```sh
+npm run smoke:dist
+```
+
 ## Troubleshooting
 
 Common issues and fixes are documented in
-`/Users/solo446/Documents/AIMTP/docs/runtime.md`.
+[`docs/runtime.md`](docs/runtime.md).
 
 ## Contributing
 
@@ -173,4 +200,4 @@ We welcome issues and pull requests.
 - `examples/reference-agents/` — Router + executor reference agents with local negotiation/execution demo (`node examples/reference-agents/demo.js`)
 
 ## License
-See `/Users/solo446/Documents/AIMTP/LICENSE`.
+See [`LICENSE`](LICENSE).
