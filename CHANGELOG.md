@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [Unreleased]
+### Docs
+- Align README status and operator guidance with 0.3.x (`v0.3.0` stable, `codex/v0.3.1-work` active).
+
 ## [v0.1.14]
 ### Added
 - Redis mailbox store implementation (`AIMTP_STORE=redis`) with FIFO enqueue/poll behavior and TTL-aware message handling.
