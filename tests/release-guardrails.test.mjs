@@ -209,4 +209,15 @@ const offlineFallbackBlockedOnBranchOrSync = evaluateOfflineTagLookupFallback({
 assert.equal(offlineFallbackBlockedOnBranchOrSync.proceed, false);
 assert.equal(offlineFallbackBlockedOnBranchOrSync.error, "offline_fallback_not_allowed");
 
+const offlineFallbackBlockedOnMainDivergence = evaluateOfflineTagLookupFallback({
+  fetchHeadPermissionError: true,
+  lsRemoteFailed: true,
+  onMain: true,
+  mainMatchesRemote: false,
+  localTagExists: false,
+  tagName: "v0.3.0"
+});
+assert.equal(offlineFallbackBlockedOnMainDivergence.proceed, false);
+assert.equal(offlineFallbackBlockedOnMainDivergence.error, "offline_fallback_not_allowed");
+
 console.log("OK: release guardrails tests");

@@ -321,6 +321,18 @@ function fetchRemoteState(config, options = {}) {
       if (decision.error && decision.error !== "offline_fallback_not_allowed") {
         fail(decision.error);
       }
+      if (decision.error === "offline_fallback_not_allowed") {
+        if (currentBranch !== config.branch) {
+          fail(
+            `Preflight failed: offline local tag fallback requires branch "${config.branch}" ` +
+            `(found "${currentBranch}").`
+          );
+        }
+        fail(
+          `Preflight failed: offline local tag fallback requires ${config.branch} ` +
+          `to match ${config.remote}/${config.branch}.`
+        );
+      }
       printCaptured(lsRemoteResult);
       fail(`Preflight failed: fallback tag lookup via ls-remote failed for remote \"${config.remote}\".`);
     }
