@@ -30,6 +30,20 @@ IntentOS 0.4.0 also introduces an opt-in identity anchor skeleton for stable pee
 - The local anchor demo only runs when both `INTENTOS_PROTOCOL_VERSION=0.4` and `INTENTOS_IDENTITY=on` are set.
 - Draft payload schema: [`spec/identity-anchor-v0.4.schema.json`](../spec/identity-anchor-v0.4.schema.json)
 
+## 0.4.0 anchor distribution (draft)
+
+IntentOS 0.4.0 adds an opt-in draft trust artifact for distributing identity anchors through existing trust distribution adapters (`fs`/`http`).
+
+- Default behavior remains inert.
+- Distribution loading only runs when:
+  - `INTENTOS_PROTOCOL_VERSION=0.4`
+  - `INTENTOS_IDENTITY=on`
+  - `INTENTOS_TRUST_DISTRIBUTION=fs|http`
+- Draft anchor-set schema (`type=identity-anchors`): [`spec/identity-anchor-set-v0.4.schema.json`](../spec/identity-anchor-set-v0.4.schema.json)
+- Adapter source envs for this artifact:
+  - `INTENTOS_TRUST_IDENTITY_ANCHORS_PATH` (fs mode)
+  - `INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL` (http mode)
+
 ## Threat Model (Brief)
 - Forged receipts: an attacker fabricates `receipt.*` objects that look valid.
 - Replay: old but valid receipts are replayed to mislead state consumers.

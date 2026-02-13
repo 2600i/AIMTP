@@ -18,6 +18,7 @@ type TrustSnapshotPolicyMode = "off" | "warn" | "enforce";
 export interface TrustDistributionSnapshot {
   readonly bundlePath?: string;
   readonly revocationsPath?: string;
+  readonly identityAnchorsPath?: string;
   readonly transparencyLogPath?: string;
   readonly transparencyHead?: TransparencyHead;
   readonly checkpoint?: TransparencyCheckpointEntry;
@@ -272,10 +273,12 @@ export class LocalFilesystemTrustAdapter implements TrustDistributionAdapter {
   resolveSnapshot(): TrustDistributionSnapshot {
     const bundlePath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_BUNDLE_PATH);
     const revocationsPath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH);
+    const identityAnchorsPath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_IDENTITY_ANCHORS_PATH);
     const transparencyLogPath = normalizeNonEmptyString(this.env.INTENTOS_TRANSPARENCY_LOG_PATH);
     const snapshot: TrustDistributionSnapshot = {
       ...(bundlePath ? { bundlePath } : {}),
       ...(revocationsPath ? { revocationsPath } : {}),
+      ...(identityAnchorsPath ? { identityAnchorsPath } : {}),
       ...(transparencyLogPath ? { transparencyLogPath } : {})
     };
 
@@ -361,6 +364,7 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
     );
 
     let revocationsPath: string | undefined;
+    let identityAnchorsPath: string | undefined;
     let transparencyHead: TransparencyHead | undefined;
     let checkpoint: TransparencyCheckpointEntry | undefined;
     let transparencyProof: TransparencyProof | undefined;
@@ -380,6 +384,24 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
         "intentos-trust-revocations-http-",
         "trust-revocations.json",
         revocationsPayload
+      );
+    }
+
+    const identityAnchorsUrlRaw = normalizeNonEmptyString(this.env.INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL);
+    if (identityAnchorsUrlRaw) {
+      const identityAnchorsUrl = validateTrustDistributionHttpUrl(
+        identityAnchorsUrlRaw,
+        "INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL"
+      );
+      const identityAnchorsPayload = this.fetchJsonObject(
+        identityAnchorsUrl,
+        timeoutMs,
+        "INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL"
+      );
+      identityAnchorsPath = writeJsonTempFile(
+        "intentos-identity-anchors-http-",
+        "identity-anchors.json",
+        identityAnchorsPayload
       );
     }
 
@@ -436,6 +458,7 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
     return {
       bundlePath: writeJsonTempFile("intentos-trust-bundle-http-", "trust-bundle.json", bundlePayload),
       ...(revocationsPath ? { revocationsPath } : {}),
+      ...(identityAnchorsPath ? { identityAnchorsPath } : {}),
       ...(transparencyLogPath ? { transparencyLogPath } : {}),
       ...(transparencyHead ? { transparencyHead } : {}),
       ...(checkpoint ? { checkpoint } : {}),
