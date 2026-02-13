@@ -10,6 +10,9 @@ export interface IdentityAnchor {
   peerId: string;
   publicKeyPem: string;
   timestamp: string;
+  alg?: "ed25519";
+  kid?: string;
+  signature?: string;
 }
 
 export interface AnchorProof {
@@ -25,5 +28,6 @@ export interface AnchorProof {
 export interface IdentityAnchorSet {
   type: typeof IDENTITY_ANCHOR_SET_TYPE;
   protocolVersion: typeof IDENTITY_PROTOCOL_VERSION;
+  setId?: string;
   anchors: ReadonlyArray<IdentityAnchor>;
 }

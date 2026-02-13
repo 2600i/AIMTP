@@ -12,6 +12,10 @@
     "protocolVersion": {
       "const": "0.4"
     },
+    "setId": {
+      "type": "string",
+      "minLength": 1
+    },
     "anchors": {
       "type": "array",
       "items": {

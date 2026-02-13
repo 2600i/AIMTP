@@ -10,6 +10,18 @@ export interface FederationHandshakeHello {
   recipientPeerId: string;
   nonce: string;
   timestamp: string;
+  identityAnchorSetId?: string;
+  identityAnchorsInline?: ReadonlyArray<{
+    type: "IdentityAnchor";
+    protocolVersion: "0.4";
+    anchorId: string;
+    peerId: string;
+    publicKeyPem: string;
+    timestamp: string;
+    alg?: "ed25519";
+    kid?: string;
+    signature?: string;
+  }>;
 }
 
 export interface FederationHandshakeAck {
@@ -21,6 +33,8 @@ export interface FederationHandshakeAck {
   nonce: string;
   helloTimestamp: string;
   accepted: boolean;
+  acceptedIdentityAnchors: boolean;
+  resolvedAnchorSetId: string | null;
   timestamp: string;
 }
 

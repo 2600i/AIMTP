@@ -27,6 +27,7 @@ export interface IdentityAnchorLoadResult {
   readonly skipped: boolean;
   readonly mode: TrustDistributionMode;
   readonly sourcePath: string | null;
+  readonly anchorSetId: string | null;
   readonly anchorsByKey: ReadonlyMap<string, IdentityAnchor>;
   readonly anchorCount: number;
 }
@@ -76,6 +77,9 @@ function parseIdentityAnchor(raw: unknown, index: number): IdentityAnchor {
     "anchorId",
     "peerId",
     "publicKeyPem",
+    "alg",
+    "kid",
+    "signature",
     "timestamp"
   ]);
   const unknownKeys = Object.keys(raw).filter((key) => !allowedKeys.has(key));
@@ -88,6 +92,10 @@ function parseIdentityAnchor(raw: unknown, index: number): IdentityAnchor {
   if (raw.protocolVersion !== IDENTITY_PROTOCOL_VERSION) {
     throw new Error(`identity_anchor_distribution_anchor_protocol_version_invalid:${index}`);
   }
+  const alg = normalizeNonEmptyString(raw.alg);
+  if (alg && alg.toLowerCase() !== "ed25519") {
+    throw new Error(`identity_anchor_distribution_alg_invalid:${index}`);
+  }
   return {
     type: IDENTITY_ANCHOR_TYPE,
     protocolVersion: IDENTITY_PROTOCOL_VERSION,
@@ -97,6 +105,15 @@ function parseIdentityAnchor(raw: unknown, index: number): IdentityAnchor {
       raw.publicKeyPem,
       `identity_anchor_distribution_public_key_missing:${index}`
     ),
+    ...(alg
+      ? { alg: "ed25519" as const }
+      : {}),
+    ...(normalizeNonEmptyString(raw.kid)
+      ? { kid: ensureNonEmptyString(raw.kid, `identity_anchor_distribution_kid_missing:${index}`) }
+      : {}),
+    ...(normalizeNonEmptyString(raw.signature)
+      ? { signature: ensureNonEmptyString(raw.signature, `identity_anchor_distribution_signature_missing:${index}`) }
+      : {}),
     timestamp: ensureNonEmptyString(raw.timestamp, `identity_anchor_distribution_timestamp_missing:${index}`)
   };
 }
@@ -104,6 +121,7 @@ function parseIdentityAnchor(raw: unknown, index: number): IdentityAnchor {
 interface IdentityAnchorSetArtifact {
   readonly type: "identity-anchors";
   readonly protocolVersion: "0.4";
+  readonly setId?: string;
   readonly anchors: ReadonlyArray<IdentityAnchor>;
 }
 
@@ -118,7 +136,7 @@ function parseIdentityAnchorSet(raw: string, sourcePath: string): IdentityAnchor
   if (!isPlainObject(parsed)) {
     throw new Error(`identity_anchor_distribution_payload_must_be_object:${sourcePath}`);
   }
-  const allowedKeys = new Set(["type", "protocolVersion", "anchors"]);
+  const allowedKeys = new Set(["type", "protocolVersion", "setId", "anchors"]);
   const unknownKeys = Object.keys(parsed).filter((key) => !allowedKeys.has(key));
   if (unknownKeys.length > 0) {
     throw new Error(`identity_anchor_distribution_payload_unknown_keys:${sourcePath}:${unknownKeys.join(",")}`);
@@ -133,9 +151,11 @@ function parseIdentityAnchorSet(raw: string, sourcePath: string): IdentityAnchor
     throw new Error(`identity_anchor_distribution_payload_anchors_must_be_array:${sourcePath}`);
   }
   const anchors = parsed.anchors.map((anchor, index) => parseIdentityAnchor(anchor, index));
+  const setId = normalizeNonEmptyString(parsed.setId);
   return {
     type: "identity-anchors",
     protocolVersion: "0.4",
+    ...(setId ? { setId } : {}),
     anchors
   };
 }
@@ -181,6 +201,7 @@ function onAnchorLoadError(
     skipped: false,
     mode: distributionMode,
     sourcePath: null,
+    anchorSetId: null,
     anchorsByKey: new Map<string, IdentityAnchor>(),
     anchorCount: 0
   };
@@ -196,6 +217,7 @@ export function loadIdentityAnchorsFromDistribution(
       skipped: true,
       mode: distributionMode,
       sourcePath: null,
+      anchorSetId: null,
       anchorsByKey: new Map<string, IdentityAnchor>(),
       anchorCount: 0
     };
@@ -210,6 +232,7 @@ export function loadIdentityAnchorsFromDistribution(
         skipped: false,
         mode: distributionMode,
         sourcePath: null,
+        anchorSetId: null,
         anchorsByKey: new Map<string, IdentityAnchor>(),
         anchorCount: 0
       };
@@ -220,6 +243,7 @@ export function loadIdentityAnchorsFromDistribution(
       skipped: false,
       mode: distributionMode,
       sourcePath,
+      anchorSetId: artifact.setId ?? null,
       anchorsByKey,
       anchorCount: artifact.anchors.length
     };

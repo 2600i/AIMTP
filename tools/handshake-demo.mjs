@@ -40,6 +40,8 @@ const ack = {
   nonce: hello.nonce,
   helloTimestamp: hello.timestamp,
   accepted: true,
+  acceptedIdentityAnchors: false,
+  resolvedAnchorSetId: null,
   timestamp: new Date().toISOString()
 };
 
