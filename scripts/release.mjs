@@ -276,7 +276,8 @@ function readRemoteBranchRefViaLsRemote(config) {
   return sha;
 }
 
-function fetchRemoteState(config) {
+function fetchRemoteState(config, options = {}) {
+  const tagName = String(options.tagName ?? "").trim();
   const fetchResult = runCaptured("git", ["fetch", config.remote, "--tags"]);
   if (fetchResult.status === 0) {
     printCaptured(fetchResult);
@@ -312,10 +313,14 @@ function fetchRemoteState(config) {
       lsRemoteFailed: true,
       onMain: currentBranch === config.branch,
       mainMatchesRemote,
-      localTagExists: false
+      localTagExists: tagName ? localTagExists(tagName) : false,
+      tagName
     });
 
     if (!decision.proceed) {
+      if (decision.error && decision.error !== "offline_fallback_not_allowed") {
+        fail(decision.error);
+      }
       printCaptured(lsRemoteResult);
       fail(`Preflight failed: fallback tag lookup via ls-remote failed for remote \"${config.remote}\".`);
     }
@@ -378,6 +383,7 @@ function runPreflight(config, options = {}) {
   const releaseVersion = typeof options.releaseVersion === "string" && options.releaseVersion.trim().length > 0
     ? options.releaseVersion.trim()
     : packageVersion;
+  const releaseTagName = `${config.tagPrefix}${releaseVersion}`;
   const stable = isStableVersion(releaseVersion);
   let fetchState = null;
 
@@ -385,7 +391,7 @@ function runPreflight(config, options = {}) {
     noDetachedHead: () => ensureNoDetachedHead(),
     cleanWorkingTree: () => ensureCleanWorkingTree(),
     fetchTags: () => {
-      fetchState = fetchRemoteState(config);
+      fetchState = fetchRemoteState(config, { tagName: releaseTagName });
     },
     onMainOnly: () => {
       if (stable) {
@@ -395,7 +401,7 @@ function runPreflight(config, options = {}) {
     localMainMatchesRemote: () => {
       if (stable) {
         if (!fetchState) {
-          fetchState = fetchRemoteState(config);
+          fetchState = fetchRemoteState(config, { tagName: releaseTagName });
         }
         ensureLocalMainMatchesRemote(config, fetchState);
       }
@@ -606,9 +612,8 @@ function runRelease(config, options) {
   }
 
   runReleaseChecks(config);
-  const fetchState = fetchRemoteState(config);
-
   const tagName = `${config.tagPrefix}${version}`;
+  const fetchState = fetchRemoteState(config, { tagName });
   ensureTagDoesNotExist(tagName, fetchState);
   createAnnotatedTag(tagName);
   pushRelease(config, tagName);

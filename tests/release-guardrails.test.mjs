@@ -169,7 +169,7 @@ const prereleaseTagOffMain = evaluateStableTagGuardrails({
 });
 assert.equal(prereleaseTagOffMain.allowed, true);
 
-const offlineFallbackProceeds = evaluateOfflineTagLookupFallback({
+const offlineFallbackProceedsOnGenericLsRemoteFailure = evaluateOfflineTagLookupFallback({
   fetchHeadPermissionError: true,
   lsRemoteFailed: true,
   onMain: true,
@@ -177,14 +177,14 @@ const offlineFallbackProceeds = evaluateOfflineTagLookupFallback({
   localTagExists: false,
   tagName: "v0.3.0"
 });
-assert.equal(offlineFallbackProceeds.proceed, true);
-assert.equal(offlineFallbackProceeds.mode, "local-only");
+assert.equal(offlineFallbackProceedsOnGenericLsRemoteFailure.proceed, true);
+assert.equal(offlineFallbackProceedsOnGenericLsRemoteFailure.mode, "local-only");
 assert.equal(
-  offlineFallbackProceeds.warning,
-  "Preflight warning: remote tag lookup unavailable (offline). Falling back to local tag check only."
+  offlineFallbackProceedsOnGenericLsRemoteFailure.warning,
+  "Preflight warning: remote tag lookup unavailable (ls-remote failed). Falling back to local tag check only."
 );
 
-const offlineFallbackLocalTagExists = evaluateOfflineTagLookupFallback({
+const offlineFallbackLocalTagExistsOnGenericLsRemoteFailure = evaluateOfflineTagLookupFallback({
   fetchHeadPermissionError: true,
   lsRemoteFailed: true,
   onMain: true,
@@ -192,8 +192,11 @@ const offlineFallbackLocalTagExists = evaluateOfflineTagLookupFallback({
   localTagExists: true,
   tagName: "v0.3.0"
 });
-assert.equal(offlineFallbackLocalTagExists.proceed, false);
-assert.equal(offlineFallbackLocalTagExists.error, "Tag already exists locally: v0.3.0");
+assert.equal(offlineFallbackLocalTagExistsOnGenericLsRemoteFailure.proceed, false);
+assert.equal(
+  offlineFallbackLocalTagExistsOnGenericLsRemoteFailure.error,
+  "Tag already exists locally: v0.3.0"
+);
 
 const offlineFallbackBlockedOnBranchOrSync = evaluateOfflineTagLookupFallback({
   fetchHeadPermissionError: true,

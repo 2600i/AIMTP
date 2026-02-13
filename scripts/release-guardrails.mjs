@@ -233,7 +233,8 @@ export function evaluateOfflineTagLookupFallback(input) {
     };
   }
 
-  const warning = "Preflight warning: remote tag lookup unavailable (offline). Falling back to local tag check only.";
+  const warning =
+    "Preflight warning: remote tag lookup unavailable (ls-remote failed). Falling back to local tag check only.";
   if (localTagExists) {
     return {
       mode: "local-only",
