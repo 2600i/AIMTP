@@ -31,6 +31,13 @@ Execution semantics and receipt/crypto behavior are unchanged; trust additions a
 **Prerequisites**
 - Node.js and npm
 
+### Node Version (Recommended)
+- Use Node.js 20.x.
+- This repo includes a `.nvmrc` file pinned to 20.
+- If using nvm, run: `nvm use`
+- If native modules fail after switching Node versions, run:
+  `rm -rf node_modules && npm ci`
+
 ```sh
 npm ci
 npm test
