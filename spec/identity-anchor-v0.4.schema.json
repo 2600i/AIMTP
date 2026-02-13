@@ -1,0 +1,90 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aimtp.dev/spec/identity-anchor-v0.4.schema.json",
+  "title": "IntentOS Identity Anchors v0.4.0 (Draft)",
+  "description": "Opt-in draft payloads for identity anchor scaffolding.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/IdentityAnchor"
+    },
+    {
+      "$ref": "#/$defs/AnchorProof"
+    }
+  ],
+  "$defs": {
+    "IdentityAnchor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "IdentityAnchor"
+        },
+        "protocolVersion": {
+          "const": "0.4"
+        },
+        "anchorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "peerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "publicKeyPem": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocolVersion",
+        "anchorId",
+        "peerId",
+        "publicKeyPem",
+        "timestamp"
+      ]
+    },
+    "AnchorProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "AnchorProof"
+        },
+        "protocolVersion": {
+          "const": "0.4"
+        },
+        "anchorId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "alg": {
+          "const": "ed25519"
+        },
+        "kid": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocolVersion",
+        "anchorId",
+        "alg",
+        "kid",
+        "signature",
+        "timestamp"
+      ]
+    }
+  }
+}

@@ -22,6 +22,14 @@ IntentOS 0.4.0 introduces an opt-in handshake skeleton for federation bootstrapp
 - The local demo handshake only runs when both `INTENTOS_PROTOCOL_VERSION=0.4` and `INTENTOS_FEDERATION=on` are set.
 - Draft payload schema: [`spec/federation-handshake-v0.4.schema.json`](../spec/federation-handshake-v0.4.schema.json)
 
+## 0.4.0 identity anchors (draft)
+
+IntentOS 0.4.0 also introduces an opt-in identity anchor skeleton for stable peer identity bootstrapping.
+
+- Default behavior remains inert.
+- The local anchor demo only runs when both `INTENTOS_PROTOCOL_VERSION=0.4` and `INTENTOS_IDENTITY=on` are set.
+- Draft payload schema: [`spec/identity-anchor-v0.4.schema.json`](../spec/identity-anchor-v0.4.schema.json)
+
 ## Threat Model (Brief)
 - Forged receipts: an attacker fabricates `receipt.*` objects that look valid.
 - Replay: old but valid receipts are replayed to mislead state consumers.
