@@ -14,6 +14,14 @@ IntentOS v2 trust semantics are now the reference opt-in trust layer for receipt
 - In this repository, `v0.1.39+` is the v2 reference line for operators and implementers.
 - For downstream forks without aligned version tags, use the post-v2-merge baseline commit as the reference line.
 
+## 0.4.0 handshake (draft)
+
+IntentOS 0.4.0 introduces an opt-in handshake skeleton for federation bootstrapping.
+
+- Default behavior remains inert.
+- The local demo handshake only runs when both `INTENTOS_PROTOCOL_VERSION=0.4` and `INTENTOS_FEDERATION=on` are set.
+- Draft payload schema: [`spec/federation-handshake-v0.4.schema.json`](../spec/federation-handshake-v0.4.schema.json)
+
 ## Threat Model (Brief)
 - Forged receipts: an attacker fabricates `receipt.*` objects that look valid.
 - Replay: old but valid receipts are replayed to mislead state consumers.
