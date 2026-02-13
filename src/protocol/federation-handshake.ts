@@ -18,6 +18,8 @@ export interface FederationHandshakeAck {
   helloId: string;
   senderPeerId: string;
   recipientPeerId: string;
+  nonce: string;
+  helloTimestamp: string;
   accepted: boolean;
   timestamp: string;
 }

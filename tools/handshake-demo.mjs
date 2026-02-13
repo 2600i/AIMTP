@@ -37,6 +37,8 @@ const ack = {
   helloId: hello.helloId,
   senderPeerId: "peer-beta",
   recipientPeerId: "peer-alpha",
+  nonce: hello.nonce,
+  helloTimestamp: hello.timestamp,
   accepted: true,
   timestamp: new Date().toISOString()
 };
@@ -53,7 +55,12 @@ function assertValidHandshakeMessage(message) {
 assertValidHandshakeMessage(hello);
 assertValidHandshakeMessage(ack);
 
-if (ack.helloId !== hello.helloId || ack.accepted !== true) {
+if (
+  ack.helloId !== hello.helloId ||
+  ack.nonce !== hello.nonce ||
+  ack.helloTimestamp !== hello.timestamp ||
+  ack.accepted !== true
+) {
   throw new Error("Handshake ack failed transcript checks.");
 }
 
