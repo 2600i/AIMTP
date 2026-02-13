@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aimtp.dev/spec/federation-handshake-v0.4.schema.json",
+  "title": "IntentOS Federation Handshake v0.4.0 (Draft)",
+  "description": "Opt-in draft payloads for local federation handshake scaffolding.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/HandshakeHello"
+    },
+    {
+      "$ref": "#/$defs/HandshakeAck"
+    }
+  ],
+  "$defs": {
+    "HandshakeHello": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "HandshakeHello"
+        },
+        "protocolVersion": {
+          "const": "0.4"
+        },
+        "helloId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "senderPeerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recipientPeerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "nonce": {
+          "type": "string",
+          "minLength": 1
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocolVersion",
+        "helloId",
+        "senderPeerId",
+        "recipientPeerId",
+        "nonce",
+        "timestamp"
+      ]
+    },
+    "HandshakeAck": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "HandshakeAck"
+        },
+        "protocolVersion": {
+          "const": "0.4"
+        },
+        "helloId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "senderPeerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "recipientPeerId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "timestamp": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "protocolVersion",
+        "helloId",
+        "senderPeerId",
+        "recipientPeerId",
+        "accepted",
+        "timestamp"
+      ]
+    }
+  }
+}
