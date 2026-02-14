@@ -61,6 +61,18 @@ function canonicalizeIdentityAnchor(anchor) {
   );
 }
 
+function canonicalizeHandshakePeerProofPayload(hello) {
+  return Buffer.from(
+    JSON.stringify({
+      nonce: hello.nonce,
+      timestamp: hello.timestamp,
+      senderPeerId: hello.senderPeerId,
+      senderRelayUrl: hello.senderRelayUrl || ""
+    }),
+    "utf8"
+  );
+}
+
 function createSignedIdentityAnchor(suffix = "1") {
   const { publicKey, privateKey } = crypto.generateKeyPairSync("ed25519");
   const publicKeyPem = publicKey.export({ type: "spki", format: "pem" }).toString();
@@ -76,10 +88,21 @@ function createSignedIdentityAnchor(suffix = "1") {
     .sign(null, canonicalizeIdentityAnchor(anchor), privateKey)
     .toString("base64");
   return {
-    ...anchor,
-    alg: "ed25519",
-    kid: `peer-alpha#key-${suffix}`,
-    signature
+    anchor: {
+      ...anchor,
+      alg: "ed25519",
+      kid: `peer-alpha#key-${suffix}`,
+      signature
+    },
+    privateKey
+  };
+}
+
+function createPeerProof(hello, privateKey, keyId) {
+  return {
+    keyId,
+    nonce: hello.nonce,
+    signature: crypto.sign(null, canonicalizeHandshakePeerProofPayload(hello), privateKey).toString("base64")
   };
 }
 
@@ -115,14 +138,15 @@ function withTempAnchorSet() {
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-handshake-anchor-set-"));
   const setId = `set-http-${Date.now()}`;
   const anchorSetPath = path.join(tempDir, "identity-anchors.json");
+  const proofSource = createSignedIdentityAnchor("set");
   const anchorSet = {
     type: "identity-anchors",
     protocolVersion: "0.4",
     setId,
-    anchors: [createSignedIdentityAnchor("set")]
+    anchors: [proofSource.anchor]
   };
   fs.writeFileSync(anchorSetPath, `${JSON.stringify(anchorSet, null, 2)}\n`, "utf8");
-  return { tempDir, setId, anchorSetPath };
+  return { tempDir, setId, anchorSetPath, proofSource };
 }
 
 const previousEnv = {
@@ -132,6 +156,7 @@ const previousEnv = {
 };
 
 let tempAnchorSet = null;
+let peerProofSource = null;
 
 const relay = new WebhookRelay();
 const server = createWebhookRelayServer(relay);
@@ -148,13 +173,22 @@ try {
   };
 
   if (sendAnchorsMode === "inline") {
-    hello.identityAnchorsInline = [createSignedIdentityAnchor("inline")];
+    peerProofSource = createSignedIdentityAnchor("inline");
+    hello.identityAnchorsInline = [peerProofSource.anchor];
   } else if (sendAnchorsMode === "setid") {
     tempAnchorSet = withTempAnchorSet();
     hello.identityAnchorSetId = tempAnchorSet.setId;
+    peerProofSource = tempAnchorSet.proofSource;
     process.env.INTENTOS_TRUST_DISTRIBUTION = "fs";
     process.env.INTENTOS_TRUST_IDENTITY_ANCHORS_PATH = tempAnchorSet.anchorSetPath;
     delete process.env.INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL;
+  }
+  if (peerProofSource) {
+    hello.peerProof = createPeerProof(
+      hello,
+      peerProofSource.privateKey,
+      peerProofSource.anchor.anchorId
+    );
   }
 
   assertValidHandshakeMessage(hello);
