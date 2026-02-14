@@ -2,6 +2,12 @@ export const HANDSHAKE_HELLO_TYPE = "HandshakeHello";
 export const HANDSHAKE_ACK_TYPE = "HandshakeAck";
 export const HANDSHAKE_PROTOCOL_VERSION = "0.4";
 
+export interface FederationHandshakePeerProof {
+  keyId: string;
+  nonce: string;
+  signature: string;
+}
+
 export interface FederationHandshakeHello {
   type: typeof HANDSHAKE_HELLO_TYPE;
   protocolVersion: typeof HANDSHAKE_PROTOCOL_VERSION;
@@ -10,6 +16,7 @@ export interface FederationHandshakeHello {
   recipientPeerId: string;
   nonce: string;
   timestamp: string;
+  peerProof?: FederationHandshakePeerProof;
   identityAnchorSetId?: string;
   identityAnchorsInline?: ReadonlyArray<{
     type: "IdentityAnchor";

@@ -52,6 +52,26 @@ The v0.4 HTTP handshake draft can optionally carry identity anchor exchange hint
 - Demo control:
   - `INTENTOS_HANDSHAKE_SEND_ANCHORS=off|inline|setid`
 
+## 0.4.0 identity policy: peer verification (draft)
+
+Handshake peer possession proof is an additional opt-in policy for anchor exchange.
+
+- Gate: active only when all are set:
+  - `INTENTOS_PROTOCOL_VERSION=0.4`
+  - `INTENTOS_FEDERATION=on`
+  - `INTENTOS_IDENTITY=on`
+- Policy env:
+  - `INTENTOS_HANDSHAKE_PEER_VERIFY=off|warn|enforce` (default `off`)
+- `HandshakeHello` optional field:
+  - `peerProof` with `{ keyId, nonce, signature }`
+  - Signature is over canonical payload containing `nonce`, `timestamp`, and sender peer identity (`senderPeerId`, plus optional relay URL if provided).
+  - `keyId` may be either presented `anchorId` or public-key fingerprint (`sha256:<hex>`).
+- Behavior:
+  - `off`: no peer proof requirement; handshake remains as-is.
+  - `warn`: when anchors are presented and proof is missing/invalid, handshake is accepted, emits one structured warning, and responds with `acceptedIdentityAnchors=false`.
+  - `enforce`: when anchors are presented and proof is missing/invalid, handshake is rejected with HTTP `400`.
+- This policy is additive and does not change receipt/crypto runtime semantics outside the gated handshake path.
+
 ## 0.4.0 identity anchors (draft)
 
 IntentOS 0.4.0 also introduces an opt-in identity anchor skeleton for stable peer identity bootstrapping.

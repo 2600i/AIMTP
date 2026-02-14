@@ -38,6 +38,29 @@
           "type": "string",
           "minLength": 1
         },
+        "peerProof": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "keyId": {
+              "type": "string",
+              "minLength": 1
+            },
+            "nonce": {
+              "type": "string",
+              "minLength": 1
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "keyId",
+            "nonce",
+            "signature"
+          ]
+        },
         "identityAnchorSetId": {
           "type": "string",
           "minLength": 1

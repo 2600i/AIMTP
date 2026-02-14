@@ -40,6 +40,7 @@ const INTENTOS_CAPABILITY_HEADER = "x-aimtp-capability";
 let federationHandshakeValidator = null;
 let identityAnchorValidator = null;
 let identityAnchorSetValidator = null;
+const POLICY_MODE_VALUES = new Set(["off", "warn", "enforce"]);
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -115,6 +116,10 @@ function parseOptionalNonNegativeEnvInt(value, fallback) {
     return fallback;
   }
   return parsed;
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function parseMailboxStoreOptions(options) {
@@ -968,6 +973,18 @@ function normalizeTrustDistributionMode(value) {
   return "off";
 }
 
+function normalizePolicyMode(value, fallback = "off") {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (POLICY_MODE_VALUES.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function getHandshakePeerVerifyMode(env) {
+  return normalizePolicyMode(env.INTENTOS_HANDSHAKE_PEER_VERIFY, "off");
+}
+
 function isIdentityAnchorExchangeEnabledFromEnv(env) {
   return (
     isFederationHandshakeEnabledFromEnv(env) &&
@@ -1020,6 +1037,113 @@ function canonicalizeIdentityAnchor(anchor) {
     }),
     "utf8"
   );
+}
+
+function canonicalizeHandshakePeerProofPayload(hello) {
+  return Buffer.from(
+    JSON.stringify({
+      nonce: hello.nonce,
+      timestamp: hello.timestamp,
+      senderPeerId: normalizeNonEmptyString(hello.senderPeerId),
+      senderRelayUrl: normalizeNonEmptyString(hello.senderRelayUrl)
+    }),
+    "utf8"
+  );
+}
+
+function computeIdentityAnchorFingerprint(publicKeyPem) {
+  return `sha256:${crypto.createHash("sha256").update(publicKeyPem, "utf8").digest("hex")}`;
+}
+
+function collectAnchorsByKey(anchors) {
+  const map = new Map();
+  for (const anchor of anchors) {
+    if (!anchor || !normalizeNonEmptyString(anchor.publicKeyPem)) {
+      continue;
+    }
+    const anchorId = normalizeNonEmptyString(anchor.anchorId);
+    const fingerprint = computeIdentityAnchorFingerprint(anchor.publicKeyPem);
+    if (anchorId) {
+      map.set(anchorId, anchor);
+    }
+    map.set(fingerprint, anchor);
+  }
+  return map;
+}
+
+function validateHandshakePeerProof(hello, anchors) {
+  if (!isPlainObject(hello.peerProof)) {
+    return {
+      ok: false,
+      code: "handshake_peer_proof_missing",
+      errors: ["peerProof is required when anchors are presented"]
+    };
+  }
+
+  const keyId = normalizeNonEmptyString(hello.peerProof.keyId);
+  const proofNonce = normalizeNonEmptyString(hello.peerProof.nonce);
+  const signature = normalizeNonEmptyString(hello.peerProof.signature);
+  if (!keyId || !proofNonce || !signature) {
+    return {
+      ok: false,
+      code: "handshake_peer_proof_invalid",
+      errors: ["peerProof.keyId, peerProof.nonce, and peerProof.signature are required"]
+    };
+  }
+  if (proofNonce !== normalizeNonEmptyString(hello.nonce)) {
+    return {
+      ok: false,
+      code: "handshake_peer_proof_invalid",
+      errors: ["peerProof.nonce must match hello.nonce"]
+    };
+  }
+
+  const anchorsByKey = collectAnchorsByKey(anchors);
+  const anchor = anchorsByKey.get(keyId);
+  if (!anchor) {
+    return {
+      ok: false,
+      code: "handshake_peer_proof_key_unknown",
+      errors: ["peerProof.keyId did not match any presented anchor id or fingerprint"]
+    };
+  }
+
+  let signatureBytes;
+  try {
+    signatureBytes = Buffer.from(signature, "base64");
+  } catch {
+    return {
+      ok: false,
+      code: "handshake_peer_proof_invalid",
+      errors: ["peerProof.signature must be base64"]
+    };
+  }
+
+  let verified = false;
+  try {
+    verified = crypto.verify(
+      null,
+      canonicalizeHandshakePeerProofPayload(hello),
+      anchor.publicKeyPem,
+      signatureBytes
+    );
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: "handshake_peer_proof_invalid",
+      errors: [`peerProof verification failed: ${message}`]
+    };
+  }
+  if (!verified) {
+    return {
+      ok: false,
+      code: "handshake_peer_proof_invalid",
+      errors: ["peerProof signature verification failed"]
+    };
+  }
+
+  return { ok: true, code: "", errors: [] };
 }
 
 function validateAndVerifyInlineIdentityAnchors(anchors) {
@@ -1156,7 +1280,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
       ok: false,
       code: "handshake_identity_anchor_distribution_disabled",
       errors: ["INTENTOS_TRUST_DISTRIBUTION must be fs or http"],
-      anchorSetId: null
+      anchorSetId: null,
+      anchors: []
     };
   }
   let rawPayload = "";
@@ -1167,7 +1292,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
         ok: false,
         code: "handshake_identity_anchor_set_missing",
         errors: ["INTENTOS_TRUST_IDENTITY_ANCHORS_PATH is required in fs mode"],
-        anchorSetId: null
+        anchorSetId: null,
+        anchors: []
       };
     }
     try {
@@ -1178,7 +1304,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
         ok: false,
         code: "handshake_identity_anchor_set_load_failed",
         errors: [message],
-        anchorSetId: null
+        anchorSetId: null,
+        anchors: []
       };
     }
   } else {
@@ -1188,7 +1315,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
         ok: false,
         code: "handshake_identity_anchor_set_missing",
         errors: ["INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL is required in http mode"],
-        anchorSetId: null
+        anchorSetId: null,
+        anchors: []
       };
     }
     try {
@@ -1199,7 +1327,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
         ok: false,
         code: "handshake_identity_anchor_set_load_failed",
         errors: [message],
-        anchorSetId: null
+        anchorSetId: null,
+        anchors: []
       };
     }
   }
@@ -1212,7 +1341,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
       ok: false,
       code: "handshake_identity_anchor_set_invalid_json",
       errors: [message],
-      anchorSetId: null
+      anchorSetId: null,
+      anchors: []
     };
   }
 
@@ -1225,7 +1355,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
       ok: false,
       code: "handshake_identity_anchor_schema_unavailable",
       errors: [message],
-      anchorSetId: null
+      anchorSetId: null,
+      anchors: []
     };
   }
 
@@ -1234,7 +1365,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
       ok: false,
       code: "handshake_identity_anchor_set_invalid",
       errors: collectAjvErrors(validateSet),
-      anchorSetId: null
+      anchorSetId: null,
+      anchors: []
     };
   }
 
@@ -1242,7 +1374,8 @@ async function loadIdentityAnchorSetFromDistribution(env) {
     ok: true,
     code: "",
     errors: [],
-    anchorSetId: computeAnchorSetId(parsedPayload, rawPayload)
+    anchorSetId: computeAnchorSetId(parsedPayload, rawPayload),
+    anchors: Array.isArray(parsedPayload.anchors) ? parsedPayload.anchors : []
   };
 }
 
@@ -1413,6 +1546,7 @@ function createWebhookRelayServer(relay, options = {}) {
     String(process.env.AIMTP_CAPABILITIES || "").trim().toLowerCase() === "on";
   const intentosCapabilityPublicKey = readOptionalPemEnv(process.env.AIMTP_CAP_PUBLIC_KEY);
   const federationHandshakeEnabled = isIdentityAnchorExchangeEnabledFromEnv(process.env);
+  const handshakePeerVerifyMode = getHandshakePeerVerifyMode(process.env);
   let intentosUiAssets = null;
   if (intentosEnabled) {
     try {
@@ -1560,6 +1694,24 @@ function createWebhookRelayServer(relay, options = {}) {
       let resolvedAnchorSetId = null;
       const hasInlineAnchors = Array.isArray(payload.identityAnchorsInline);
       const hasAnchorSetId = normalizeNonEmptyString(payload.identityAnchorSetId).length > 0;
+      const presentedAnchors = [];
+      let peerWarningEmitted = false;
+      const emitPeerVerificationWarning = (code, errors) => {
+        if (peerWarningEmitted || handshakePeerVerifyMode !== "warn") {
+          return;
+        }
+        peerWarningEmitted = true;
+        console.log(
+          JSON.stringify({
+            event: "handshake_peer_verify_warning",
+            mode: handshakePeerVerifyMode,
+            code,
+            hello_id: payload.helloId || "",
+            sender_peer_id: payload.senderPeerId || "",
+            errors: Array.isArray(errors) ? errors : []
+          })
+        );
+      };
 
       if (hasInlineAnchors) {
         const inlineValidation = validateAndVerifyInlineIdentityAnchors(payload.identityAnchorsInline);
@@ -1577,6 +1729,7 @@ function createWebhookRelayServer(relay, options = {}) {
           return;
         }
         acceptedIdentityAnchors = true;
+        presentedAnchors.push(...payload.identityAnchorsInline);
       }
 
       if (hasAnchorSetId) {
@@ -1587,12 +1740,40 @@ function createWebhookRelayServer(relay, options = {}) {
         } else if (loadedSet.anchorSetId === requestedSetId) {
           acceptedIdentityAnchors = true;
           resolvedAnchorSetId = loadedSet.anchorSetId;
+          if (Array.isArray(loadedSet.anchors)) {
+            presentedAnchors.push(...loadedSet.anchors);
+          }
         } else {
           acceptedIdentityAnchors = false;
           resolvedAnchorSetId = loadedSet.anchorSetId;
         }
       } else if (!hasInlineAnchors) {
         acceptedIdentityAnchors = false;
+      }
+
+      const shouldVerifyPeerProof =
+        handshakePeerVerifyMode !== "off" &&
+        (hasInlineAnchors || hasAnchorSetId) &&
+        presentedAnchors.length > 0;
+      if (shouldVerifyPeerProof) {
+        const peerProofValidation = validateHandshakePeerProof(payload, presentedAnchors);
+        if (!peerProofValidation.ok) {
+          if (handshakePeerVerifyMode === "enforce") {
+            sendError(
+              res,
+              400,
+              peerProofValidation.code,
+              "Handshake peer proof validation failed",
+              {
+                acceptedIdentityAnchors: false,
+                errors: peerProofValidation.errors
+              }
+            );
+            return;
+          }
+          acceptedIdentityAnchors = false;
+          emitPeerVerificationWarning(peerProofValidation.code, peerProofValidation.errors);
+        }
       }
 
       const ack = {
