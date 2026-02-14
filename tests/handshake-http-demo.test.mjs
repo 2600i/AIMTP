@@ -35,15 +35,33 @@ function canonicalizeIdentityAnchor(anchor) {
 }
 
 function canonicalizeHandshakePeerProofPayload(hello) {
+  const capabilitiesOffered = canonicalizeCapabilityList(hello.capabilitiesOffered);
+  const capabilitiesRequired = canonicalizeCapabilityList(hello.capabilitiesRequired);
   return Buffer.from(
     JSON.stringify({
       nonce: hello.nonce,
       timestamp: hello.timestamp,
       senderPeerId: hello.senderPeerId,
-      senderRelayUrl: hello.senderRelayUrl || ""
+      senderRelayUrl: hello.senderRelayUrl || "",
+      capabilitiesOffered,
+      capabilitiesRequired
     }),
     "utf8"
   );
+}
+
+function canonicalizeCapabilityList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      values
+        .filter((value) => typeof value === "string")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  ).sort();
 }
 
 function createSignedInlineAnchor(peerId, suffix = "1") {
@@ -192,6 +210,18 @@ function testSetIdAnchorExchangeViaDemo() {
   });
   assert.equal(result.status, 0, `expected exit 0, got ${result.status}\n${result.stderr}`);
   assert.match(result.stdout, /ANCHOR EXCHANGE OK/);
+}
+
+function testCapabilityNegotiationViaDemo() {
+  const result = runHandshakeHttpTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_FEDERATION: "on",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_HANDSHAKE_NEGOTIATION: "on"
+  });
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}\n${result.stderr}`);
+  assert.match(result.stdout, /HANDSHAKE HTTP OK/);
+  assert.match(result.stdout, /CAPABILITY NEGOTIATION OK/);
 }
 
 async function testEndpointReturns404WhenNotGated() {
@@ -462,16 +492,125 @@ async function testPeerVerifyWarnAcceptsAndEmitsWarning() {
   );
 }
 
+async function testNegotiationRequiredMissingRejects() {
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_HANDSHAKE_NEGOTIATION: "on"
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-negotiation-missing",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-negotiation-missing",
+          timestamp: new Date().toISOString(),
+          capabilitiesOffered: ["federation-handshake-http"],
+          capabilitiesRequired: ["missing-capability-a"]
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.code, "handshake_capability_required_missing");
+        assert.deepEqual(
+          canonicalizeCapabilityList(body.details && body.details.capabilitiesMissing),
+          ["missing-capability-a"]
+        );
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+}
+
+async function testNegotiationAcceptedIntersection() {
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_HANDSHAKE_NEGOTIATION: "on"
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-negotiation-accepted",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-negotiation-accepted",
+          timestamp: new Date().toISOString(),
+          capabilitiesOffered: [
+            "identity-anchor-exchange",
+            "federation-handshake-http",
+            "unsupported-demo-capability",
+            "identity-anchor-exchange"
+          ],
+          capabilitiesRequired: ["federation-handshake-http"]
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 200, `expected 200, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.type, "HandshakeAck");
+        assert.deepEqual(body.capabilitiesAccepted, [
+          "federation-handshake-http",
+          "identity-anchor-exchange"
+        ]);
+        assert.deepEqual(body.capabilitiesMissing, []);
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+}
+
 async function main() {
   testDefaultEnvironmentSkipsHandshakeHttpDemo();
   testInlineAnchorExchangeViaDemo();
   testInlineAnchorExchangeViaDemoEnforcePeerVerify();
   testSetIdAnchorExchangeViaDemo();
+  testCapabilityNegotiationViaDemo();
   await testEndpointReturns404WhenNotGated();
   await testInvalidInlineSignatureRejects();
   await testPeerVerifyEnforceRejectsMissingProof();
   await testPeerVerifyEnforceRejectsInvalidSignature();
   await testPeerVerifyWarnAcceptsAndEmitsWarning();
+  await testNegotiationRequiredMissingRejects();
+  await testNegotiationAcceptedIntersection();
   console.log("OK: handshake HTTP demo tests");
 }
 

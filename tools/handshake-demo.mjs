@@ -42,6 +42,8 @@ const ack = {
   accepted: true,
   acceptedIdentityAnchors: false,
   resolvedAnchorSetId: null,
+  capabilitiesAccepted: [],
+  capabilitiesMissing: [],
   timestamp: new Date().toISOString()
 };
 

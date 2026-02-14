@@ -28,6 +28,17 @@ const sendAnchorsMode =
   sendAnchorsModeRaw === "inline" || sendAnchorsModeRaw === "setid"
     ? sendAnchorsModeRaw
     : "off";
+const handshakeNegotiationMode =
+  String(process.env.INTENTOS_HANDSHAKE_NEGOTIATION || "off").trim().toLowerCase() === "on"
+    ? "on"
+    : "off";
+const handshakePeerVerifyMode = String(process.env.INTENTOS_HANDSHAKE_PEER_VERIFY || "off")
+  .trim()
+  .toLowerCase();
+const negotiationEnabled =
+  protocolVersion === "0.4" &&
+  federationMode === "on" &&
+  handshakeNegotiationMode === "on";
 
 const require = createRequire(import.meta.url);
 const { WebhookRelay, createWebhookRelayServer } = require("../runtime");
@@ -62,15 +73,33 @@ function canonicalizeIdentityAnchor(anchor) {
 }
 
 function canonicalizeHandshakePeerProofPayload(hello) {
+  const capabilitiesOffered = canonicalizeCapabilityList(hello.capabilitiesOffered);
+  const capabilitiesRequired = canonicalizeCapabilityList(hello.capabilitiesRequired);
   return Buffer.from(
     JSON.stringify({
       nonce: hello.nonce,
       timestamp: hello.timestamp,
       senderPeerId: hello.senderPeerId,
-      senderRelayUrl: hello.senderRelayUrl || ""
+      senderRelayUrl: hello.senderRelayUrl || "",
+      capabilitiesOffered,
+      capabilitiesRequired
     }),
     "utf8"
   );
+}
+
+function canonicalizeCapabilityList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      values
+        .filter((value) => typeof value === "string")
+        .map((value) => value.trim())
+        .filter((value) => value.length > 0)
+    )
+  ).sort();
 }
 
 function createSignedIdentityAnchor(suffix = "1") {
@@ -149,6 +178,25 @@ function withTempAnchorSet() {
   return { tempDir, setId, anchorSetPath, proofSource };
 }
 
+function getLocalHandshakeCapabilities() {
+  const capabilities = ["federation-handshake-http"];
+  if (identityMode === "on") {
+    capabilities.push("identity-anchor-exchange");
+  }
+  if (handshakePeerVerifyMode !== "off") {
+    capabilities.push("peer-proof");
+  }
+  if (negotiationEnabled) {
+    capabilities.push("capability-negotiation");
+  }
+  return canonicalizeCapabilityList(capabilities);
+}
+
+function computeIntersection(left, right) {
+  const rightSet = new Set(canonicalizeCapabilityList(right));
+  return canonicalizeCapabilityList(canonicalizeCapabilityList(left).filter((entry) => rightSet.has(entry)));
+}
+
 const previousEnv = {
   INTENTOS_TRUST_DISTRIBUTION: process.env.INTENTOS_TRUST_DISTRIBUTION,
   INTENTOS_TRUST_IDENTITY_ANCHORS_PATH: process.env.INTENTOS_TRUST_IDENTITY_ANCHORS_PATH,
@@ -171,6 +219,16 @@ try {
     nonce: `nonce-http-${Date.now()}`,
     timestamp: new Date().toISOString()
   };
+
+  const localHandshakeCapabilities = getLocalHandshakeCapabilities();
+  if (negotiationEnabled) {
+    hello.capabilitiesOffered = canonicalizeCapabilityList([
+      "identity-anchor-exchange",
+      "federation-handshake-http",
+      "capability-demo-extra"
+    ]);
+    hello.capabilitiesRequired = canonicalizeCapabilityList(["federation-handshake-http"]);
+  }
 
   if (sendAnchorsMode === "inline") {
     peerProofSource = createSignedIdentityAnchor("inline");
@@ -223,6 +281,49 @@ try {
   }
   if (ack.helloTimestamp !== hello.timestamp) {
     throw new Error("Handshake ack timestamp echo mismatch.");
+  }
+  if (negotiationEnabled) {
+    const expectedAccepted = computeIntersection(hello.capabilitiesOffered, localHandshakeCapabilities);
+    if (JSON.stringify(ack.capabilitiesAccepted || []) !== JSON.stringify(expectedAccepted)) {
+      throw new Error("Handshake ack capabilitiesAccepted mismatch.");
+    }
+    if (JSON.stringify(ack.capabilitiesMissing || []) !== JSON.stringify([])) {
+      throw new Error("Handshake ack capabilitiesMissing mismatch.");
+    }
+  }
+
+  if (negotiationEnabled) {
+    const missingHello = {
+      type: "HandshakeHello",
+      protocolVersion: "0.4",
+      helloId: `hello-http-missing-${Date.now()}`,
+      senderPeerId: "peer-alpha",
+      recipientPeerId: "peer-beta",
+      nonce: `nonce-http-missing-${Date.now()}`,
+      timestamp: new Date().toISOString(),
+      capabilitiesOffered: canonicalizeCapabilityList(["federation-handshake-http"]),
+      capabilitiesRequired: canonicalizeCapabilityList(["unsupported-capability-demo"])
+    };
+    assertValidHandshakeMessage(missingHello);
+    const missingResponse = await fetch(
+      `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(missingHello)
+      }
+    );
+    if (missingResponse.status !== 400) {
+      throw new Error(`Expected negotiation missing failure 400, got ${missingResponse.status}`);
+    }
+    const missingBody = await missingResponse.json();
+    const missingList = canonicalizeCapabilityList(
+      missingBody && missingBody.details && missingBody.details.capabilitiesMissing
+    );
+    if (JSON.stringify(missingList) !== JSON.stringify(["unsupported-capability-demo"])) {
+      throw new Error("Negotiation missing capability list mismatch.");
+    }
+    console.log("CAPABILITY NEGOTIATION OK");
   }
 
   if (sendAnchorsMode === "inline" || sendAnchorsMode === "setid") {
