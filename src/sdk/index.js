@@ -369,10 +369,28 @@ function decodeEnvelope(payload) {
   return parsed;
 }
 
-module.exports = {
+const sdkExports = {
   SPEC_VERSION,
   validateMessage,
   validateEnvelope,
   encodeEnvelope,
   decodeEnvelope
 };
+
+module.exports = sdkExports;
+
+// Backward-compatible CJS export shape: keep named exports available at top-level.
+module.exports.decodeEnvelope = decodeEnvelope;
+module.exports.encodeEnvelope = encodeEnvelope;
+module.exports.validateEnvelope = validateEnvelope;
+
+if (!module.exports.default) {
+  module.exports.default = sdkExports;
+}
+
+if (
+  process.env.NODE_ENV !== "production" &&
+  typeof module.exports.validateEnvelope !== "function"
+) {
+  throw new Error("AIMTP SDK export invariant failed: validateEnvelope must be a function");
+}

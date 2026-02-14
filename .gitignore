@@ -16,3 +16,6 @@ runtime/*.db
 
 # build output
 /dist/
+
+* 2.*
+* 3.*
