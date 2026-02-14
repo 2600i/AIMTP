@@ -38,6 +38,20 @@
           "type": "string",
           "minLength": 1
         },
+        "capabilitiesOffered": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "capabilitiesRequired": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "peerProof": {
           "type": "object",
           "additionalProperties": false,
@@ -126,6 +140,20 @@
             "null"
           ]
         },
+        "capabilitiesAccepted": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "capabilitiesMissing": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
         "timestamp": {
           "type": "string"
         }
@@ -141,6 +169,8 @@
         "accepted",
         "acceptedIdentityAnchors",
         "resolvedAnchorSetId",
+        "capabilitiesAccepted",
+        "capabilitiesMissing",
         "timestamp"
       ]
     }

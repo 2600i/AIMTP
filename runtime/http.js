@@ -41,6 +41,7 @@ let federationHandshakeValidator = null;
 let identityAnchorValidator = null;
 let identityAnchorSetValidator = null;
 const POLICY_MODE_VALUES = new Set(["off", "warn", "enforce"]);
+const HANDSHAKE_NEGOTIATION_MODE_VALUES = new Set(["off", "on"]);
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -985,6 +986,62 @@ function getHandshakePeerVerifyMode(env) {
   return normalizePolicyMode(env.INTENTOS_HANDSHAKE_PEER_VERIFY, "off");
 }
 
+function normalizeHandshakeNegotiationMode(value, fallback = "off") {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (HANDSHAKE_NEGOTIATION_MODE_VALUES.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function getHandshakeNegotiationMode(env) {
+  return normalizeHandshakeNegotiationMode(env.INTENTOS_HANDSHAKE_NEGOTIATION, "off");
+}
+
+function canonicalizeCapabilityList(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const normalized = new Set();
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const trimmed = value.trim();
+    if (trimmed) {
+      normalized.add(trimmed);
+    }
+  }
+  return Array.from(normalized).sort();
+}
+
+function getLocalHandshakeCapabilities(env) {
+  const capabilities = ["federation-handshake-http"];
+  if (isIdentityAnchorExchangeEnabledFromEnv(env)) {
+    capabilities.push("identity-anchor-exchange");
+  }
+  if (getHandshakePeerVerifyMode(env) !== "off") {
+    capabilities.push("peer-proof");
+  }
+  if (getHandshakeNegotiationMode(env) === "on") {
+    capabilities.push("capability-negotiation");
+  }
+  return canonicalizeCapabilityList(capabilities);
+}
+
+function evaluateHandshakeCapabilityNegotiation(helloCapabilitiesOffered, helloCapabilitiesRequired, localCapabilities) {
+  const offered = canonicalizeCapabilityList(helloCapabilitiesOffered);
+  const required = canonicalizeCapabilityList(helloCapabilitiesRequired);
+  const localSet = new Set(canonicalizeCapabilityList(localCapabilities));
+  const capabilitiesAccepted = canonicalizeCapabilityList(
+    offered.filter((capability) => localSet.has(capability))
+  );
+  const capabilitiesMissing = canonicalizeCapabilityList(
+    required.filter((capability) => !localSet.has(capability))
+  );
+  return { capabilitiesAccepted, capabilitiesMissing };
+}
+
 function isIdentityAnchorExchangeEnabledFromEnv(env) {
   return (
     isFederationHandshakeEnabledFromEnv(env) &&
@@ -1040,12 +1097,16 @@ function canonicalizeIdentityAnchor(anchor) {
 }
 
 function canonicalizeHandshakePeerProofPayload(hello) {
+  const capabilitiesOffered = canonicalizeCapabilityList(hello.capabilitiesOffered);
+  const capabilitiesRequired = canonicalizeCapabilityList(hello.capabilitiesRequired);
   return Buffer.from(
     JSON.stringify({
       nonce: hello.nonce,
       timestamp: hello.timestamp,
       senderPeerId: normalizeNonEmptyString(hello.senderPeerId),
-      senderRelayUrl: normalizeNonEmptyString(hello.senderRelayUrl)
+      senderRelayUrl: normalizeNonEmptyString(hello.senderRelayUrl),
+      capabilitiesOffered,
+      capabilitiesRequired
     }),
     "utf8"
   );
@@ -1547,6 +1608,7 @@ function createWebhookRelayServer(relay, options = {}) {
   const intentosCapabilityPublicKey = readOptionalPemEnv(process.env.AIMTP_CAP_PUBLIC_KEY);
   const federationHandshakeEnabled = isIdentityAnchorExchangeEnabledFromEnv(process.env);
   const handshakePeerVerifyMode = getHandshakePeerVerifyMode(process.env);
+  const handshakeNegotiationMode = getHandshakeNegotiationMode(process.env);
   let intentosUiAssets = null;
   if (intentosEnabled) {
     try {
@@ -1690,6 +1752,33 @@ function createWebhookRelayServer(relay, options = {}) {
         return;
       }
 
+      payload.capabilitiesOffered = canonicalizeCapabilityList(payload.capabilitiesOffered);
+      payload.capabilitiesRequired = canonicalizeCapabilityList(payload.capabilitiesRequired);
+
+      const negotiationEnabled =
+        handshakeNegotiationMode === "on" && isFederationHandshakeEnabledFromEnv(process.env);
+      const localHandshakeCapabilities = getLocalHandshakeCapabilities(process.env);
+      const negotiationResult = evaluateHandshakeCapabilityNegotiation(
+        payload.capabilitiesOffered,
+        payload.capabilitiesRequired,
+        localHandshakeCapabilities
+      );
+      const capabilitiesAccepted = negotiationResult.capabilitiesAccepted;
+      const capabilitiesMissing = negotiationResult.capabilitiesMissing;
+      if (negotiationEnabled && capabilitiesMissing.length > 0) {
+        sendError(
+          res,
+          400,
+          "handshake_capability_required_missing",
+          "Handshake required capabilities are not supported by the peer",
+          {
+            capabilitiesAccepted,
+            capabilitiesMissing
+          }
+        );
+        return;
+      }
+
       let acceptedIdentityAnchors = false;
       let resolvedAnchorSetId = null;
       const hasInlineAnchors = Array.isArray(payload.identityAnchorsInline);
@@ -1787,6 +1876,8 @@ function createWebhookRelayServer(relay, options = {}) {
         accepted: true,
         acceptedIdentityAnchors,
         resolvedAnchorSetId,
+        capabilitiesAccepted,
+        capabilitiesMissing,
         timestamp: new Date().toISOString()
       };
 

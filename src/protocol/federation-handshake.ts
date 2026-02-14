@@ -16,6 +16,8 @@ export interface FederationHandshakeHello {
   recipientPeerId: string;
   nonce: string;
   timestamp: string;
+  capabilitiesOffered?: ReadonlyArray<string>;
+  capabilitiesRequired?: ReadonlyArray<string>;
   peerProof?: FederationHandshakePeerProof;
   identityAnchorSetId?: string;
   identityAnchorsInline?: ReadonlyArray<{
@@ -42,6 +44,8 @@ export interface FederationHandshakeAck {
   accepted: boolean;
   acceptedIdentityAnchors: boolean;
   resolvedAnchorSetId: string | null;
+  capabilitiesAccepted: ReadonlyArray<string>;
+  capabilitiesMissing: ReadonlyArray<string>;
   timestamp: string;
 }
 

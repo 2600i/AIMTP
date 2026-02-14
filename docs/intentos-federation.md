@@ -72,6 +72,26 @@ Handshake peer possession proof is an additional opt-in policy for anchor exchan
   - `enforce`: when anchors are presented and proof is missing/invalid, handshake is rejected with HTTP `400`.
 - This policy is additive and does not change receipt/crypto runtime semantics outside the gated handshake path.
 
+## 0.4.0 handshake capability negotiation (draft)
+
+The v0.4 handshake can negotiate optional federation capabilities while remaining opt-in and inert by default.
+
+- Negotiation gate:
+  - `INTENTOS_PROTOCOL_VERSION=0.4`
+  - `INTENTOS_FEDERATION=on`
+  - `INTENTOS_HANDSHAKE_NEGOTIATION=off|on` (default `off`)
+- `HandshakeHello` optional fields:
+  - `capabilitiesOffered` (string[])
+  - `capabilitiesRequired` (string[])
+- `HandshakeAck` fields:
+  - `capabilitiesAccepted` (string[])
+  - `capabilitiesMissing` (string[])
+- Rules when negotiation is enabled:
+  - Capability arrays are canonicalized deterministically (sorted, unique).
+  - If any `capabilitiesRequired` entry is not offered by the peer, handshake fails with HTTP `400` and returns `capabilitiesMissing`.
+  - Otherwise, `capabilitiesAccepted` is the intersection of the sender-offered capabilities and peer-supported capabilities.
+- Negotiation is additive and does not alter receipt, crypto, or non-gated runtime semantics.
+
 ## 0.4.0 identity anchors (draft)
 
 IntentOS 0.4.0 also introduces an opt-in identity anchor skeleton for stable peer identity bootstrapping.
