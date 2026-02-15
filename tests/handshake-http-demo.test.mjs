@@ -362,6 +362,7 @@ async function testPeerVerifyEnforceRejectsMissingProof() {
         const body = await response.json();
         assert.equal(body.code, "handshake_peer_proof_missing");
         assert.equal(body.details.acceptedIdentityAnchors, false);
+        assert.deepEqual(body.details.errors, ["peerProof is required when anchors are presented"]);
       } finally {
         if (server.listening) {
           await closeServer(server);
@@ -416,6 +417,7 @@ async function testPeerVerifyEnforceRejectsInvalidSignature() {
         const body = await response.json();
         assert.equal(body.code, "handshake_peer_proof_invalid");
         assert.equal(body.details.acceptedIdentityAnchors, false);
+        assert.deepEqual(body.details.errors, ["peerProof signature verification failed"]);
       } finally {
         if (server.listening) {
           await closeServer(server);
@@ -471,6 +473,9 @@ async function testPeerVerifyWarnAcceptsAndEmitsWarning() {
           const body = await response.json();
           assert.equal(body.type, "HandshakeAck");
           assert.equal(body.acceptedIdentityAnchors, false);
+          assert.equal(body.resolvedAnchorSetId, null);
+          assert.deepEqual(body.capabilitiesAccepted, []);
+          assert.deepEqual(body.capabilitiesMissing, []);
         } finally {
           if (server.listening) {
             await closeServer(server);
@@ -488,6 +493,73 @@ async function testPeerVerifyWarnAcceptsAndEmitsWarning() {
         .filter((entry) => entry && entry.event === "handshake_peer_verify_warning");
       assert.equal(warningEvents.length, 1, `expected one warning, got ${warningEvents.length}`);
       assert.equal(warningEvents[0].mode, "warn");
+      assert.equal(warningEvents[0].code, "handshake_peer_proof_invalid");
+      assert.equal(warningEvents[0].hello_id, "hello-peer-proof-warn");
+      assert.equal(warningEvents[0].sender_peer_id, "peer-alpha");
+    }
+  );
+}
+
+async function testNegotiationCanonicalizesCapabilityArrays() {
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_HANDSHAKE_NEGOTIATION: "on"
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-negotiation-canonical",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-negotiation-canonical",
+          timestamp: new Date().toISOString(),
+          capabilitiesOffered: [
+            "identity-anchor-exchange",
+            "  federation-handshake-http ",
+            "capability-negotiation",
+            "identity-anchor-exchange"
+          ],
+          capabilitiesRequired: [
+            "federation-handshake-http",
+            "capability-negotiation",
+            "federation-handshake-http",
+            " "
+          ]
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 200, `expected 200, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.type, "HandshakeAck");
+        assert.deepEqual(body.capabilitiesAccepted, [
+          "capability-negotiation",
+          "federation-handshake-http",
+          "identity-anchor-exchange"
+        ]);
+        assert.deepEqual(body.capabilitiesMissing, []);
+        assert.deepEqual(body.capabilitiesAccepted, canonicalizeCapabilityList(body.capabilitiesAccepted));
+        assert.deepEqual(body.capabilitiesMissing, canonicalizeCapabilityList(body.capabilitiesMissing));
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
     }
   );
 }
@@ -515,8 +587,17 @@ async function testNegotiationRequiredMissingRejects() {
           recipientPeerId: "peer-beta",
           nonce: "nonce-negotiation-missing",
           timestamp: new Date().toISOString(),
-          capabilitiesOffered: ["federation-handshake-http"],
-          capabilitiesRequired: ["missing-capability-a"]
+          capabilitiesOffered: [
+            "identity-anchor-exchange",
+            "  federation-handshake-http ",
+            "identity-anchor-exchange"
+          ],
+          capabilitiesRequired: [
+            "missing-capability-b",
+            "federation-handshake-http",
+            "missing-capability-a",
+            "missing-capability-b"
+          ]
         };
         const response = await fetch(
           `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
@@ -530,8 +611,12 @@ async function testNegotiationRequiredMissingRejects() {
         const body = await response.json();
         assert.equal(body.code, "handshake_capability_required_missing");
         assert.deepEqual(
+          canonicalizeCapabilityList(body.details && body.details.capabilitiesAccepted),
+          ["federation-handshake-http", "identity-anchor-exchange"]
+        );
+        assert.deepEqual(
           canonicalizeCapabilityList(body.details && body.details.capabilitiesMissing),
-          ["missing-capability-a"]
+          ["missing-capability-a", "missing-capability-b"]
         );
       } finally {
         if (server.listening) {
@@ -568,8 +653,10 @@ async function testNegotiationAcceptedIntersection() {
           capabilitiesOffered: [
             "identity-anchor-exchange",
             "federation-handshake-http",
+            "capability-negotiation",
             "unsupported-demo-capability",
-            "identity-anchor-exchange"
+            "identity-anchor-exchange",
+            "  federation-handshake-http "
           ],
           capabilitiesRequired: ["federation-handshake-http"]
         };
@@ -585,10 +672,13 @@ async function testNegotiationAcceptedIntersection() {
         const body = await response.json();
         assert.equal(body.type, "HandshakeAck");
         assert.deepEqual(body.capabilitiesAccepted, [
+          "capability-negotiation",
           "federation-handshake-http",
           "identity-anchor-exchange"
         ]);
         assert.deepEqual(body.capabilitiesMissing, []);
+        assert.deepEqual(body.capabilitiesAccepted, canonicalizeCapabilityList(body.capabilitiesAccepted));
+        assert.deepEqual(body.capabilitiesMissing, canonicalizeCapabilityList(body.capabilitiesMissing));
       } finally {
         if (server.listening) {
           await closeServer(server);
@@ -609,6 +699,7 @@ async function main() {
   await testPeerVerifyEnforceRejectsMissingProof();
   await testPeerVerifyEnforceRejectsInvalidSignature();
   await testPeerVerifyWarnAcceptsAndEmitsWarning();
+  await testNegotiationCanonicalizesCapabilityArrays();
   await testNegotiationRequiredMissingRejects();
   await testNegotiationAcceptedIntersection();
   console.log("OK: handshake HTTP demo tests");
