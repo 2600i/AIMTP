@@ -265,6 +265,154 @@ async function testEndpointReturns404WhenNotGated() {
   );
 }
 
+function hasErrorWithFragment(body, fragment) {
+  const errors = body && body.details && Array.isArray(body.details.errors) ? body.details.errors : [];
+  return errors.some((entry) => typeof entry === "string" && entry.includes(fragment));
+}
+
+async function testSchemaMissingRequiredFieldRejects() {
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on"
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-schema-missing-required",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          timestamp: new Date().toISOString()
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.code, "invalid_schema");
+        assert.equal(hasErrorWithFragment(body, "required property"), true);
+        assert.equal(hasErrorWithFragment(body, "nonce"), true);
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+}
+
+async function testSchemaWrongCapabilitiesTypeRejectsWhenNegotiationOn() {
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_HANDSHAKE_NEGOTIATION: "on"
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-schema-capability-type",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-schema-capability-type",
+          timestamp: new Date().toISOString(),
+          capabilitiesOffered: { invalid: true },
+          capabilitiesRequired: "federation-handshake-http"
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.code, "invalid_schema");
+        assert.equal(hasErrorWithFragment(body, "capabilitiesOffered"), true);
+        assert.equal(hasErrorWithFragment(body, "capabilitiesRequired"), true);
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+}
+
+async function testSchemaUnknownFieldHandlingIsConsistent() {
+  const runOne = async (negotiationMode, helloId, nonce) => {
+    await withEnv(
+      {
+        INTENTOS_PROTOCOL_VERSION: "0.4",
+        INTENTOS_FEDERATION: "on",
+        INTENTOS_IDENTITY: "on",
+        INTENTOS_HANDSHAKE_NEGOTIATION: negotiationMode
+      },
+      async () => {
+        const relay = new WebhookRelay();
+        const server = createWebhookRelayServer(relay);
+        try {
+          await startServer(server);
+          const address = server.address();
+          assert(address && typeof address === "object", "expected server address");
+          const hello = {
+            type: "HandshakeHello",
+            protocolVersion: "0.4",
+            helloId,
+            senderPeerId: "peer-alpha",
+            recipientPeerId: "peer-beta",
+            nonce,
+            timestamp: new Date().toISOString(),
+            unknownField: "not-allowed"
+          };
+          const response = await fetch(
+            `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+            {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify(hello)
+            }
+          );
+          assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+          const body = await response.json();
+          assert.equal(body.code, "invalid_schema");
+          assert.equal(hasErrorWithFragment(body, "must NOT have additional properties"), true);
+        } finally {
+          if (server.listening) {
+            await closeServer(server);
+          }
+        }
+      }
+    );
+  };
+
+  await runOne("off", "hello-schema-unknown-off", "nonce-schema-unknown-off");
+  await runOne("on", "hello-schema-unknown-on", "nonce-schema-unknown-on");
+}
+
 async function testInvalidInlineSignatureRejects() {
   await withEnv(
     {
@@ -418,6 +566,56 @@ async function testPeerVerifyEnforceRejectsInvalidSignature() {
         assert.equal(body.code, "handshake_peer_proof_invalid");
         assert.equal(body.details.acceptedIdentityAnchors, false);
         assert.deepEqual(body.details.errors, ["peerProof signature verification failed"]);
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+}
+
+async function testPeerVerifyEnforceRejectsMismatchedKeyIdReference() {
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_HANDSHAKE_PEER_VERIFY: "enforce"
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+
+        const inline = createSignedInlineAnchor("peer-alpha", "mismatch-key-id");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-peer-proof-keyid-mismatch",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-peer-proof-keyid-mismatch",
+          timestamp: new Date().toISOString(),
+          identityAnchorsInline: [inline.anchor]
+        };
+        hello.peerProof = createPeerProof(hello, inline.privateKey, "anchor-id-not-presented");
+
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.code, "handshake_peer_proof_key_unknown");
+        assert.equal(body.details.acceptedIdentityAnchors, false);
       } finally {
         if (server.listening) {
           await closeServer(server);
@@ -695,9 +893,13 @@ async function main() {
   testSetIdAnchorExchangeViaDemo();
   testCapabilityNegotiationViaDemo();
   await testEndpointReturns404WhenNotGated();
+  await testSchemaMissingRequiredFieldRejects();
+  await testSchemaWrongCapabilitiesTypeRejectsWhenNegotiationOn();
+  await testSchemaUnknownFieldHandlingIsConsistent();
   await testInvalidInlineSignatureRejects();
   await testPeerVerifyEnforceRejectsMissingProof();
   await testPeerVerifyEnforceRejectsInvalidSignature();
+  await testPeerVerifyEnforceRejectsMismatchedKeyIdReference();
   await testPeerVerifyWarnAcceptsAndEmitsWarning();
   await testNegotiationCanonicalizesCapabilityArrays();
   await testNegotiationRequiredMissingRejects();

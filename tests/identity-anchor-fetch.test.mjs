@@ -64,6 +64,21 @@ function writeJson(filePath, payload) {
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
 
+function parseWarnEvents(stderr) {
+  return String(stderr || "")
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    })
+    .filter((entry) => entry && entry.event === "intentos_identity_anchor_distribution");
+}
+
 function testDefaultEnvironmentSkipsFetch() {
   const result = runFetchTool({
     INTENTOS_PROTOCOL_VERSION: "",
@@ -155,11 +170,91 @@ function testInvalidJsonRejectsInEnforceMode() {
   assert.match(result.stderr, /identity_anchor_fetch_invalid_json/);
 }
 
+function testSchemaInvalidAnchorSetPolicyModes() {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-anchor-fetch-schema-invalid-"));
+  const badPath = path.join(tempDir, "identity-anchors-schema-invalid.json");
+  const badSet = {
+    ...makeAnchorSet(),
+    unexpected: true
+  };
+  writeJson(badPath, badSet);
+
+  const enforceResult = runFetchTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_TRUST_DISTRIBUTION: "fs",
+    INTENTOS_TRUST_IDENTITY_ANCHORS_PATH: badPath,
+    INTENTOS_RECEIPT_POLICY: "enforce"
+  });
+  assert.notEqual(enforceResult.status, 0, "schema-invalid anchor set should fail in enforce mode");
+  assert.match(enforceResult.stderr, /identity_anchor_fetch_schema_invalid/);
+
+  const warnResult = runFetchTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_TRUST_DISTRIBUTION: "fs",
+    INTENTOS_TRUST_IDENTITY_ANCHORS_PATH: badPath,
+    INTENTOS_RECEIPT_POLICY: "warn"
+  });
+  assert.equal(warnResult.status, 0, `expected warn mode success, got ${warnResult.status}\n${warnResult.stderr}`);
+  assert.match(warnResult.stdout, /FETCH OK count=0/);
+  const warnEvents = parseWarnEvents(warnResult.stderr);
+  assert.equal(warnEvents.length, 1, `expected one warn event, got ${warnEvents.length}`);
+  assert.equal(warnEvents[0].mode, "warn");
+  assert.match(String(warnEvents[0].diagnostic || ""), /identity_anchor_fetch_schema_invalid/);
+
+  const offResult = runFetchTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_TRUST_DISTRIBUTION: "fs",
+    INTENTOS_TRUST_IDENTITY_ANCHORS_PATH: badPath,
+    INTENTOS_RECEIPT_POLICY: "off"
+  });
+  assert.equal(offResult.status, 0, `expected off mode success, got ${offResult.status}\n${offResult.stderr}`);
+  assert.match(offResult.stdout, /FETCH OK count=0/);
+  assert.equal(parseWarnEvents(offResult.stderr).length, 0, "off mode should be inert for warnings");
+}
+
+function testTimestampSkewInvalidPolicyBehavior() {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-anchor-fetch-timestamp-invalid-"));
+  const badPath = path.join(tempDir, "identity-anchors-timestamp-invalid.json");
+  const badSet = makeAnchorSet();
+  badSet.anchors[0].timestamp = 1739404800;
+  writeJson(badPath, badSet);
+
+  const enforceResult = runFetchTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_TRUST_DISTRIBUTION: "fs",
+    INTENTOS_TRUST_IDENTITY_ANCHORS_PATH: badPath,
+    INTENTOS_RECEIPT_POLICY: "enforce"
+  });
+  assert.notEqual(enforceResult.status, 0, "invalid timestamp should fail in enforce mode");
+  assert.match(enforceResult.stderr, /identity_anchor_fetch_schema_invalid/);
+
+  const warnResult = runFetchTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_TRUST_DISTRIBUTION: "fs",
+    INTENTOS_TRUST_IDENTITY_ANCHORS_PATH: badPath,
+    INTENTOS_RECEIPT_POLICY: "warn"
+  });
+  assert.equal(warnResult.status, 0, `expected warn mode success, got ${warnResult.status}\n${warnResult.stderr}`);
+  assert.match(warnResult.stdout, /FETCH OK count=0/);
+  const warnEvents = parseWarnEvents(warnResult.stderr);
+  assert.equal(warnEvents.length, 1, `expected one warn event, got ${warnEvents.length}`);
+  assert.equal(warnEvents[0].mode, "warn");
+  assert.match(String(warnEvents[0].diagnostic || ""), /identity_anchor_fetch_schema_invalid/);
+  assert.match(String(warnEvents[0].diagnostic || ""), /timestamp/);
+}
+
 async function main() {
   testDefaultEnvironmentSkipsFetch();
   testFilesystemDistributionFetchesAnchors();
   await testHttpDistributionFetchesAnchors();
   testInvalidJsonRejectsInEnforceMode();
+  testSchemaInvalidAnchorSetPolicyModes();
+  testTimestampSkewInvalidPolicyBehavior();
   console.log("OK: identity anchor fetch tests");
 }
 
