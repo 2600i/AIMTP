@@ -2,6 +2,8 @@
 
 import assert from "node:assert/strict";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -97,6 +99,20 @@ function createPeerProof(hello, privateKey, keyId) {
       .sign(null, canonicalizeHandshakePeerProofPayload(hello), privateKey)
       .toString("base64")
   };
+}
+
+function createRevocationSetFile(entries) {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "aimtp-handshake-http-revocation-"));
+  const filePath = path.join(tempDir, "revocations.json");
+  const payload = {
+    type: "revocations",
+    specVersion: "0.4",
+    issuer: "relay://tests",
+    issuedAt: Math.floor(Date.now() / 1000),
+    revocations: entries
+  };
+  fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return { tempDir, filePath };
 }
 
 async function captureConsoleLogs(fn) {
@@ -222,6 +238,30 @@ function testCapabilityNegotiationViaDemo() {
   assert.equal(result.status, 0, `expected exit 0, got ${result.status}\n${result.stderr}`);
   assert.match(result.stdout, /HANDSHAKE HTTP OK/);
   assert.match(result.stdout, /CAPABILITY NEGOTIATION OK/);
+}
+
+function testRevocationEnforceViaDemo() {
+  const result = runHandshakeHttpTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_FEDERATION: "on",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_REVOCATION_POLICY: "enforce",
+    INTENTOS_HANDSHAKE_REVOCATION_CASE: "peer"
+  });
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}\n${result.stderr}`);
+  assert.match(result.stdout, /REVOCATION ENFORCE REJECT OK/);
+}
+
+function testRevocationWarnViaDemo() {
+  const result = runHandshakeHttpTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_FEDERATION: "on",
+    INTENTOS_IDENTITY: "on",
+    INTENTOS_REVOCATION_POLICY: "warn",
+    INTENTOS_HANDSHAKE_REVOCATION_CASE: "peer"
+  });
+  assert.equal(result.status, 0, `expected exit 0, got ${result.status}\n${result.stderr}`);
+  assert.match(result.stdout, /REVOCATION WARN ALLOW OK/);
 }
 
 async function testEndpointReturns404WhenNotGated() {
@@ -698,6 +738,368 @@ async function testPeerVerifyWarnAcceptsAndEmitsWarning() {
   );
 }
 
+async function testRevocationsOffLeavesHandshakeBehaviorUnchanged() {
+  const revocations = createRevocationSetFile([
+    {
+      subject: "peer-alpha",
+      kind: "peer",
+      revokedAt: Math.floor(Date.now() / 1000),
+      reason: "test_revocation_off"
+    }
+  ]);
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_REVOCATIONS: "off",
+      INTENTOS_REVOCATION_POLICY: "enforce",
+      INTENTOS_TRUST_DISTRIBUTION: "fs",
+      INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocations.filePath
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-revocation-off",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-revocation-off",
+          timestamp: new Date().toISOString()
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 200, `expected 200, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.type, "HandshakeAck");
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+  fs.rmSync(revocations.tempDir, { recursive: true, force: true });
+}
+
+async function testRevocationEnforceRejectsRevokedPeer() {
+  const revocations = createRevocationSetFile([
+    {
+      subject: "peer-alpha",
+      kind: "peer",
+      revokedAt: Math.floor(Date.now() / 1000),
+      reason: "test_peer_enforce"
+    }
+  ]);
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_REVOCATIONS: "on",
+      INTENTOS_REVOCATION_POLICY: "enforce",
+      INTENTOS_TRUST_DISTRIBUTION: "fs",
+      INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocations.filePath
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-revoked-peer-enforce",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-revoked-peer-enforce",
+          timestamp: new Date().toISOString()
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.code, "handshake_peer_revoked");
+        assert.equal(body.details.subject, "peer-alpha");
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+  fs.rmSync(revocations.tempDir, { recursive: true, force: true });
+}
+
+async function testRevocationEnforceRejectsRevokedKey() {
+  const inline = createSignedInlineAnchor("peer-alpha", "revoked-key-enforce");
+  const revocations = createRevocationSetFile([
+    {
+      subject: inline.anchor.kid,
+      kind: "key",
+      revokedAt: Math.floor(Date.now() / 1000),
+      reason: "test_key_enforce"
+    }
+  ]);
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_REVOCATIONS: "on",
+      INTENTOS_REVOCATION_POLICY: "enforce",
+      INTENTOS_TRUST_DISTRIBUTION: "fs",
+      INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocations.filePath
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-revoked-key-enforce",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-revoked-key-enforce",
+          timestamp: new Date().toISOString(),
+          identityAnchorsInline: [inline.anchor]
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.code, "handshake_key_revoked");
+        assert.equal(body.details.subject, inline.anchor.kid);
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+  fs.rmSync(revocations.tempDir, { recursive: true, force: true });
+}
+
+async function testRevocationEnforceRejectsRevokedAnchor() {
+  const inline = createSignedInlineAnchor("peer-alpha", "revoked-anchor-enforce");
+  const revocations = createRevocationSetFile([
+    {
+      subject: inline.anchor.anchorId,
+      kind: "anchor",
+      revokedAt: Math.floor(Date.now() / 1000),
+      reason: "test_anchor_enforce"
+    }
+  ]);
+  await withEnv(
+    {
+      INTENTOS_PROTOCOL_VERSION: "0.4",
+      INTENTOS_FEDERATION: "on",
+      INTENTOS_IDENTITY: "on",
+      INTENTOS_REVOCATIONS: "on",
+      INTENTOS_REVOCATION_POLICY: "enforce",
+      INTENTOS_TRUST_DISTRIBUTION: "fs",
+      INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocations.filePath
+    },
+    async () => {
+      const relay = new WebhookRelay();
+      const server = createWebhookRelayServer(relay);
+      try {
+        await startServer(server);
+        const address = server.address();
+        assert(address && typeof address === "object", "expected server address");
+        const hello = {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-revoked-anchor-enforce",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-revoked-anchor-enforce",
+          timestamp: new Date().toISOString(),
+          identityAnchorsInline: [inline.anchor]
+        };
+        const response = await fetch(
+          `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(hello)
+          }
+        );
+        assert.equal(response.status, 400, `expected 400, got ${response.status}`);
+        const body = await response.json();
+        assert.equal(body.code, "anchor_revoked");
+        assert.equal(body.details.subject, inline.anchor.anchorId);
+      } finally {
+        if (server.listening) {
+          await closeServer(server);
+        }
+      }
+    }
+  );
+  fs.rmSync(revocations.tempDir, { recursive: true, force: true });
+}
+
+async function testRevocationWarnAllowsAndEmitsDeterministicWarnings() {
+  const warnCases = [
+    {
+      caseId: "peer",
+      code: "handshake_peer_revoked",
+      subject: "peer-alpha",
+      buildHello: () => ({
+        type: "HandshakeHello",
+        protocolVersion: "0.4",
+        helloId: "hello-revoked-peer-warn",
+        senderPeerId: "peer-alpha",
+        recipientPeerId: "peer-beta",
+        nonce: "nonce-revoked-peer-warn",
+        timestamp: new Date().toISOString()
+      })
+    },
+    {
+      caseId: "key",
+      code: "handshake_key_revoked",
+      buildHello: () => {
+        const inline = createSignedInlineAnchor("peer-alpha", "revoked-key-warn");
+        return {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-revoked-key-warn",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-revoked-key-warn",
+          timestamp: new Date().toISOString(),
+          identityAnchorsInline: [inline.anchor],
+          __expectedSubject: inline.anchor.kid
+        };
+      }
+    },
+    {
+      caseId: "anchor",
+      code: "anchor_revoked",
+      buildHello: () => {
+        const inline = createSignedInlineAnchor("peer-alpha", "revoked-anchor-warn");
+        return {
+          type: "HandshakeHello",
+          protocolVersion: "0.4",
+          helloId: "hello-revoked-anchor-warn",
+          senderPeerId: "peer-alpha",
+          recipientPeerId: "peer-beta",
+          nonce: "nonce-revoked-anchor-warn",
+          timestamp: new Date().toISOString(),
+          identityAnchorsInline: [inline.anchor],
+          __expectedSubject: inline.anchor.anchorId
+        };
+      }
+    }
+  ];
+
+  for (const scenario of warnCases) {
+    const hello = scenario.buildHello();
+    const expectedSubject = scenario.subject || hello.__expectedSubject;
+    const revocations = createRevocationSetFile([
+      {
+        subject: expectedSubject,
+        kind: scenario.caseId,
+        revokedAt: Math.floor(Date.now() / 1000),
+        reason: `test_${scenario.caseId}_warn`
+      }
+    ]);
+
+    await withEnv(
+      {
+        INTENTOS_PROTOCOL_VERSION: "0.4",
+        INTENTOS_FEDERATION: "on",
+        INTENTOS_IDENTITY: "on",
+        INTENTOS_REVOCATIONS: "on",
+        INTENTOS_REVOCATION_POLICY: "warn",
+        INTENTOS_TRUST_DISTRIBUTION: "fs",
+        INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocations.filePath
+      },
+      async () => {
+        const relay = new WebhookRelay();
+        const logs = await captureConsoleLogs(async () => {
+          const server = createWebhookRelayServer(relay);
+          try {
+            await startServer(server);
+            const address = server.address();
+            assert(address && typeof address === "object", "expected server address");
+            const requestHello = { ...hello };
+            delete requestHello.__expectedSubject;
+            const response = await fetch(
+              `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+              {
+                method: "POST",
+                headers: { "content-type": "application/json" },
+                body: JSON.stringify(requestHello)
+              }
+            );
+            assert.equal(response.status, 200, `expected 200, got ${response.status}`);
+            const body = await response.json();
+            assert.equal(body.type, "HandshakeAck");
+            if (scenario.caseId === "key" || scenario.caseId === "anchor") {
+              assert.equal(body.acceptedIdentityAnchors, false);
+            }
+          } finally {
+            if (server.listening) {
+              await closeServer(server);
+            }
+          }
+        });
+
+        const warningEvents = logs
+          .map((line) => {
+            try {
+              return JSON.parse(line);
+            } catch {
+              return null;
+            }
+          })
+          .filter((entry) => entry && entry.event === "handshake_revocation_warning");
+        assert.equal(
+          warningEvents.length,
+          1,
+          `expected one revocation warning for ${scenario.caseId}, got ${warningEvents.length}`
+        );
+        assert.equal(warningEvents[0].mode, "warn");
+        assert.equal(warningEvents[0].code, scenario.code);
+        assert.equal(warningEvents[0].subject, expectedSubject);
+      }
+    );
+
+    fs.rmSync(revocations.tempDir, { recursive: true, force: true });
+  }
+}
+
 async function testNegotiationCanonicalizesCapabilityArrays() {
   await withEnv(
     {
@@ -892,6 +1294,8 @@ async function main() {
   testInlineAnchorExchangeViaDemoEnforcePeerVerify();
   testSetIdAnchorExchangeViaDemo();
   testCapabilityNegotiationViaDemo();
+  testRevocationEnforceViaDemo();
+  testRevocationWarnViaDemo();
   await testEndpointReturns404WhenNotGated();
   await testSchemaMissingRequiredFieldRejects();
   await testSchemaWrongCapabilitiesTypeRejectsWhenNegotiationOn();
@@ -901,6 +1305,11 @@ async function main() {
   await testPeerVerifyEnforceRejectsInvalidSignature();
   await testPeerVerifyEnforceRejectsMismatchedKeyIdReference();
   await testPeerVerifyWarnAcceptsAndEmitsWarning();
+  await testRevocationsOffLeavesHandshakeBehaviorUnchanged();
+  await testRevocationEnforceRejectsRevokedPeer();
+  await testRevocationEnforceRejectsRevokedKey();
+  await testRevocationEnforceRejectsRevokedAnchor();
+  await testRevocationWarnAllowsAndEmitsDeterministicWarnings();
   await testNegotiationCanonicalizesCapabilityArrays();
   await testNegotiationRequiredMissingRejects();
   await testNegotiationAcceptedIntersection();
