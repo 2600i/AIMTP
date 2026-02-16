@@ -44,6 +44,15 @@ jobs:
           fi
       - name: Relay tests in docker compose
         run: docker compose exec -T relay npm test
+      - name: Revocation smoke in docker compose
+        run: docker compose exec -T relay npm run smoke:revocations
+      - name: Dump docker compose logs on failure
+        if: ${{ failure() }}
+        shell: bash
+        run: |
+          docker compose ps || true
+          docker compose logs relay || true
+          docker compose logs redis || true
 
   tag-guardrails:
     if: startsWith(github.ref, 'refs/tags/v')
