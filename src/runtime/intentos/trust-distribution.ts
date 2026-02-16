@@ -18,6 +18,7 @@ type TrustSnapshotPolicyMode = "off" | "warn" | "enforce";
 export interface TrustDistributionSnapshot {
   readonly bundlePath?: string;
   readonly revocationsPath?: string;
+  readonly revocationsProofPath?: string;
   readonly identityAnchorsPath?: string;
   readonly transparencyLogPath?: string;
   readonly transparencyHead?: TransparencyHead;
@@ -273,11 +274,15 @@ export class LocalFilesystemTrustAdapter implements TrustDistributionAdapter {
   resolveSnapshot(): TrustDistributionSnapshot {
     const bundlePath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_BUNDLE_PATH);
     const revocationsPath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH);
+    const revocationsProofPath = normalizeNonEmptyString(
+      this.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PROOF_PATH
+    );
     const identityAnchorsPath = normalizeNonEmptyString(this.env.INTENTOS_TRUST_IDENTITY_ANCHORS_PATH);
     const transparencyLogPath = normalizeNonEmptyString(this.env.INTENTOS_TRANSPARENCY_LOG_PATH);
     const snapshot: TrustDistributionSnapshot = {
       ...(bundlePath ? { bundlePath } : {}),
       ...(revocationsPath ? { revocationsPath } : {}),
+      ...(revocationsProofPath ? { revocationsProofPath } : {}),
       ...(identityAnchorsPath ? { identityAnchorsPath } : {}),
       ...(transparencyLogPath ? { transparencyLogPath } : {})
     };
@@ -364,6 +369,7 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
     );
 
     let revocationsPath: string | undefined;
+    let revocationsProofPath: string | undefined;
     let identityAnchorsPath: string | undefined;
     let transparencyHead: TransparencyHead | undefined;
     let checkpoint: TransparencyCheckpointEntry | undefined;
@@ -384,6 +390,24 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
         "intentos-trust-revocations-http-",
         "trust-revocations.json",
         revocationsPayload
+      );
+    }
+
+    const revocationsProofUrlRaw = normalizeNonEmptyString(this.env.INTENTOS_TRUST_HTTP_REVOCATIONS_PROOF_URL);
+    if (revocationsProofUrlRaw) {
+      const revocationsProofUrl = validateTrustDistributionHttpUrl(
+        revocationsProofUrlRaw,
+        "INTENTOS_TRUST_HTTP_REVOCATIONS_PROOF_URL"
+      );
+      const revocationsProofPayload = this.fetchJsonObject(
+        revocationsProofUrl,
+        timeoutMs,
+        "INTENTOS_TRUST_HTTP_REVOCATIONS_PROOF_URL"
+      );
+      revocationsProofPath = writeJsonTempFile(
+        "intentos-trust-revocations-proof-http-",
+        "trust-revocations-proof.json",
+        revocationsProofPayload
       );
     }
 
@@ -458,6 +482,7 @@ export class HttpTrustAdapter implements TrustDistributionAdapter {
     return {
       bundlePath: writeJsonTempFile("intentos-trust-bundle-http-", "trust-bundle.json", bundlePayload),
       ...(revocationsPath ? { revocationsPath } : {}),
+      ...(revocationsProofPath ? { revocationsProofPath } : {}),
       ...(identityAnchorsPath ? { identityAnchorsPath } : {}),
       ...(transparencyLogPath ? { transparencyLogPath } : {}),
       ...(transparencyHead ? { transparencyHead } : {}),

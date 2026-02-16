@@ -136,6 +136,13 @@ IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distributi
   - `INTENTOS_PROTOCOL_VERSION=0.4`
   - `INTENTOS_REVOCATIONS=on` (default `off`)
   - `INTENTOS_TRUST_DISTRIBUTION=fs|http`
+- Optional proof gate (additive, default inert):
+  - `INTENTOS_REVOCATION_PROOF=off|on` (default `off`)
+  - when `on`, missing/unknown/invalid proofs return deterministic codes:
+    - `revocation_proof_missing`
+    - `revocation_proof_key_unknown`
+    - `revocation_proof_invalid`
+  - trusted verifier keys are supplied via `INTENTOS_TRUSTED_REVOCATION_KEYS_JSON` (`{"<keyId>":"<publicKeyPem>"}`)
 - Policy:
   - `INTENTOS_REVOCATION_POLICY=off|warn|enforce` (default `off`)
   - `off`: inert/no-op.
@@ -143,7 +150,12 @@ IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distributi
   - `enforce`: validate and return errors with reject status for tool execution.
 - Distribution source envs:
   - `INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH` (fs mode)
+  - `INTENTOS_TRUST_BUNDLE_REVOCATIONS_PROOF_PATH` (fs mode, optional, used when proof gate is `on`)
   - `INTENTOS_TRUST_HTTP_REVOCATIONS_URL` (http mode)
+  - `INTENTOS_TRUST_HTTP_REVOCATIONS_PROOF_URL` (http mode, optional, used when proof gate is `on`)
+- Signing/verification tools:
+  - `node tools/revocation-sign.mjs --in <set.json> --key <private.pem> --key-id <id> --out <proof.json>`
+  - `node tools/revocation-verify.mjs --set <set.json> --proof <proof.json> --trusted-keys-json @trusted-keys.json`
 - Enforcement (gated handshake path only):
   - defaults remain inert (`INTENTOS_REVOCATIONS=off`, `INTENTOS_REVOCATION_POLICY=off`).
   - when enabled for 0.4 handshake:
@@ -166,6 +178,7 @@ IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distributi
 | `INTENTOS_HANDSHAKE_PEER_VERIFY` | `off` |
 | `INTENTOS_HANDSHAKE_NEGOTIATION` | `off` |
 | `INTENTOS_IDENTITY_MAX_TIMESTAMP_SKEW_SEC` | `300` |
+| `INTENTOS_REVOCATION_PROOF` | `off` |
 
 ## Policy Modes
 
