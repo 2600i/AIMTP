@@ -40,8 +40,10 @@ const INTENTOS_CAPABILITY_HEADER = "x-aimtp-capability";
 let federationHandshakeValidator = null;
 let identityAnchorValidator = null;
 let identityAnchorSetValidator = null;
+let revocationSetValidator = null;
 const POLICY_MODE_VALUES = new Set(["off", "warn", "enforce"]);
 const HANDSHAKE_NEGOTIATION_MODE_VALUES = new Set(["off", "on"]);
+const REVOCATION_MODE_VALUES = new Set(["off", "on"]);
 
 const trackedServers = new Set();
 let shutdownHandlersRegistered = false;
@@ -982,6 +984,14 @@ function normalizePolicyMode(value, fallback = "off") {
   return fallback;
 }
 
+function normalizeOnOffMode(value, fallback = "off") {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  if (REVOCATION_MODE_VALUES.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
 function getHandshakePeerVerifyMode(env) {
   return normalizePolicyMode(env.INTENTOS_HANDSHAKE_PEER_VERIFY, "off");
 }
@@ -996,6 +1006,22 @@ function normalizeHandshakeNegotiationMode(value, fallback = "off") {
 
 function getHandshakeNegotiationMode(env) {
   return normalizeHandshakeNegotiationMode(env.INTENTOS_HANDSHAKE_NEGOTIATION, "off");
+}
+
+function getRevocationPolicyMode(env) {
+  return normalizePolicyMode(env.INTENTOS_REVOCATION_POLICY, "off");
+}
+
+function getRevocationDistributionMode(env) {
+  return normalizeOnOffMode(env.INTENTOS_REVOCATIONS, "off");
+}
+
+function isRevocationChecksEnabledFromEnv(env) {
+  return (
+    isFederationHandshakeEnabledFromEnv(env) &&
+    getRevocationDistributionMode(env) === "on" &&
+    getRevocationPolicyMode(env) !== "off"
+  );
 }
 
 function canonicalizeCapabilityList(values) {
@@ -1074,6 +1100,17 @@ function getIdentityAnchorSetValidator() {
   return identityAnchorSetValidator;
 }
 
+function getRevocationSetValidator() {
+  if (revocationSetValidator) {
+    return revocationSetValidator;
+  }
+  const schemaPath = path.resolve(__dirname, "..", "spec", "revocation-set-v0.4.schema.json");
+  const schema = JSON.parse(fs.readFileSync(schemaPath, "utf8"));
+  const ajv = new Ajv({ allErrors: true, strict: false });
+  revocationSetValidator = ajv.compile(schema);
+  return revocationSetValidator;
+}
+
 function collectAjvErrors(validateFn) {
   return (validateFn.errors || []).map((entry) => {
     const pointer = entry.instancePath || "/";
@@ -1130,6 +1167,140 @@ function collectAnchorsByKey(anchors) {
     map.set(fingerprint, anchor);
   }
   return map;
+}
+
+function normalizeRevocationSubjects(values) {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const subjects = new Set();
+  for (const value of values) {
+    const normalized = normalizeNonEmptyString(value);
+    if (normalized) {
+      subjects.add(normalized);
+    }
+  }
+  return Array.from(subjects).sort();
+}
+
+function rankRevocationKind(kind) {
+  if (kind === "peer") {
+    return 0;
+  }
+  if (kind === "key") {
+    return 1;
+  }
+  if (kind === "anchor") {
+    return 2;
+  }
+  return 3;
+}
+
+function sortRevocationMatches(matches) {
+  return matches.slice().sort((left, right) => {
+    const leftRevokedAt = Number.isFinite(left.revokedAt) ? left.revokedAt : Number.MAX_SAFE_INTEGER;
+    const rightRevokedAt = Number.isFinite(right.revokedAt) ? right.revokedAt : Number.MAX_SAFE_INTEGER;
+    if (leftRevokedAt !== rightRevokedAt) {
+      return leftRevokedAt - rightRevokedAt;
+    }
+    const leftKind = rankRevocationKind(normalizeNonEmptyString(left.kind));
+    const rightKind = rankRevocationKind(normalizeNonEmptyString(right.kind));
+    if (leftKind !== rightKind) {
+      return leftKind - rightKind;
+    }
+    const leftSubject = normalizeNonEmptyString(left.subject);
+    const rightSubject = normalizeNonEmptyString(right.subject);
+    if (leftSubject !== rightSubject) {
+      return leftSubject.localeCompare(rightSubject);
+    }
+    const leftReason = normalizeNonEmptyString(left.reason);
+    const rightReason = normalizeNonEmptyString(right.reason);
+    if (leftReason !== rightReason) {
+      return leftReason.localeCompare(rightReason);
+    }
+    const leftEvidence = normalizeNonEmptyString(left.evidence);
+    const rightEvidence = normalizeNonEmptyString(right.evidence);
+    return leftEvidence.localeCompare(rightEvidence);
+  });
+}
+
+function selectDeterministicRevocationMatch(revocations, kind, subjects) {
+  const normalizedSubjects = normalizeRevocationSubjects(subjects);
+  if (normalizedSubjects.length === 0 || !Array.isArray(revocations) || revocations.length === 0) {
+    return null;
+  }
+  const subjectSet = new Set(normalizedSubjects);
+  const matches = [];
+  for (const entry of revocations) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const entryKind = normalizeNonEmptyString(entry.kind);
+    const entrySubject = normalizeNonEmptyString(entry.subject);
+    if (!entrySubject || entryKind !== kind || !subjectSet.has(entrySubject)) {
+      continue;
+    }
+    matches.push({
+      kind: entryKind,
+      subject: entrySubject,
+      revokedAt: Number.isFinite(entry.revokedAt) ? entry.revokedAt : Number.MAX_SAFE_INTEGER,
+      reason: normalizeNonEmptyString(entry.reason),
+      evidence: normalizeNonEmptyString(entry.evidence)
+    });
+  }
+  if (matches.length === 0) {
+    return null;
+  }
+  return sortRevocationMatches(matches)[0];
+}
+
+function extractHandshakeRevocationCandidates(hello, anchors) {
+  const peerId = normalizeNonEmptyString(hello && hello.senderPeerId);
+  const keyIds = [];
+  if (hello && isPlainObject(hello.peerProof)) {
+    keyIds.push(hello.peerProof.keyId);
+  }
+  if (Array.isArray(anchors)) {
+    for (const anchor of anchors) {
+      if (!anchor || typeof anchor !== "object") {
+        continue;
+      }
+      keyIds.push(anchor.kid);
+    }
+  }
+
+  const anchorSubjects = [];
+  if (Array.isArray(anchors)) {
+    for (const anchor of anchors) {
+      if (!anchor || typeof anchor !== "object") {
+        continue;
+      }
+      anchorSubjects.push(anchor.anchorId);
+      if (normalizeNonEmptyString(anchor.publicKeyPem)) {
+        anchorSubjects.push(computeIdentityAnchorFingerprint(anchor.publicKeyPem));
+      }
+    }
+  }
+
+  return {
+    peerId,
+    keyIds: normalizeRevocationSubjects(keyIds),
+    anchorSubjects: normalizeRevocationSubjects(anchorSubjects)
+  };
+}
+
+function evaluateHandshakeRevocationMatches(hello, anchors, revocations) {
+  const candidates = extractHandshakeRevocationCandidates(hello, anchors);
+  const peerMatch = candidates.peerId
+    ? selectDeterministicRevocationMatch(revocations, "peer", [candidates.peerId])
+    : null;
+  const keyMatch = selectDeterministicRevocationMatch(revocations, "key", candidates.keyIds);
+  const anchorMatch = selectDeterministicRevocationMatch(revocations, "anchor", candidates.anchorSubjects);
+  return {
+    peerMatch,
+    keyMatch,
+    anchorMatch
+  };
 }
 
 function validateHandshakePeerProof(hello, anchors) {
@@ -1440,6 +1611,105 @@ async function loadIdentityAnchorSetFromDistribution(env) {
   };
 }
 
+async function loadRevocationSetFromDistribution(env) {
+  const mode = normalizeTrustDistributionMode(env.INTENTOS_TRUST_DISTRIBUTION);
+  if (mode !== "fs" && mode !== "http") {
+    return {
+      ok: false,
+      code: "handshake_revocation_distribution_disabled",
+      errors: ["INTENTOS_TRUST_DISTRIBUTION must be fs or http"],
+      revocations: []
+    };
+  }
+
+  let rawPayload = "";
+  if (mode === "fs") {
+    const revocationPath = normalizeNonEmptyString(env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH);
+    if (!revocationPath) {
+      return {
+        ok: false,
+        code: "handshake_revocation_set_missing",
+        errors: ["INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH is required in fs mode"],
+        revocations: []
+      };
+    }
+    try {
+      rawPayload = fs.readFileSync(revocationPath, "utf8");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        code: "handshake_revocation_set_load_failed",
+        errors: [message],
+        revocations: []
+      };
+    }
+  } else {
+    const revocationUrl = normalizeNonEmptyString(env.INTENTOS_TRUST_HTTP_REVOCATIONS_URL);
+    if (!revocationUrl) {
+      return {
+        ok: false,
+        code: "handshake_revocation_set_missing",
+        errors: ["INTENTOS_TRUST_HTTP_REVOCATIONS_URL is required in http mode"],
+        revocations: []
+      };
+    }
+    try {
+      rawPayload = await fetchTextFromHttp(revocationUrl);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        ok: false,
+        code: "handshake_revocation_set_load_failed",
+        errors: [message],
+        revocations: []
+      };
+    }
+  }
+
+  let parsedPayload;
+  try {
+    parsedPayload = JSON.parse(rawPayload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: "handshake_revocation_set_invalid_json",
+      errors: [message],
+      revocations: []
+    };
+  }
+
+  let validateSet;
+  try {
+    validateSet = getRevocationSetValidator();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return {
+      ok: false,
+      code: "handshake_revocation_schema_unavailable",
+      errors: [message],
+      revocations: []
+    };
+  }
+
+  if (!validateSet(parsedPayload)) {
+    return {
+      ok: false,
+      code: "handshake_revocation_set_invalid",
+      errors: collectAjvErrors(validateSet),
+      revocations: []
+    };
+  }
+
+  return {
+    ok: true,
+    code: "",
+    errors: [],
+    revocations: Array.isArray(parsedPayload.revocations) ? parsedPayload.revocations : []
+  };
+}
+
 function createWebhookRelayServer(relay, options = {}) {
   const relayBasePath =
     options.path ||
@@ -1609,6 +1879,8 @@ function createWebhookRelayServer(relay, options = {}) {
   const federationHandshakeEnabled = isIdentityAnchorExchangeEnabledFromEnv(process.env);
   const handshakePeerVerifyMode = getHandshakePeerVerifyMode(process.env);
   const handshakeNegotiationMode = getHandshakeNegotiationMode(process.env);
+  const revocationChecksEnabled = isRevocationChecksEnabledFromEnv(process.env);
+  const revocationPolicyMode = getRevocationPolicyMode(process.env);
   let intentosUiAssets = null;
   if (intentosEnabled) {
     try {
@@ -1801,6 +2073,32 @@ function createWebhookRelayServer(relay, options = {}) {
           })
         );
       };
+      const revocationWarningKeys = new Set();
+      const emitRevocationWarning = (code, match, errors) => {
+        if (revocationPolicyMode !== "warn") {
+          return;
+        }
+        const subject = normalizeNonEmptyString(match && match.subject);
+        const warningKey = `${normalizeNonEmptyString(code)}:${subject}`;
+        if (revocationWarningKeys.has(warningKey)) {
+          return;
+        }
+        revocationWarningKeys.add(warningKey);
+        console.log(
+          JSON.stringify({
+            event: "handshake_revocation_warning",
+            mode: revocationPolicyMode,
+            code: normalizeNonEmptyString(code),
+            subject: subject || null,
+            kind: normalizeNonEmptyString(match && match.kind) || null,
+            revoked_at:
+              match && Number.isFinite(match.revokedAt) ? Number(match.revokedAt) : null,
+            hello_id: payload.helloId || "",
+            sender_peer_id: payload.senderPeerId || "",
+            errors: Array.isArray(errors) ? errors : []
+          })
+        );
+      };
 
       if (hasInlineAnchors) {
         const inlineValidation = validateAndVerifyInlineIdentityAnchors(payload.identityAnchorsInline);
@@ -1862,6 +2160,95 @@ function createWebhookRelayServer(relay, options = {}) {
           }
           acceptedIdentityAnchors = false;
           emitPeerVerificationWarning(peerProofValidation.code, peerProofValidation.errors);
+        }
+      }
+
+      if (revocationChecksEnabled) {
+        const loadedRevocations = await loadRevocationSetFromDistribution(process.env);
+        if (!loadedRevocations.ok) {
+          if (revocationPolicyMode === "enforce") {
+            sendError(
+              res,
+              400,
+              loadedRevocations.code,
+              "Revocation set validation failed",
+              {
+                errors: loadedRevocations.errors
+              }
+            );
+            return;
+          }
+          emitRevocationWarning(loadedRevocations.code, null, loadedRevocations.errors);
+        } else {
+          const revocationMatches = evaluateHandshakeRevocationMatches(
+            payload,
+            presentedAnchors,
+            loadedRevocations.revocations
+          );
+
+          if (revocationMatches.peerMatch) {
+            if (revocationPolicyMode === "enforce") {
+              sendError(
+                res,
+                400,
+                "handshake_peer_revoked",
+                "Handshake sender peer is revoked",
+                {
+                  subject: revocationMatches.peerMatch.subject,
+                  kind: revocationMatches.peerMatch.kind,
+                  revokedAt: revocationMatches.peerMatch.revokedAt,
+                  reason: revocationMatches.peerMatch.reason || null,
+                  evidence: revocationMatches.peerMatch.evidence || null
+                }
+              );
+              return;
+            }
+            emitRevocationWarning("handshake_peer_revoked", revocationMatches.peerMatch);
+          }
+
+          if (revocationMatches.keyMatch) {
+            if (revocationPolicyMode === "enforce") {
+              sendError(
+                res,
+                400,
+                "handshake_key_revoked",
+                "Handshake key is revoked",
+                {
+                  acceptedIdentityAnchors: false,
+                  subject: revocationMatches.keyMatch.subject,
+                  kind: revocationMatches.keyMatch.kind,
+                  revokedAt: revocationMatches.keyMatch.revokedAt,
+                  reason: revocationMatches.keyMatch.reason || null,
+                  evidence: revocationMatches.keyMatch.evidence || null
+                }
+              );
+              return;
+            }
+            acceptedIdentityAnchors = false;
+            emitRevocationWarning("handshake_key_revoked", revocationMatches.keyMatch);
+          }
+
+          if (revocationMatches.anchorMatch) {
+            if (revocationPolicyMode === "enforce") {
+              sendError(
+                res,
+                400,
+                "anchor_revoked",
+                "Identity anchor is revoked",
+                {
+                  acceptedIdentityAnchors: false,
+                  subject: revocationMatches.anchorMatch.subject,
+                  kind: revocationMatches.anchorMatch.kind,
+                  revokedAt: revocationMatches.anchorMatch.revokedAt,
+                  reason: revocationMatches.anchorMatch.reason || null,
+                  evidence: revocationMatches.anchorMatch.evidence || null
+                }
+              );
+              return;
+            }
+            acceptedIdentityAnchors = false;
+            emitRevocationWarning("anchor_revoked", revocationMatches.anchorMatch);
+          }
         }
       }
 

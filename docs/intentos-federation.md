@@ -134,8 +134,16 @@ IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distributi
 - Distribution source envs:
   - `INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH` (fs mode)
   - `INTENTOS_TRUST_HTTP_REVOCATIONS_URL` (http mode)
+- Enforcement (gated handshake path only):
+  - defaults remain inert (`INTENTOS_REVOCATIONS=off`, `INTENTOS_REVOCATION_POLICY=off`).
+  - when enabled for 0.4 handshake:
+    - `peer` subject match (`senderPeerId`) -> `handshake_peer_revoked`
+    - `key` subject match (`peerProof.keyId` or anchor `kid`) -> `handshake_key_revoked`
+    - `anchor` subject match (anchor id or anchor fingerprint) -> `anchor_revoked`
+  - `warn`: handshake continues and emits deterministic structured warning logs with `code` + `subject`.
+  - `enforce`: handshake rejects with HTTP `400` and stable code.
 - Runtime boundary:
-  - revocation skeleton validation is **not yet enforced by runtime admission or receipt semantics**.
+  - this does **not** change receipt or crypto semantics, and does not alter non-gated runtime admission defaults.
 
 ## 0.4.0 env defaults (compact)
 

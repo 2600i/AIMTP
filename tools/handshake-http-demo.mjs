@@ -35,6 +35,20 @@ const handshakeNegotiationMode =
 const handshakePeerVerifyMode = String(process.env.INTENTOS_HANDSHAKE_PEER_VERIFY || "off")
   .trim()
   .toLowerCase();
+const revocationCaseRaw = String(process.env.INTENTOS_HANDSHAKE_REVOCATION_CASE || "off")
+  .trim()
+  .toLowerCase();
+const revocationCase =
+  revocationCaseRaw === "peer" || revocationCaseRaw === "key" || revocationCaseRaw === "anchor"
+    ? revocationCaseRaw
+    : "off";
+const revocationPolicyModeRaw = String(process.env.INTENTOS_REVOCATION_POLICY || "off")
+  .trim()
+  .toLowerCase();
+const revocationPolicyMode =
+  revocationPolicyModeRaw === "warn" || revocationPolicyModeRaw === "enforce"
+    ? revocationPolicyModeRaw
+    : "off";
 const negotiationEnabled =
   protocolVersion === "0.4" &&
   federationMode === "on" &&
@@ -197,17 +211,35 @@ function computeIntersection(left, right) {
   return canonicalizeCapabilityList(canonicalizeCapabilityList(left).filter((entry) => rightSet.has(entry)));
 }
 
+function withTempRevocationSet(entries) {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-handshake-revocation-set-"));
+  const revocationPath = path.join(tempDir, "revocations.json");
+  const payload = {
+    type: "revocations",
+    specVersion: "0.4",
+    issuer: "relay://demo",
+    issuedAt: Math.floor(Date.now() / 1000),
+    revocations: entries
+  };
+  fs.writeFileSync(revocationPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  return { tempDir, revocationPath };
+}
+
 const previousEnv = {
   INTENTOS_TRUST_DISTRIBUTION: process.env.INTENTOS_TRUST_DISTRIBUTION,
   INTENTOS_TRUST_IDENTITY_ANCHORS_PATH: process.env.INTENTOS_TRUST_IDENTITY_ANCHORS_PATH,
-  INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL: process.env.INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL
+  INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL: process.env.INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL,
+  INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: process.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH,
+  INTENTOS_TRUST_HTTP_REVOCATIONS_URL: process.env.INTENTOS_TRUST_HTTP_REVOCATIONS_URL,
+  INTENTOS_REVOCATIONS: process.env.INTENTOS_REVOCATIONS
 };
 
 let tempAnchorSet = null;
+let tempRevocationSet = null;
 let peerProofSource = null;
 
 const relay = new WebhookRelay();
-const server = createWebhookRelayServer(relay);
+let server = null;
 
 try {
   const hello = {
@@ -249,8 +281,56 @@ try {
     );
   }
 
+  if ((revocationCase === "key" || revocationCase === "anchor") && !peerProofSource) {
+    peerProofSource = createSignedIdentityAnchor(`revocation-${revocationCase}`);
+    hello.identityAnchorsInline = [peerProofSource.anchor];
+    hello.peerProof = createPeerProof(
+      hello,
+      peerProofSource.privateKey,
+      peerProofSource.anchor.anchorId
+    );
+  }
+
+  if (revocationCase !== "off") {
+    const revocationEntry = (() => {
+      if (revocationCase === "peer") {
+        return {
+          subject: hello.senderPeerId,
+          kind: "peer",
+          revokedAt: Math.floor(Date.now() / 1000),
+          reason: "demo_peer_revocation"
+        };
+      }
+      if (revocationCase === "key") {
+        const keyId =
+          (hello.peerProof && hello.peerProof.keyId) ||
+          (peerProofSource && peerProofSource.anchor && peerProofSource.anchor.kid) ||
+          "";
+        return {
+          subject: keyId,
+          kind: "key",
+          revokedAt: Math.floor(Date.now() / 1000),
+          reason: "demo_key_revocation"
+        };
+      }
+      return {
+        subject:
+          (peerProofSource && peerProofSource.anchor && peerProofSource.anchor.anchorId) || "",
+        kind: "anchor",
+        revokedAt: Math.floor(Date.now() / 1000),
+        reason: "demo_anchor_revocation"
+      };
+    })();
+    tempRevocationSet = withTempRevocationSet([revocationEntry]);
+    process.env.INTENTOS_REVOCATIONS = "on";
+    process.env.INTENTOS_TRUST_DISTRIBUTION = "fs";
+    process.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH = tempRevocationSet.revocationPath;
+    delete process.env.INTENTOS_TRUST_HTTP_REVOCATIONS_URL;
+  }
+
   assertValidHandshakeMessage(hello);
 
+  server = createWebhookRelayServer(relay);
   await startServer(server);
   const address = server.address();
   assert(address && typeof address === "object", "Expected server address");
@@ -264,81 +344,113 @@ try {
     }
   );
 
+  const responseBody = await response.json();
+  let enforceRevocationRejectHandled = false;
   if (!response.ok) {
-    throw new Error(`Handshake endpoint failed: http_status_${response.status}`);
-  }
-
-  const ack = await response.json();
-  assertValidHandshakeMessage(ack);
-  if (ack.type !== "HandshakeAck") {
-    throw new Error("Handshake response type mismatch.");
-  }
-  if (ack.helloId !== hello.helloId) {
-    throw new Error("Handshake ack helloId mismatch.");
-  }
-  if (ack.nonce !== hello.nonce) {
-    throw new Error("Handshake ack nonce mismatch.");
-  }
-  if (ack.helloTimestamp !== hello.timestamp) {
-    throw new Error("Handshake ack timestamp echo mismatch.");
-  }
-  if (negotiationEnabled) {
-    const expectedAccepted = computeIntersection(hello.capabilitiesOffered, localHandshakeCapabilities);
-    if (JSON.stringify(ack.capabilitiesAccepted || []) !== JSON.stringify(expectedAccepted)) {
-      throw new Error("Handshake ack capabilitiesAccepted mismatch.");
+    const expectedRevocationCode =
+      revocationCase === "peer"
+        ? "handshake_peer_revoked"
+        : revocationCase === "key"
+          ? "handshake_key_revoked"
+          : revocationCase === "anchor"
+            ? "anchor_revoked"
+            : "";
+    if (
+      revocationCase !== "off" &&
+      revocationPolicyMode === "enforce" &&
+      response.status === 400 &&
+      responseBody &&
+      responseBody.code === expectedRevocationCode
+    ) {
+      console.log("REVOCATION ENFORCE REJECT OK");
+      enforceRevocationRejectHandled = true;
+    } else {
+      throw new Error(`Handshake endpoint failed: http_status_${response.status}`);
     }
-    if (JSON.stringify(ack.capabilitiesMissing || []) !== JSON.stringify([])) {
-      throw new Error("Handshake ack capabilitiesMissing mismatch.");
-    }
-  }
-
-  if (negotiationEnabled) {
-    const missingHello = {
-      type: "HandshakeHello",
-      protocolVersion: "0.4",
-      helloId: `hello-http-missing-${Date.now()}`,
-      senderPeerId: "peer-alpha",
-      recipientPeerId: "peer-beta",
-      nonce: `nonce-http-missing-${Date.now()}`,
-      timestamp: new Date().toISOString(),
-      capabilitiesOffered: canonicalizeCapabilityList(["federation-handshake-http"]),
-      capabilitiesRequired: canonicalizeCapabilityList(["unsupported-capability-demo"])
-    };
-    assertValidHandshakeMessage(missingHello);
-    const missingResponse = await fetch(
-      `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
-      {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(missingHello)
-      }
-    );
-    if (missingResponse.status !== 400) {
-      throw new Error(`Expected negotiation missing failure 400, got ${missingResponse.status}`);
-    }
-    const missingBody = await missingResponse.json();
-    const missingList = canonicalizeCapabilityList(
-      missingBody && missingBody.details && missingBody.details.capabilitiesMissing
-    );
-    if (JSON.stringify(missingList) !== JSON.stringify(["unsupported-capability-demo"])) {
-      throw new Error("Negotiation missing capability list mismatch.");
-    }
-    console.log("CAPABILITY NEGOTIATION OK");
-  }
-
-  if (sendAnchorsMode === "inline" || sendAnchorsMode === "setid") {
-    if (ack.acceptedIdentityAnchors !== true) {
-      throw new Error("Handshake identity anchor exchange was not accepted.");
-    }
-    if (sendAnchorsMode === "setid" && ack.resolvedAnchorSetId !== hello.identityAnchorSetId) {
-      throw new Error("Resolved anchor set id mismatch.");
-    }
-    console.log("ANCHOR EXCHANGE OK");
   } else {
-    console.log("HANDSHAKE HTTP OK");
+    const ack = responseBody;
+    assertValidHandshakeMessage(ack);
+    if (ack.type !== "HandshakeAck") {
+      throw new Error("Handshake response type mismatch.");
+    }
+    if (ack.helloId !== hello.helloId) {
+      throw new Error("Handshake ack helloId mismatch.");
+    }
+    if (ack.nonce !== hello.nonce) {
+      throw new Error("Handshake ack nonce mismatch.");
+    }
+    if (ack.helloTimestamp !== hello.timestamp) {
+      throw new Error("Handshake ack timestamp echo mismatch.");
+    }
+    if (negotiationEnabled) {
+      const expectedAccepted = computeIntersection(hello.capabilitiesOffered, localHandshakeCapabilities);
+      if (JSON.stringify(ack.capabilitiesAccepted || []) !== JSON.stringify(expectedAccepted)) {
+        throw new Error("Handshake ack capabilitiesAccepted mismatch.");
+      }
+      if (JSON.stringify(ack.capabilitiesMissing || []) !== JSON.stringify([])) {
+        throw new Error("Handshake ack capabilitiesMissing mismatch.");
+      }
+    }
+
+    if (negotiationEnabled) {
+      const missingHello = {
+        type: "HandshakeHello",
+        protocolVersion: "0.4",
+        helloId: `hello-http-missing-${Date.now()}`,
+        senderPeerId: "peer-alpha",
+        recipientPeerId: "peer-beta",
+        nonce: `nonce-http-missing-${Date.now()}`,
+        timestamp: new Date().toISOString(),
+        capabilitiesOffered: canonicalizeCapabilityList(["federation-handshake-http"]),
+        capabilitiesRequired: canonicalizeCapabilityList(["unsupported-capability-demo"])
+      };
+      assertValidHandshakeMessage(missingHello);
+      const missingResponse = await fetch(
+        `http://127.0.0.1:${address.port}/aimtp/intentos/federation/handshake`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(missingHello)
+        }
+      );
+      if (missingResponse.status !== 400) {
+        throw new Error(`Expected negotiation missing failure 400, got ${missingResponse.status}`);
+      }
+      const missingBody = await missingResponse.json();
+      const missingList = canonicalizeCapabilityList(
+        missingBody && missingBody.details && missingBody.details.capabilitiesMissing
+      );
+      if (JSON.stringify(missingList) !== JSON.stringify(["unsupported-capability-demo"])) {
+        throw new Error("Negotiation missing capability list mismatch.");
+      }
+      console.log("CAPABILITY NEGOTIATION OK");
+    }
+
+    if (sendAnchorsMode === "inline" || sendAnchorsMode === "setid") {
+      if (ack.acceptedIdentityAnchors !== true) {
+        throw new Error("Handshake identity anchor exchange was not accepted.");
+      }
+      if (sendAnchorsMode === "setid" && ack.resolvedAnchorSetId !== hello.identityAnchorSetId) {
+        throw new Error("Resolved anchor set id mismatch.");
+      }
+      console.log("ANCHOR EXCHANGE OK");
+    } else {
+      console.log("HANDSHAKE HTTP OK");
+    }
+
+    if (revocationCase !== "off" && revocationPolicyMode === "warn") {
+      if ((revocationCase === "key" || revocationCase === "anchor") && ack.acceptedIdentityAnchors !== false) {
+        throw new Error("Expected acceptedIdentityAnchors=false in warn mode for revoked key/anchor.");
+      }
+      console.log("REVOCATION WARN ALLOW OK");
+    }
+  }
+
+  if (enforceRevocationRejectHandled) {
+    // Keep control flow explicit for enforce-demo mode.
   }
 } finally {
-  if (server.listening) {
+  if (server && server.listening) {
     await closeServer(server);
   }
   if (previousEnv.INTENTOS_TRUST_DISTRIBUTION === undefined) {
@@ -356,7 +468,25 @@ try {
   } else {
     process.env.INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL = previousEnv.INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL;
   }
+  if (previousEnv.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH === undefined) {
+    delete process.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH;
+  } else {
+    process.env.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH = previousEnv.INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH;
+  }
+  if (previousEnv.INTENTOS_TRUST_HTTP_REVOCATIONS_URL === undefined) {
+    delete process.env.INTENTOS_TRUST_HTTP_REVOCATIONS_URL;
+  } else {
+    process.env.INTENTOS_TRUST_HTTP_REVOCATIONS_URL = previousEnv.INTENTOS_TRUST_HTTP_REVOCATIONS_URL;
+  }
+  if (previousEnv.INTENTOS_REVOCATIONS === undefined) {
+    delete process.env.INTENTOS_REVOCATIONS;
+  } else {
+    process.env.INTENTOS_REVOCATIONS = previousEnv.INTENTOS_REVOCATIONS;
+  }
   if (tempAnchorSet) {
     fs.rmSync(tempAnchorSet.tempDir, { recursive: true, force: true });
+  }
+  if (tempRevocationSet) {
+    fs.rmSync(tempRevocationSet.tempDir, { recursive: true, force: true });
   }
 }
