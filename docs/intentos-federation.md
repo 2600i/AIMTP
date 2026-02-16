@@ -126,6 +126,21 @@ IntentOS 0.4.0 adds an opt-in draft trust artifact for distributing identity anc
 | `INTENTOS_HANDSHAKE_NEGOTIATION` | `off` |
 | `INTENTOS_IDENTITY_MAX_TIMESTAMP_SKEW_SEC` | `300` |
 
+## Policy Modes
+
+- `off`: checks behind the mode gate remain inert; requests continue on the baseline path without policy-driven rejection, and no policy warning event is emitted.
+- `warn`: policy checks evaluate and surface deterministic warning diagnostics, but request flow continues (no hard reject from that policy gate).
+- `enforce`: policy checks evaluate and reject invalid input deterministically (for example, HTTP `400` or non-zero tool exit) when a gated violation occurs.
+
+| Check | `off` | `warn` | `enforce` |
+| --- | --- | --- | --- |
+| Handshake hello missing required field (gated `0.4` + federation on) | HTTP `400` | HTTP `400` | HTTP `400` |
+| Negotiation required capability missing (`INTENTOS_HANDSHAKE_NEGOTIATION=on`) | HTTP `400` | HTTP `400` | HTTP `400` |
+| Peer proof invalid/missing key reference (`INTENTOS_HANDSHAKE_PEER_VERIFY`) | Accept baseline | Accept + warning + deterministic flag | Reject (`400`) |
+| Identity anchor set schema invalid (`INTENTOS_IDENTITY_POLICY`) | Inert accept | Accept + warning | Reject |
+
+Note: current distribution tooling maps identity policy behavior through the existing receipt policy gate while preserving inert defaults.
+
 ## Threat Model (Brief)
 - Forged receipts: an attacker fabricates `receipt.*` objects that look valid.
 - Replay: old but valid receipts are replayed to mislead state consumers.
