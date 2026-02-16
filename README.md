@@ -12,6 +12,31 @@ and task semantics.
 - Stable release: `v0.3.0`
 - Work branch: `codex/v0.3.1-work` (controlled hardening/polish)
 
+## 0.4 Alpha Series Summary
+
+The 0.4 alpha series introduces gated federation trust primitives (handshake, identity anchors, capability negotiation, and revocations) while preserving execution and receipt invariants. All new surfaces are inert by default.
+
+### v0.4.0-alpha.0
+- 0.4 foundation scaffold
+- Handshake skeleton
+- Identity anchors skeleton
+
+### v0.4.0-alpha.1
+- HTTP handshake transport
+- Peer signature verification (gated)
+
+### v0.4.0-alpha.2
+- Capability negotiation (gated)
+
+### v0.4.0-alpha.3
+- Negative cases
+- Policy matrix coverage
+
+### v0.4.0-alpha.4
+- Revocations artifact skeleton
+- Revocation enforcement (gated)
+- No admission/receipt/crypto semantic changes
+
 ## Trust Surface (Operator Summary)
 - `v1` trust semantics are the frozen baseline.
 - `v2` is opt-in via `INTENTOS_TRUST_VERSION=v2` with policy modes `off|warn|enforce`.

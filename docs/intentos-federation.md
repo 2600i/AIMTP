@@ -14,6 +14,16 @@ IntentOS v2 trust semantics are now the reference opt-in trust layer for receipt
 - In this repository, `v0.1.39+` is the v2 reference line for operators and implementers.
 - For downstream forks without aligned version tags, use the post-v2-merge baseline commit as the reference line.
 
+## Alpha Timeline
+
+| Version | Additions |
+| --- | --- |
+| `v0.4.0-alpha.0` | Foundation scaffold; handshake skeleton; identity anchors skeleton |
+| `v0.4.0-alpha.1` | Handshake over HTTP; gated peer signature verification |
+| `v0.4.0-alpha.2` | Gated handshake capability negotiation |
+| `v0.4.0-alpha.3` | Negative-case coverage; policy matrix tests |
+| `v0.4.0-alpha.4` | Revocation artifact skeleton; gated revocation checks in 0.4 handshake path |
+
 ## 0.4.0 handshake (draft)
 
 IntentOS 0.4.0 introduces an opt-in handshake skeleton for federation bootstrapping.
