@@ -206,6 +206,13 @@ Opt-in trust distribution smoke (local FS + local HTTP only):
 npm run smoke:dist
 ```
 
+Opt-in revocation smoke (local FS + local HTTP adapters; hermetic):
+```sh
+npm run smoke:revocations
+```
+
+This smoke is opt-in and not part of the default `npm test` path.
+
 ## Troubleshooting
 
 Common issues and fixes are documented in
