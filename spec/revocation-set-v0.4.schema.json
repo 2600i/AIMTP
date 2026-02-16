@@ -1,0 +1,73 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aimtp.dev/spec/revocation-set-v0.4.schema.json",
+  "title": "IntentOS Revocation Set v0.4.0 (Draft)",
+  "description": "Opt-in draft trust artifact for distributing revocations.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "revocations"
+    },
+    "specVersion": {
+      "const": "0.4"
+    },
+    "issuer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issuedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "revocations": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/RevocationEntry"
+      }
+    }
+  },
+  "required": [
+    "type",
+    "specVersion",
+    "issuer",
+    "issuedAt",
+    "revocations"
+  ],
+  "$defs": {
+    "RevocationEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "subject": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": [
+            "peer",
+            "key",
+            "anchor"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1
+        },
+        "revokedAt": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "subject",
+        "kind",
+        "revokedAt"
+      ]
+    }
+  }
+}
