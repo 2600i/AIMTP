@@ -114,6 +114,29 @@ IntentOS 0.4.0 adds an opt-in draft trust artifact for distributing identity anc
   - `INTENTOS_TRUST_IDENTITY_ANCHORS_PATH` (fs mode)
   - `INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL` (http mode)
 
+## 0.4.0 revocations distribution (skeleton)
+
+IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distribution skeleton.
+
+- Purpose:
+  - carry revocation entries (`peer`, `key`, `anchor`) as distributed trust metadata.
+  - validate artifact shape and report policy outcomes without changing runtime admission flow.
+- Draft schema: [`spec/revocation-set-v0.4.schema.json`](../spec/revocation-set-v0.4.schema.json)
+- Gates:
+  - `INTENTOS_PROTOCOL_VERSION=0.4`
+  - `INTENTOS_REVOCATIONS=on` (default `off`)
+  - `INTENTOS_TRUST_DISTRIBUTION=fs|http`
+- Policy:
+  - `INTENTOS_REVOCATION_POLICY=off|warn|enforce` (default `off`)
+  - `off`: inert/no-op.
+  - `warn`: validate and return warnings on invalid artifacts.
+  - `enforce`: validate and return errors with reject status for tool execution.
+- Distribution source envs:
+  - `INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH` (fs mode)
+  - `INTENTOS_TRUST_HTTP_REVOCATIONS_URL` (http mode)
+- Runtime boundary:
+  - revocation skeleton validation is **not yet enforced by runtime admission or receipt semantics**.
+
 ## 0.4.0 env defaults (compact)
 
 | Env var | Default |
