@@ -13,7 +13,7 @@ const require = createRequire(import.meta.url);
 
 const {
   loadIdentityAnchorsFromDistribution
-} = require("../dist/runtime/intentos/identity-anchor-distribution.js");
+} = require("../src/runtime/intentos/identity-anchor-distribution.ts");
 const {
   loadRevocationsFromDistribution
 } = require("../dist/runtime/intentos/revocation-distribution.js");
