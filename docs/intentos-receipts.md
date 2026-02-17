@@ -4,7 +4,7 @@ IntentOS v2.1 receipts contract — frozen
 
 ## Scope
 This document defines the protocol contract for runtime-generated receipts and optional internal receipt routing. It is normative for IntentOS v2.1.
-Federation trust boundaries are specified separately in `/Users/solo446/Documents/AIMTP/docs/intentos-federation.md`.
+Federation trust boundaries are specified separately in `docs/intentos-federation.md`.
 
 ## Receipt Types
 Receipt `type` MUST be one of:
@@ -82,7 +82,7 @@ A routed receipt message MUST contain:
 
 ## Trust Semantics Versioning
 - Runtime trust policy selection is controlled by `INTENTOS_TRUST_VERSION=v1|v2` (default `v1`).
-- v2 trust semantics are defined in `/Users/solo446/Documents/AIMTP/docs/intentos-federation.md`.
+- v2 trust semantics are defined in `docs/intentos-federation.md`.
 - This receipts contract remains execution-semantics stable across trust versions.
 
 ## v2 Trust Semantics Quickstart
