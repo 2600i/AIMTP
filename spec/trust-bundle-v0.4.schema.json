@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aimtp.dev/spec/trust-bundle-v0.4.schema.json",
+  "title": "IntentOS Trust Bundle v0.4.0 (Draft)",
+  "description": "Composite trust artifact that can package anchors, revocations, and transparency metadata.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "type": {
+      "const": "trust_bundle"
+    },
+    "version": {
+      "const": "0.4"
+    },
+    "createdAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "issuer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "identityAnchors": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "set": {
+          "$ref": "https://aimtp.dev/spec/identity-anchor-set-v0.4.schema.json"
+        },
+        "proof": {
+          "type": "object"
+        }
+      },
+      "required": [
+        "set"
+      ]
+    },
+    "revocations": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "set": {
+          "$ref": "https://aimtp.dev/spec/revocation-set-v0.4.schema.json"
+        },
+        "proof": {
+          "$ref": "https://aimtp.dev/spec/revocation-proof-v0.4.schema.json"
+        }
+      },
+      "required": [
+        "set"
+      ]
+    },
+    "transparency": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "head": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "size": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "chainHash": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "size",
+            "chainHash"
+          ]
+        },
+        "latestCheckpoint": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "checkpoint"
+            },
+            "size": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "chainHash": {
+              "type": "string",
+              "minLength": 1
+            },
+            "createdAt": {
+              "type": "string",
+              "minLength": 1
+            },
+            "signer": {
+              "type": "string",
+              "minLength": 1
+            },
+            "signature": {
+              "type": "string",
+              "minLength": 1
+            }
+          },
+          "required": [
+            "kind",
+            "size",
+            "chainHash",
+            "createdAt",
+            "signer",
+            "signature"
+          ]
+        }
+      }
+    }
+  },
+  "required": [
+    "type",
+    "version",
+    "createdAt",
+    "issuer"
+  ]
+}

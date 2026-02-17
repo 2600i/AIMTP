@@ -124,6 +124,33 @@ IntentOS 0.4.0 adds an opt-in draft trust artifact for distributing identity anc
   - `INTENTOS_TRUST_IDENTITY_ANCHORS_PATH` (fs mode)
   - `INTENTOS_TRUST_HTTP_IDENTITY_ANCHORS_URL` (http mode)
 
+## 0.4.0 trust bundle (draft)
+
+IntentOS 0.4.0 adds a read-only composite trust artifact to package anchor, revocation, and transparency metadata into one payload.
+
+- Why trust bundles:
+  - operators can distribute one signed snapshot-like document instead of coordinating multiple files.
+  - each artifact block remains optional; runtime defaults stay inert.
+- Draft schema: [`spec/trust-bundle-v0.4.schema.json`](../spec/trust-bundle-v0.4.schema.json)
+- Gates:
+  - `INTENTOS_PROTOCOL_VERSION=0.4`
+  - `INTENTOS_TRUST_BUNDLE=on` (default `off`)
+  - `INTENTOS_TRUST_DISTRIBUTION=fs|http`
+- Distribution source envs:
+  - `INTENTOS_TRUST_BUNDLE_PATH` (fs mode)
+  - `INTENTOS_TRUST_HTTP_BUNDLE_URL` (http mode)
+- Policy:
+  - `INTENTOS_TRUST_BUNDLE_POLICY=off|warn|enforce` (default `off`)
+  - `off`: fully inert (no load/verify work).
+  - `warn`: validate and emit deterministic warning diagnostics on invalid bundle input.
+  - `enforce`: reject invalid bundle input with deterministic code (`trust_bundle_invalid`).
+- Proof interaction:
+  - if `INTENTOS_REVOCATION_PROOF=on` and bundle includes `revocations`, missing/unknown/invalid revocation proof yields `revocation_proof_missing|revocation_proof_key_unknown|revocation_proof_invalid`.
+  - no additional identity-anchor proof gate is introduced in 0.4.
+- Tooling:
+  - `node tools/trust-bundle-pack.mjs --out <bundle.json> --issuer <issuer> [--identity-anchors-set ... --revocations-set ...]`
+  - `node tools/trust-bundle-verify.mjs --in <bundle.json> [--trusted-keys-json @trusted-keys.json]`
+
 ## 0.4.0 revocations distribution (skeleton)
 
 IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distribution skeleton.
@@ -178,6 +205,8 @@ IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distributi
 | `INTENTOS_HANDSHAKE_PEER_VERIFY` | `off` |
 | `INTENTOS_HANDSHAKE_NEGOTIATION` | `off` |
 | `INTENTOS_IDENTITY_MAX_TIMESTAMP_SKEW_SEC` | `300` |
+| `INTENTOS_TRUST_BUNDLE` | `off` |
+| `INTENTOS_TRUST_BUNDLE_POLICY` | `off` |
 | `INTENTOS_REVOCATION_PROOF` | `off` |
 
 ## Policy Modes
