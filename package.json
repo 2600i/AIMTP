@@ -4,7 +4,7 @@
   "private": true,
   "type": "commonjs",
   "scripts": {
-    "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/cap-mint.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js && node tests/intentos-ui.test.js && node tests/trust-report.test.js && node tests/trust-diag.test.mjs && node tests/handshake-demo.test.mjs && node tests/handshake-http-demo.test.mjs && node tests/identity-anchor-demo.test.mjs && node tests/identity-anchor-fetch.test.mjs && node tests/revocation-fetch.test.mjs && node tests/revocation-proof.test.mjs && node tests/trust-bundle.test.mjs && node tests/release-guardrails.test.mjs && node tests/release-preflight-offline.test.mjs",
+    "test": "node tests/sdk.test.js && node tests/reference-router.test.js && node tests/reference-flow.test.js && node tests/signature-policy.test.js && node tests/cap-mint.test.js && node tests/mailbox-store.test.js && node tests/runtime-relay.test.js && node tests/intentos-ui.test.js && node tests/trust-report.test.js && node tests/trust-diag.test.mjs && node tests/handshake-demo.test.mjs && node tests/handshake-http-demo.test.mjs && node tests/identity-anchor-demo.test.mjs && node tests/identity-anchor-fetch.test.mjs && node tests/revocation-fetch.test.mjs && node tests/revocation-proof.test.mjs && node tests/trust-bundle.test.mjs && node tests/trust-bundle-apply.test.mjs && node tests/release-guardrails.test.mjs && node tests/release-preflight-offline.test.mjs",
     "test:receipts": "jest --config jest.config.cjs --runInBand tests/receipts.test.ts tests/receipt-signing.test.ts tests/receipt-policy.test.ts tests/trust-transparency.test.ts",
     "build": "tsc -p tsconfig.json",
     "ship": "node scripts/ship.js",
@@ -23,6 +23,7 @@
     "verify:trust-log": "node tools/trust-log-verify.mjs",
     "trust:report": "node tools/trust-report.mjs",
     "trust:diag": "node tools/trust-diag.mjs",
+    "trust:bundle:apply": "node tools/trust-bundle-apply.mjs",
     "smoke:rc": "node tools/rc-smoke.mjs",
     "smoke:dist": "node tools/rc-smoke-distribution.mjs",
     "smoke:revocations": "node tools/rc-smoke-revocations.mjs",

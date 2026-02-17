@@ -150,6 +150,14 @@ IntentOS 0.4.0 adds a read-only composite trust artifact to package anchor, revo
 - Tooling:
   - `node tools/trust-bundle-pack.mjs --out <bundle.json> --issuer <issuer> [--identity-anchors-set ... --revocations-set ...]`
   - `node tools/trust-bundle-verify.mjs --in <bundle.json> [--trusted-keys-json @trusted-keys.json]`
+  - `node tools/trust-bundle-apply.mjs --in <bundle.json> --store <snapshot-state.json|store-dir> --policy warn|enforce`
+- CI apply health output:
+  - `node tools/trust-bundle-apply.mjs --in <bundle.json> --store <path> --policy enforce --ci`
+  - emits one-line JSON: `{ health, exitCode, issues, applied }`
+  - deterministic exit codes: `0` healthy, `2` misconfigured, `3` invariant_failed, `1` unexpected
+- Runtime boundary:
+  - runtime execution remains inert by default.
+  - trust bundle application occurs only through explicit operator invocation of the apply tool (or direct helper call), not automatically.
 
 ## 0.4.0 revocations distribution (skeleton)
 
