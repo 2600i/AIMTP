@@ -24,6 +24,10 @@ IntentOS v2 trust semantics are now the reference opt-in trust layer for receipt
 | `v0.4.0-alpha.3` | Negative-case coverage; policy matrix tests |
 | `v0.4.0-alpha.4` | Revocation artifact skeleton; gated revocation checks in 0.4 handshake path |
 
+## 0.4 Gate Matrix
+
+Authoritative 0.4 gate/default audit: [`docs/0.4-gates.md`](./0.4-gates.md).
+
 ## 0.4.0 handshake (draft)
 
 IntentOS 0.4.0 introduces an opt-in handshake skeleton for federation bootstrapping.
@@ -204,18 +208,7 @@ IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distributi
 
 ## 0.4.0 env defaults (compact)
 
-| Env var | Default |
-| --- | --- |
-| `INTENTOS_PROTOCOL_VERSION` | unset (feature gates remain inert) |
-| `INTENTOS_FEDERATION` | `off` |
-| `INTENTOS_IDENTITY` | `off` |
-| `INTENTOS_IDENTITY_POLICY` | `off` |
-| `INTENTOS_HANDSHAKE_PEER_VERIFY` | `off` |
-| `INTENTOS_HANDSHAKE_NEGOTIATION` | `off` |
-| `INTENTOS_IDENTITY_MAX_TIMESTAMP_SKEW_SEC` | `300` |
-| `INTENTOS_TRUST_BUNDLE` | `off` |
-| `INTENTOS_TRUST_BUNDLE_POLICY` | `off` |
-| `INTENTOS_REVOCATION_PROOF` | `off` |
+See the full audited matrix at [`docs/0.4-gates.md`](./0.4-gates.md).
 
 ## Policy Modes
 

@@ -131,6 +131,8 @@ For full request/response schemas and error codes, see
 - [Release governance](docs/release-governance.md)
 - [Trust evolution](docs/trust-evolution.md)
 - [IntentOS federation trust boundaries](docs/intentos-federation.md)
+- [0.4 gate/default matrix](docs/0.4-gates.md)
+- [0.4 threat surface](docs/0.4-threat-surface.md)
 - Runtime + API reference: [docs/runtime.md](docs/runtime.md)
 - IntentOS v2.1 receipts contract (frozen): [docs/intentos-receipts.md](docs/intentos-receipts.md)
 - IntentOS v1 trust semantics (frozen): [docs/intentos-federation.md#intentos-v1-trust-semantics-frozen](docs/intentos-federation.md#intentos-v1-trust-semantics-frozen)

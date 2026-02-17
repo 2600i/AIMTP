@@ -99,6 +99,6 @@ Example envelope-level hook payload:
 ```
 
 ## Protocol Surfaces
-- **Spec**: `/Users/solo446/Documents/AIMTP/spec/aimtp-v0.1.md`
-- **Schemas**: `/Users/solo446/Documents/AIMTP/schemas/`
-- **Runtime**: `/Users/solo446/Documents/AIMTP/docs/runtime.md`
+- **Spec**: `spec/aimtp-v0.1.md`
+- **Schemas**: `schemas/`
+- **Runtime**: `docs/runtime.md`
