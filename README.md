@@ -211,6 +211,11 @@ Opt-in revocation smoke (local FS + local HTTP adapters; hermetic):
 npm run smoke:revocations
 ```
 
+Opt-in trust bundle smoke (local FS + local HTTP adapters; hermetic):
+```sh
+npm run smoke:bundle
+```
+
 This smoke is opt-in and not part of the default `npm test` path.
 
 ## Troubleshooting

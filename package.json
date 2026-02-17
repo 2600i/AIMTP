@@ -26,6 +26,7 @@
     "trust:bundle:apply": "node tools/trust-bundle-apply.mjs",
     "smoke:rc": "node tools/rc-smoke.mjs",
     "smoke:dist": "node tools/rc-smoke-distribution.mjs",
+    "smoke:bundle": "node tools/rc-smoke-trust-bundle.mjs",
     "smoke:revocations": "node tools/rc-smoke-revocations.mjs",
     "cli:send": "node cli/aimtp-send.mjs",
     "cap:mint": "node tools/aimtp-cap.mjs mint --help",
