@@ -128,6 +128,12 @@ function main() {
   const config = parseReleaseConfig();
   const remoteMainRef = `${config.remote}/${config.branch}`;
 
+  run("git", [
+    "fetch",
+    config.remote,
+    `+refs/tags/${tagName}:refs/tags/${tagName}`
+  ]);
+
   read("git", ["rev-parse", "--verify", `refs/tags/${tagName}`]);
   const tagObjectType = read("git", ["cat-file", "-t", `refs/tags/${tagName}`]);
   const commitSha = read("git", ["rev-list", "-n", "1", tagName]);
