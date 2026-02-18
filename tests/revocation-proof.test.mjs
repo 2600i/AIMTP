@@ -104,6 +104,48 @@ function testSignAndVerifyPass() {
   ]);
   assert.notEqual(tamperedVerifyResult.status, 0, "tampered set should fail verification");
   assert.match(String(tamperedVerifyResult.stderr || tamperedVerifyResult.stdout), /revocation_proof_invalid/);
+
+  writeJson(setPath, makeRevocationSet());
+
+  const unknownKeysPath = path.join(tempDir, "trusted-keys-unknown.json");
+  writeJson(unknownKeysPath, {
+    "relay://other#revocations": publicKeyPem
+  });
+  const unknownKeyVerifyResult = runTool(verifyToolPath, [
+    "--set",
+    setPath,
+    "--proof",
+    proofPath,
+    "--trusted-keys-json",
+    `@${unknownKeysPath}`
+  ]);
+  assert.notEqual(unknownKeyVerifyResult.status, 0, "unknown key id should fail verification");
+  assert.match(
+    String(unknownKeyVerifyResult.stderr || unknownKeyVerifyResult.stdout),
+    /revocation_proof_key_unknown/
+  );
+
+  const missingProofPath = path.join(tempDir, "revocation-proof-missing.json");
+  writeJson(missingProofPath, {
+    type: "RevocationProof",
+    version: "0.4",
+    keyId: "relay://alpha#revocations",
+    alg: "ed25519",
+    createdAt: 1760400100
+  });
+  const missingProofVerifyResult = runTool(verifyToolPath, [
+    "--set",
+    setPath,
+    "--proof",
+    missingProofPath,
+    "--trusted-keys-json",
+    `@${trustedKeysPath}`
+  ]);
+  assert.notEqual(missingProofVerifyResult.status, 0, "missing signature should fail verification");
+  assert.match(
+    String(missingProofVerifyResult.stderr || missingProofVerifyResult.stdout),
+    /revocation_proof_missing/
+  );
 }
 
 function main() {

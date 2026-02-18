@@ -206,6 +206,50 @@ IntentOS 0.4.0 adds a draft `revocations` trust artifact as an opt-in distributi
 - Runtime boundary:
   - this does **not** change receipt or crypto semantics, and does not alter non-gated runtime admission defaults.
 
+## 0.4.0 error code stability (RC)
+
+The following codes are the stable, structured failure/success signals used by 0.4 federation tools and HTTP handshake paths.
+
+### Handshake codes
+
+| Code | Meaning |
+| --- | --- |
+| `handshake_capability_required_missing` | Required capability is missing during negotiation. |
+| `handshake_identity_anchor_signature_invalid` | Inline identity anchor signature verification failed. |
+| `handshake_peer_proof_missing` | Anchors were presented but `peerProof` was omitted in enforce mode. |
+| `handshake_peer_proof_invalid` | `peerProof` payload/signature validation failed. |
+| `handshake_peer_proof_key_unknown` | `peerProof.keyId` did not match a presented anchor id/fingerprint. |
+| `handshake_peer_revoked` | Sender peer id matched an active revocation entry. |
+| `handshake_key_revoked` | Presented key id (`peerProof`/anchor `kid`) matched an active revocation entry. |
+| `anchor_revoked` | Presented anchor id/fingerprint matched an active revocation entry. |
+
+### Identity anchor fetch codes
+
+| Code | Meaning |
+| --- | --- |
+| `identity_anchor_fetch_invalid_json` | Anchor payload could not be parsed as JSON. |
+| `identity_anchor_fetch_schema_invalid` | Anchor payload failed schema validation. |
+
+### Revocation distribution and proof codes
+
+| Code | Meaning |
+| --- | --- |
+| `revocation_fetch_invalid_json` | Revocation payload could not be parsed as JSON. |
+| `revocation_fetch_schema_invalid` | Revocation payload failed schema validation. |
+| `revocation_proof_missing` | Required proof fields are missing (or proof absent when required). |
+| `revocation_proof_key_unknown` | Proof `keyId` is not present in trusted revocation keys. |
+| `revocation_proof_invalid` | Proof canonical binding or signature verification failed. |
+| `revocation_proof_verified` | Revocation proof verification succeeded. |
+
+### Trust bundle verify/apply codes
+
+| Code | Meaning |
+| --- | --- |
+| `trust_bundle_invalid` | Trust bundle JSON/schema validation failed. |
+| `input_unreadable` | Apply CLI could not read the input bundle path. |
+| `revocation_proof_missing` | Bundle proof gate is on and revocation proof is missing/invalidly incomplete. |
+| `revocation_proof_key_unknown` | Bundle proof gate is on and proof key is not trusted. |
+
 ## 0.4.0 env defaults (compact)
 
 See the full audited matrix at [`docs/0.4-gates.md`](./0.4-gates.md).

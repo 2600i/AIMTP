@@ -48,6 +48,22 @@ function makeInvalidRevocationsBundle() {
   };
 }
 
+function makeValidRevocationSet() {
+  return {
+    type: "revocations",
+    specVersion: "0.4",
+    issuer: "relay://alpha",
+    issuedAt: 1760500001,
+    revocations: [
+      {
+        subject: "peer://beta",
+        kind: "peer",
+        revokedAt: 1760500002
+      }
+    ]
+  };
+}
+
 function writeJson(filePath, payload) {
   fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
 }
@@ -114,11 +130,62 @@ function testPolicyWarnAllowsWithWarning() {
   assert.match(String(summary.warnings?.[0] || ""), /trust_bundle_invalid/);
 }
 
+function testRevocationProofMissingRejectedWhenProofGateEnabled() {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-trust-bundle-proof-missing-"));
+  const bundlePath = path.join(tempDir, "bundle-proof-missing.json");
+  writeJson(bundlePath, {
+    ...makeMinimalBundle(),
+    revocations: {
+      set: makeValidRevocationSet()
+    }
+  });
+
+  const result = runVerify(bundlePath, {
+    INTENTOS_TRUST_BUNDLE_POLICY: "enforce",
+    INTENTOS_REVOCATION_PROOF: "on"
+  });
+  assert.notEqual(result.status, 0, "enforce mode should reject missing revocation proof");
+  const summary = parseSummary(result.stdout);
+  assert.equal(summary.accepted, false);
+  assert.match(String(summary.errors?.[0] || ""), /revocation_proof_missing/);
+}
+
+function testRevocationProofUnknownKeyRejectedWhenProofGateEnabled() {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-trust-bundle-proof-unknown-key-"));
+  const bundlePath = path.join(tempDir, "bundle-proof-unknown-key.json");
+  writeJson(bundlePath, {
+    ...makeMinimalBundle(),
+    revocations: {
+      set: makeValidRevocationSet(),
+      proof: {
+        type: "RevocationProof",
+        version: "0.4",
+        keyId: "relay://unknown#revocations",
+        alg: "ed25519",
+        createdAt: 1760500003,
+        signature: "aW52YWxpZA=="
+      }
+    }
+  });
+
+  const result = runVerify(bundlePath, {
+    INTENTOS_TRUST_BUNDLE_POLICY: "enforce",
+    INTENTOS_REVOCATION_PROOF: "on",
+    INTENTOS_TRUSTED_REVOCATION_KEYS_JSON: "{}"
+  });
+  assert.notEqual(result.status, 0, "enforce mode should reject unknown proof key");
+  const summary = parseSummary(result.stdout);
+  assert.equal(summary.accepted, false);
+  assert.match(String(summary.errors?.[0] || ""), /revocation_proof_key_unknown/);
+}
+
 function main() {
   testSchemaValidationForMinimalBundle();
   testSchemaValidationRejectsWrongRevocationType();
   testPolicyEnforceRejectsInvalidBundle();
   testPolicyWarnAllowsWithWarning();
+  testRevocationProofMissingRejectedWhenProofGateEnabled();
+  testRevocationProofUnknownKeyRejectedWhenProofGateEnabled();
   console.log("OK: trust bundle tests");
 }
 
