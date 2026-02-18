@@ -21,6 +21,24 @@ const {
   loadTrustBundleFromDistribution
 } = require("../dist/runtime/intentos/trust-bundle-distribution.js");
 
+const AUDITED_GATE_DEFAULTS = {
+  INTENTOS_PROTOCOL_VERSION: "unset",
+  INTENTOS_FEDERATION: "off",
+  INTENTOS_IDENTITY: "off",
+  INTENTOS_HANDSHAKE_PEER_VERIFY: "off",
+  INTENTOS_HANDSHAKE_NEGOTIATION: "off",
+  INTENTOS_HANDSHAKE_SEND_ANCHORS: "off",
+  INTENTOS_HANDSHAKE_REVOCATION_CASE: "off",
+  INTENTOS_REVOCATIONS: "off",
+  INTENTOS_REVOCATION_POLICY: "off",
+  INTENTOS_REVOCATION_PROOF: "off",
+  INTENTOS_TRUST_DISTRIBUTION: "off",
+  INTENTOS_TRUST_BUNDLE: "off",
+  INTENTOS_TRUST_BUNDLE_POLICY: "off",
+  INTENTOS_IDENTITY_POLICY: "off",
+  INTENTOS_IDENTITY_MAX_TIMESTAMP_SKEW_SEC: "300"
+};
+
 const GATE_ENV_KEYS = [
   "INTENTOS_PROTOCOL_VERSION",
   "INTENTOS_FEDERATION",
@@ -45,6 +63,7 @@ const GATE_ENV_KEYS = [
   "INTENTOS_TRUST_HTTP_REVOCATIONS_PROOF_URL",
   "INTENTOS_TRUSTED_REVOCATION_KEYS_JSON",
   "INTENTOS_RECEIPT_POLICY",
+  "INTENTOS_TRUST_SNAPSHOT_STATE_PATH",
   "INTENTOS_IDENTITY_POLICY",
   "INTENTOS_IDENTITY_MAX_TIMESTAMP_SKEW_SEC"
 ];
@@ -77,6 +96,66 @@ function parseLastJsonLine(stdoutText) {
     .pop();
   assert.ok(line, "expected JSON output line");
   return JSON.parse(line);
+}
+
+function normalizeDocumentedDefault(value) {
+  return String(value)
+    .replace(/`/g, "")
+    .replace(/\s+\(documented\)\s*$/i, "")
+    .trim();
+}
+
+function docsGateDefaultRows() {
+  const gateDocPath = path.resolve(repoRoot, "docs", "0.4-gates.md");
+  const rows = [];
+  for (const line of fs.readFileSync(gateDocPath, "utf8").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("| `INTENTOS_")) {
+      continue;
+    }
+    const columns = trimmed
+      .split("|")
+      .slice(1, -1)
+      .map((entry) => entry.trim());
+    if (columns.length < 3) {
+      continue;
+    }
+    rows.push({
+      envVar: normalizeDocumentedDefault(columns[0]),
+      defaultValue: normalizeDocumentedDefault(columns[2])
+    });
+  }
+  return rows;
+}
+
+function buildExplicitDefaultEnv() {
+  const env = {};
+  for (const [envVar, defaultValue] of Object.entries(AUDITED_GATE_DEFAULTS)) {
+    if (defaultValue === "unset") {
+      continue;
+    }
+    env[envVar] = defaultValue;
+  }
+  return env;
+}
+
+function assertDistributionLoadersInert(env, context) {
+  const anchors = loadIdentityAnchorsFromDistribution(env);
+  assert.equal(anchors.skipped, true, `${context}: anchors should be skipped`);
+  assert.equal(anchors.mode, "off", `${context}: anchor mode should be off`);
+  assert.equal(anchors.anchorCount, 0, `${context}: anchor count should be zero`);
+
+  const revocations = loadRevocationsFromDistribution(env);
+  assert.equal(revocations.skipped, true, `${context}: revocations should be skipped`);
+  assert.equal(revocations.mode, "off", `${context}: revocation mode should be off`);
+  assert.equal(revocations.accepted, true, `${context}: revocations should be accepted in inert mode`);
+  assert.equal(revocations.revocationCount, 0, `${context}: revocation count should be zero`);
+
+  const bundle = loadTrustBundleFromDistribution(env);
+  assert.equal(bundle.skipped, true, `${context}: trust bundle should be skipped`);
+  assert.equal(bundle.mode, "off", `${context}: trust bundle mode should be off`);
+  assert.equal(bundle.accepted, true, `${context}: trust bundle should be accepted in inert mode`);
+  assert.equal(bundle.bundle, null, `${context}: no trust bundle should be loaded`);
 }
 
 function testHandshakeSchemaOptionalFieldsRemainOptional() {
@@ -119,24 +198,33 @@ function testHandshakeSchemaOptionalFieldsRemainOptional() {
 }
 
 function testDistributionLoadersDisabledByDefault() {
-  const env = {};
+  assertDistributionLoadersInert({}, "baseline");
+  assertDistributionLoadersInert(buildExplicitDefaultEnv(), "explicit-defaults");
+}
 
-  const anchors = loadIdentityAnchorsFromDistribution(env);
-  assert.equal(anchors.skipped, true);
-  assert.equal(anchors.mode, "off");
-  assert.equal(anchors.anchorCount, 0);
+function testEachGateDefaultValueIsInert() {
+  for (const [envVar, defaultValue] of Object.entries(AUDITED_GATE_DEFAULTS)) {
+    const env = {};
+    if (defaultValue !== "unset") {
+      env[envVar] = defaultValue;
+    }
+    assertDistributionLoadersInert(env, `${envVar}=${defaultValue}`);
+  }
+}
 
-  const revocations = loadRevocationsFromDistribution(env);
-  assert.equal(revocations.skipped, true);
-  assert.equal(revocations.mode, "off");
-  assert.equal(revocations.accepted, true);
-  assert.equal(revocations.revocationCount, 0);
+function testGateDefaultsDocumentedExactlyOnce() {
+  const rows = docsGateDefaultRows();
+  const perEnvCount = new Map();
+  for (const row of rows) {
+    perEnvCount.set(row.envVar, (perEnvCount.get(row.envVar) || 0) + 1);
+  }
 
-  const bundle = loadTrustBundleFromDistribution(env);
-  assert.equal(bundle.skipped, true);
-  assert.equal(bundle.mode, "off");
-  assert.equal(bundle.accepted, true);
-  assert.equal(bundle.bundle, null);
+  for (const [envVar, expectedDefault] of Object.entries(AUDITED_GATE_DEFAULTS)) {
+    assert.equal(perEnvCount.get(envVar), 1, `expected one table row for ${envVar}`);
+    const row = rows.find((entry) => entry.envVar === envVar);
+    assert.ok(row, `missing docs row for ${envVar}`);
+    assert.equal(row.defaultValue, expectedDefault, `unexpected documented default for ${envVar}`);
+  }
 }
 
 function testDefaultTrustDiagReportsNaOrDisabled() {
@@ -151,16 +239,16 @@ function testDefaultTrustDiagReportsNaOrDisabled() {
   assert.equal(report.contentIds.revocationsId, "n/a");
 }
 
-function testDefaultToolPathsAreInertAndStateSafe() {
-  const handshake = runTool("tools/handshake-demo.mjs");
+function testDefaultToolPathsAreInertAndStateSafe(envOverrides = {}) {
+  const handshake = runTool("tools/handshake-demo.mjs", [], envOverrides);
   assert.equal(handshake.status, 0, `expected handshake-demo exit 0, got ${handshake.status}\n${handshake.stderr}`);
   assert.match(handshake.stdout, /HANDSHAKE SKIPPED/);
 
-  const anchor = runTool("tools/identity-anchor-demo.mjs");
+  const anchor = runTool("tools/identity-anchor-demo.mjs", [], envOverrides);
   assert.equal(anchor.status, 0, `expected identity-anchor-demo exit 0, got ${anchor.status}\n${anchor.stderr}`);
   assert.match(anchor.stdout, /ANCHOR SKIPPED/);
 
-  const revocationFetch = runTool("tools/revocation-fetch.mjs");
+  const revocationFetch = runTool("tools/revocation-fetch.mjs", [], envOverrides);
   assert.equal(revocationFetch.status, 0, `expected revocation-fetch exit 0, got ${revocationFetch.status}\n${revocationFetch.stderr}`);
   const revocationSummary = parseLastJsonLine(revocationFetch.stdout);
   assert.equal(revocationSummary.skipped, true);
@@ -175,7 +263,7 @@ function testDefaultToolPathsAreInertAndStateSafe() {
     "utf8"
   );
 
-  const verifyBundle = runTool("tools/trust-bundle-verify.mjs", ["--in", bundlePath]);
+  const verifyBundle = runTool("tools/trust-bundle-verify.mjs", ["--in", bundlePath], envOverrides);
   assert.equal(verifyBundle.status, 0, `expected trust-bundle-verify exit 0, got ${verifyBundle.status}\n${verifyBundle.stderr}`);
   const verifySummary = parseLastJsonLine(verifyBundle.stdout);
   assert.equal(verifySummary.skipped, true);
@@ -189,7 +277,7 @@ function testDefaultToolPathsAreInertAndStateSafe() {
     "--policy",
     "off",
     "--ci"
-  ]);
+  ], envOverrides);
   assert.equal(applyBundle.status, 0, `expected trust-bundle-apply exit 0, got ${applyBundle.status}\n${applyBundle.stderr}`);
   const applySummary = parseLastJsonLine(applyBundle.stdout);
   assert.equal(applySummary.applied, false);
@@ -201,8 +289,11 @@ function testDefaultToolPathsAreInertAndStateSafe() {
 function main() {
   testHandshakeSchemaOptionalFieldsRemainOptional();
   testDistributionLoadersDisabledByDefault();
+  testEachGateDefaultValueIsInert();
+  testGateDefaultsDocumentedExactlyOnce();
   testDefaultTrustDiagReportsNaOrDisabled();
   testDefaultToolPathsAreInertAndStateSafe();
+  testDefaultToolPathsAreInertAndStateSafe(buildExplicitDefaultEnv());
   console.log("OK: 0.4 defaults inert tests");
 }
 
