@@ -184,6 +184,38 @@ function testInvalidSchemaWarnAndEnforceBehavior() {
   assert.equal(parseWarnEvents(offResult.stderr).length, 0);
 }
 
+function testInvalidJsonWarnAndEnforceBehavior() {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-revocation-fetch-invalid-json-"));
+  const badPath = path.join(tempDir, "revocations-invalid-json.json");
+  fs.writeFileSync(badPath, "{ invalid-json\n", "utf8");
+
+  const warnResult = runFetchTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_REVOCATIONS: "on",
+    INTENTOS_TRUST_DISTRIBUTION: "fs",
+    INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: badPath,
+    INTENTOS_REVOCATION_POLICY: "warn"
+  });
+  assert.equal(warnResult.status, 0, `expected warn mode success, got ${warnResult.status}\n${warnResult.stderr}`);
+  const warnSummary = parseSummary(warnResult.stdout);
+  assert.equal(warnSummary.accepted, false);
+  assert.match(String(warnSummary.warnings?.[0] || ""), /revocation_fetch_invalid_json/);
+  const warnEvents = parseWarnEvents(warnResult.stderr);
+  assert.equal(warnEvents.length, 1, `expected one warning event, got ${warnEvents.length}`);
+
+  const enforceResult = runFetchTool({
+    INTENTOS_PROTOCOL_VERSION: "0.4",
+    INTENTOS_REVOCATIONS: "on",
+    INTENTOS_TRUST_DISTRIBUTION: "fs",
+    INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: badPath,
+    INTENTOS_REVOCATION_POLICY: "enforce"
+  });
+  assert.notEqual(enforceResult.status, 0, "invalid JSON should fail in enforce mode");
+  const enforceSummary = parseSummary(enforceResult.stdout);
+  assert.equal(enforceSummary.accepted, false);
+  assert.match(String(enforceSummary.errors?.[0] || ""), /revocation_fetch_invalid_json/);
+}
+
 function startServer(payload) {
   return new Promise((resolve, reject) => {
     const server = http.createServer((req, res) => {
@@ -235,6 +267,7 @@ async function main() {
   testDefaultEnvironmentSkipsFetch();
   testValidSchemaSuccessAcrossPolicyModes();
   testInvalidSchemaWarnAndEnforceBehavior();
+  testInvalidJsonWarnAndEnforceBehavior();
   await testHttpDistributionFetchesRevocations();
   console.log("OK: revocation fetch tests");
 }

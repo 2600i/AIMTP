@@ -141,11 +141,58 @@ function testCiOutputShapeStable() {
   }
 }
 
+function testApplyRejectsMissingRevocationProofWhenGateEnabled() {
+  const tempDir = mkdtempSync(path.join(os.tmpdir(), "aimtp-trust-bundle-apply-proof-missing-"));
+  const bundlePath = path.join(tempDir, "bundle-proof-missing.json");
+  writeJson(bundlePath, {
+    ...makeMinimalBundle(),
+    revocations: {
+      set: {
+        type: "revocations",
+        specVersion: "0.4",
+        issuer: "relay://alpha",
+        issuedAt: 1760600001,
+        revocations: [
+          {
+            subject: "peer://beta",
+            kind: "peer",
+            revokedAt: 1760600002
+          }
+        ]
+      }
+    }
+  });
+
+  const result = runTool(
+    [
+      "--in",
+      bundlePath,
+      "--store",
+      path.join(tempDir, "store"),
+      "--policy",
+      "enforce",
+      "--ci"
+    ],
+    {
+      INTENTOS_REVOCATION_PROOF: "on",
+      INTENTOS_TRUSTED_REVOCATION_KEYS_JSON: "{}"
+    }
+  );
+  assert.equal(result.status, 3, `expected exit 3, got ${result.status}\n${result.stderr}`);
+
+  const report = parseJsonLine(result.stdout);
+  assert.equal(report.health, "invariant_failed");
+  assert.equal(report.exitCode, 3);
+  assert.equal(report.applied, false);
+  assert.ok(report.issues.some((issue) => issue.code === "revocation_proof_missing"));
+}
+
 function main() {
   testApplyMinimalBundleWritesFiles();
   testInvalidBundleInEnforceFailsInvariant();
   testMissingInputFileIsMisconfigured();
   testCiOutputShapeStable();
+  testApplyRejectsMissingRevocationProofWhenGateEnabled();
   console.log("OK: trust bundle apply tests");
 }
 
