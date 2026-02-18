@@ -64,5 +64,8 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: Fetch tags for guardrails
+        run: git fetch origin --force --tags
+
       - name: Verify release tag guardrails
         run: node scripts/release-tag-guardrails.mjs --tag "${GITHUB_REF_NAME}"
