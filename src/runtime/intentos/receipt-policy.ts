@@ -7,7 +7,17 @@ import {
   parseTrustedReceiptKeysJson,
   verifyReceipt
 } from "../../protocol/intentos-receipts";
-import { readFileSync } from "node:fs";
+import {
+  closeSync,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync
+} from "node:fs";
+import path from "node:path";
 import { createHash, createPublicKey, verify } from "node:crypto";
 import {
   appendTransparencyEntry,
@@ -37,6 +47,7 @@ import {
   computeBundleId,
   computeRevocationsId
 } from "./trust-ids";
+import { applyTrustBundleDeltaToPath } from "./trust-bundle-delta";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -156,6 +167,14 @@ const TRUST_BUNDLE_INVALID_CODE = "TRUST_BUNDLE_INVALID";
 const TRUST_ANCHOR_REVOKED_CODE = "TRUST_ANCHOR_REVOKED";
 const TRUST_SIGNATURE_INVALID_CODE = "TRUST_SIGNATURE_INVALID";
 const TRANSPARENCY_LOG_CHAIN_BROKEN_REASON = "transparency log chain broken";
+const TRUST_BUNDLE_DELTA_KEYS: ReadonlyArray<string> = Object.freeze([
+  "addKeys",
+  "revokeKeys",
+  "addAnchors",
+  "revokeAnchors",
+  "removeKeys",
+  "removeAnchors"
+]);
 const EMPTY_TRUST_BUNDLE_REVOCATIONS: TrustBundleRevocations = Object.freeze({
   signers: Object.freeze(new Set<string>()),
   issuerKeys: Object.freeze({})
@@ -436,6 +455,105 @@ function loadTrustedReceiptKeysFromBundlePath(bundlePath: string): ParsedTrustBu
     throw new Error(`invalid_trust_bundle_path:${message}`);
   }
   return parseTrustedReceiptKeysBundle(rawBundle);
+}
+
+function isTrustBundleDeltaPayload(value: unknown): value is Record<string, unknown> {
+  if (!isPlainObject(value)) {
+    return false;
+  }
+  return TRUST_BUNDLE_DELTA_KEYS.some((key) => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+function atomicWriteJson(filePath: string, payload: unknown): void {
+  const parentDir = path.dirname(filePath);
+  mkdirSync(parentDir, { recursive: true });
+
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}`;
+  let tempFd = -1;
+  let dirFd = -1;
+  try {
+    writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, {
+      encoding: "utf8",
+      mode: 0o600
+    });
+
+    tempFd = openSync(tempPath, "r");
+    fsyncSync(tempFd);
+    closeSync(tempFd);
+    tempFd = -1;
+
+    renameSync(tempPath, filePath);
+    try {
+      dirFd = openSync(parentDir, "r");
+      fsyncSync(dirFd);
+      closeSync(dirFd);
+      dirFd = -1;
+    } catch {
+      // Best-effort directory fsync.
+    }
+  } catch (error) {
+    if (tempFd !== -1) {
+      try {
+        closeSync(tempFd);
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+    if (dirFd !== -1) {
+      try {
+        closeSync(dirFd);
+      } catch {
+        // Best-effort cleanup.
+      }
+    }
+    try {
+      rmSync(tempPath, { force: true });
+    } catch {
+      // Best-effort cleanup.
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`trust_bundle_state_write_failed:${message}`);
+  }
+}
+
+function resolveEffectiveTrustBundlePath(
+  sourcePath: string,
+  statePath: string,
+  env: NodeJS.ProcessEnv,
+  nowMs: number
+): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(sourcePath, "utf8"));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`invalid_trust_bundle_path:${message}`);
+  }
+
+  if (!isPlainObject(parsed)) {
+    throw new Error("trust_bundle_must_be_object");
+  }
+
+  if (isTrustBundleDeltaPayload(parsed)) {
+    if (!statePath) {
+      throw new Error("trust_bundle_delta_requires_state_path");
+    }
+    applyTrustBundleDeltaToPath(statePath, parsed, { env, nowMs });
+    return statePath;
+  }
+
+  if (!statePath) {
+    return sourcePath;
+  }
+
+  const resolvedSourcePath = path.resolve(sourcePath);
+  const resolvedStatePath = path.resolve(statePath);
+  if (resolvedSourcePath === resolvedStatePath) {
+    return sourcePath;
+  }
+
+  atomicWriteJson(resolvedStatePath, parsed);
+  return resolvedStatePath;
 }
 
 function parseTrustBundleSignerAllowlist(raw: unknown): ReadonlySet<string> | null {
@@ -788,8 +906,11 @@ function readTrustedKeys(
     }
   }
 
-  const bundlePath = normalizeNonEmptyString(
-    distributionSnapshot?.bundlePath ?? options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
+  const configuredBundleStatePath = normalizeNonEmptyString(
+    options.trustBundlePath ?? options.env?.INTENTOS_TRUST_BUNDLE_PATH
+  );
+  let bundlePath = normalizeNonEmptyString(
+    distributionSnapshot?.bundlePath ?? configuredBundleStatePath
   );
   const transparencyLog = readTransparencyLogPolicy(
     bundlePath,
@@ -878,6 +999,27 @@ function readTrustedKeys(
         bundleHash: null,
         transparencyLog,
         configError: `trust snapshot policy rejected: ${evaluation.reason ?? "snapshot_rejected"}`
+      };
+    }
+  }
+
+  if (distributionSnapshot?.bundlePath) {
+    try {
+      bundlePath = resolveEffectiveTrustBundlePath(
+        distributionSnapshot.bundlePath,
+        configuredBundleStatePath,
+        options.env ?? {},
+        Date.now()
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return {
+        trustedKeys: EMPTY_TRUSTED_KEYS,
+        bundleIssuerKeys: null,
+        bundleRevocations: null,
+        bundleHash: null,
+        transparencyLog,
+        configError: strictTrustV2 ? TRUST_BUNDLE_INVALID_CODE : message
       };
     }
   }
