@@ -69,13 +69,29 @@ IntentOS v0.3 introduces versioned trust semantics for receipt verification and 
 - Issuer identity MUST resolve to a configured trusted key.
 - Verification MUST use deterministic v2 canonicalization rules.
 
-### Policy Modes
+### Trust v2 Strict Semantics
 
-- `INTENTOS_RECEIPT_POLICY=off|warn|enforce` behavior remains unchanged structurally:
-  - `off` continues processing.
-  - `warn` continues and emits warnings on trust failures.
-  - `enforce` rejects untrusted receipt acceptance.
+- v2 is active when `INTENTOS_TRUST_VERSION=v2`.
+- When v2 is active, trust evaluation is fail-closed for terminal receipts (`receipt.denied|receipt.completed|receipt.failed`):
+  - there is no permissive acceptance path under `off` or `warn`.
+  - `warn` and `enforce` MAY differ in warning/diagnostic messaging, but MUST NOT differ in acceptance.
+- Terminal receipt acceptance rules in v2:
+  - missing signature => `accepted=false`
+  - invalid or tampered signature => `accepted=false`
+  - revoked anchor or revoked key => `accepted=false`
+  - expired or out-of-skew anchor => `accepted=false`
 - Policy controls receipt trust acceptance only. It MUST NOT alter execution semantics.
+
+### Error Codes
+
+- `TRUST_BUNDLE_INVALID`: trust bundle validity failure (including malformed bundle and expired/out-of-skew anchor); surfaces in receipt policy trust evaluation and trust bundle apply rejection.
+- `TRUST_ANCHOR_REVOKED`: anchor/key revocation match detected; surfaces in receipt policy trust evaluation and trust bundle apply rejection.
+- `TRUST_SIGNATURE_INVALID`: required trust signature missing or invalid/tampered; surfaces in receipt policy trust evaluation and trust bundle apply rejection.
+
+#### Compatibility Contract
+
+- The above v2 acceptance behavior and error codes are stable within the `0.4.x` line.
+- Under v2, `warn` vs `enforce` MAY affect warnings/diagnostics, but MUST NOT change receipt acceptance outcomes.
 
 ### Replay Linkage (v2)
 
