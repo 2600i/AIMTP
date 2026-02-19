@@ -93,7 +93,7 @@ function appendJsonl(filePath, value) {
   fs.appendFileSync(filePath, `${JSON.stringify(value)}\n`, "utf8");
 }
 
-function makeSignedReceipt(signReceipt, privateKeyPem, suffix) {
+function makeSignedReceipt(signReceipt, privateKeyPem, suffix, trustVersion = "v2") {
   return signReceipt(
     {
       receiptId: `rc-smoke-receipt-${suffix}`,
@@ -105,7 +105,7 @@ function makeSignedReceipt(signReceipt, privateKeyPem, suffix) {
     },
     privateKeyPem,
     ISSUER,
-    { trustVersion: "v2" }
+    { trustVersion }
   );
 }
 
@@ -157,6 +157,7 @@ function main() {
   const revocationsPath = path.join(demoDir, "revocations.json");
   const logPath = path.join(demoDir, "log.jsonl");
   const statePath = path.join(demoDir, "state.json");
+  const v2StatePath = path.join(demoDir, "state-v2.json");
   const envFilePath = path.join(demoDir, ".env.smoke");
   const checkpointPrivPath = path.join(demoDir, "checkpoint-priv.pem");
   const checkpointPubPath = path.join(demoDir, "checkpoint-pub.pem");
@@ -295,10 +296,10 @@ function main() {
   step("warn apply writes state", () => {
     const events = [];
     const result = receiptPolicy.processReceiptEnvelope(
-      { receipt: makeSignedReceipt(receipts.signReceipt, issuerPrivateKeyPem, "warn") },
+      { receipt: makeSignedReceipt(receipts.signReceipt, issuerPrivateKeyPem, "warn", "v1") },
       {
         mode: "enforce",
-        trustVersion: "v2",
+        trustVersion: "v1",
         env: {
           INTENTOS_TRUST_DISTRIBUTION: "fs",
           INTENTOS_TRUST_BUNDLE_PATH: bundlePath,
@@ -324,6 +325,41 @@ function main() {
     const appliedEvent = events.find((event) => event?.event === "intentos_trust_snapshot_applied");
     assert(appliedEvent, "missing intentos_trust_snapshot_applied event");
     return "state+event=ok";
+  });
+
+  step("v2 warn apply rejects (fail-closed)", () => {
+    fs.rmSync(v2StatePath, { force: true });
+    const events = [];
+    const result = receiptPolicy.processReceiptEnvelope(
+      { receipt: makeSignedReceipt(receipts.signReceipt, issuerPrivateKeyPem, "warn-v2", "v2") },
+      {
+        mode: "warn",
+        trustVersion: "v2",
+        env: {
+          INTENTOS_TRUST_DISTRIBUTION: "fs",
+          INTENTOS_TRUST_BUNDLE_PATH: bundlePath,
+          INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocationsPath,
+          INTENTOS_TRUST_SNAPSHOT_POLICY: "warn",
+          INTENTOS_TRUST_SNAPSHOT_STATE_PATH: v2StatePath,
+          INTENTOS_TRANSPARENCY_LOG_PATH: logPath,
+          INTENTOS_TRANSPARENCY_LOG_MODE: "verify",
+          INTENTOS_TRANSPARENCY_CHECKPOINT_MODE: "verify",
+          INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY: checkpointPublicKeyPem
+        },
+        logger: {
+          warn(event) {
+            events.push(event);
+          }
+        }
+      }
+    );
+    assert(!result.accepted, "v2 warn apply unexpectedly accepted");
+    assert(
+      typeof result.reason === "string" && result.reason.includes("TRUST_SIGNATURE_INVALID"),
+      `v2 warn apply reason mismatch: ${result.reason ?? "unknown"}`
+    );
+    assert(!fs.existsSync(v2StatePath), "v2 warn apply unexpectedly wrote state");
+    return "reject+no-state=ok";
   });
 
   step("rollback enforce rejects snapshot_behind", () => {
