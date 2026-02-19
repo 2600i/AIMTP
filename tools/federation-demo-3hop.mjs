@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
+import { createHash, sign } from "node:crypto";
 
 const COMPOSE_FILE = "docker-compose.federation-3hop.yml";
 const require = createRequire(import.meta.url);
@@ -26,6 +27,15 @@ const RELAY_PUBLIC_KEYS = Object.freeze({
     "-----BEGIN PUBLIC KEY-----",
     "MCowBQYDK2VwAyEAPj1Ybwvb3AvgdJyfzrFAVDp2ebq12oJufsYbyxCCeww=",
     "-----END PUBLIC KEY-----",
+    ""
+  ].join("\n")
+});
+
+const RELAY_PRIVATE_KEYS = Object.freeze({
+  "relay://b": [
+    "-----BEGIN PRIVATE KEY-----",
+    "MC4CAQAwBQYDK2VwBCIEIIOeZRQ327rtKArRvONoV7k9fow3LfRRQe9ZQ0Y+eHs4",
+    "-----END PRIVATE KEY-----",
     ""
   ].join("\n")
 });
@@ -53,6 +63,40 @@ const RELAY_CONFIG = Object.freeze({
     capabilityId: "fed3-relay-c-cap-001"
   }
 });
+
+function stableStringifyJson(value) {
+  if (value === null) {
+    return "null";
+  }
+  if (typeof value === "boolean") {
+    return value ? "true" : "false";
+  }
+  if (typeof value === "number") {
+    if (!Number.isFinite(value)) {
+      throw new Error("non_finite_number");
+    }
+    return Object.is(value, -0) ? "0" : JSON.stringify(value);
+  }
+  if (typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map((entry) => stableStringifyJson(entry)).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const keys = Object.keys(value)
+      .filter((key) => value[key] !== undefined)
+      .sort();
+    const parts = keys.map((key) => `${JSON.stringify(key)}:${stableStringifyJson(value[key])}`);
+    return `{${parts.join(",")}}`;
+  }
+  throw new Error(`unsupported_value_type:${typeof value}`);
+}
+
+function normalizeBridgeFlag(value) {
+  const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+  return normalized === "1" || normalized === "true" || normalized === "on" || normalized === "yes";
+}
 
 function normalizeTrustVersion(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -179,7 +223,43 @@ function loadReceiptPolicyModule() {
   return require(distPath);
 }
 
-function evaluateReceipt(processReceiptEnvelope, receipt, trustedReceiptKeys, trustVersion) {
+function computeKeyFingerprint(publicKeyPem) {
+  const normalizedPem = publicKeyPem.replace(/\r\n/g, "\n").trim();
+  return createHash("sha256").update(normalizedPem).digest("hex").slice(0, 12);
+}
+
+function canonicalizeBridgeProofPayload(bridgeProofPayload) {
+  return Buffer.from(stableStringifyJson(bridgeProofPayload), "utf8");
+}
+
+function createBridgeProof(issuer, subject, subjectPublicKeyPem) {
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const payload = {
+    issuer,
+    subject,
+    subjectPublicKeyPem,
+    subjectKeyFingerprint: computeKeyFingerprint(subjectPublicKeyPem),
+    issuedAt,
+    expiresAt: issuedAt + 120,
+    sigAlg: "ed25519"
+  };
+  const issuerPrivateKey = RELAY_PRIVATE_KEYS[issuer];
+  if (!issuerPrivateKey) {
+    throw new Error(`missing bridge private key for issuer: ${issuer}`);
+  }
+  return {
+    ...payload,
+    signature: sign(null, canonicalizeBridgeProofPayload(payload), issuerPrivateKey).toString("base64")
+  };
+}
+
+function evaluateReceipt(
+  processReceiptEnvelope,
+  receipt,
+  trustedReceiptKeys,
+  trustVersion,
+  bridgeProof = null
+) {
   return processReceiptEnvelope(
     {
       id: `receipt-msg-demo3-${receipt.receiptId || "unknown"}`,
@@ -189,6 +269,7 @@ function evaluateReceipt(processReceiptEnvelope, receipt, trustedReceiptKeys, tr
       mode: "enforce",
       trustVersion,
       trustedReceiptKeys,
+      ...(bridgeProof ? { trustBridgeProofJson: JSON.stringify(bridgeProof) } : {}),
       env: {
         INTENTOS_TRUST_VERSION: trustVersion
       }
@@ -214,6 +295,7 @@ function printCaseResult(label, result, expectedAccepted) {
 
 async function main() {
   const trustVersion = normalizeTrustVersion(process.env.INTENTOS_TRUST_VERSION);
+  const bridgeEnabled = normalizeBridgeFlag(process.env.FEDERATION_BRIDGE);
   const { processReceiptEnvelope } = loadReceiptPolicyModule();
 
   await waitForRelay("relay-a");
@@ -265,6 +347,18 @@ async function main() {
 
   const case3 = evaluateReceipt(processReceiptEnvelope, receiptC, trustedByA, trustVersion);
   printCaseResult("Case 3: A verifies C", case3, false);
+
+  if (bridgeEnabled && trustVersion === "v2") {
+    const bridgeProof = createBridgeProof("relay://b", "relay://c", RELAY_PUBLIC_KEYS["relay://c"]);
+    const case4 = evaluateReceipt(
+      processReceiptEnvelope,
+      receiptC,
+      trustedByA,
+      trustVersion,
+      bridgeProof
+    );
+    printCaseResult("Case 4: A verifies C with bridge proof", case4, true);
+  }
 }
 
 main().catch((error) => {

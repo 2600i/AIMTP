@@ -67,6 +67,7 @@ export interface ProcessReceiptEnvelopeOptions {
   readonly trustBundleTrustedSignersJson?: string;
   readonly trustBundleSignerAllowlist?: string;
   readonly trustBundleRevocationsJson?: string;
+  readonly trustBridgeProofJson?: string;
   readonly trustedReceiptKeysJson?: string;
   readonly trustedReceiptKeys?: TrustedReceiptPublicKeys;
   readonly logger?: ReceiptPolicyLogger;
@@ -150,6 +151,25 @@ interface TrustBundleRevocations {
   readonly issuerKeys: Readonly<Record<string, ReadonlySet<string>>>;
 }
 
+export interface BridgeProof {
+  readonly issuer: string;
+  readonly subject: string;
+  readonly subjectPublicKeyPem: string;
+  readonly subjectKeyFingerprint?: string;
+  readonly issuedAt: number;
+  readonly expiresAt: number;
+  readonly sigAlg: "ed25519";
+  readonly signature: string;
+}
+
+export interface BridgeProofVerificationResult {
+  readonly valid: boolean;
+  readonly reason: string;
+  readonly issuer?: string;
+  readonly subject?: string;
+  readonly subjectPublicKeyPem?: string;
+}
+
 type TransparencyLogMode = "off" | "append" | "verify";
 type TransparencyCheckpointMode = "off" | "append" | "verify";
 
@@ -170,6 +190,7 @@ const TRUST_BUNDLE_INVALID_CODE = "TRUST_BUNDLE_INVALID";
 const TRUST_ANCHOR_REVOKED_CODE = "TRUST_ANCHOR_REVOKED";
 const TRUST_SIGNATURE_INVALID_CODE = "TRUST_SIGNATURE_INVALID";
 const TRANSPARENCY_LOG_CHAIN_BROKEN_REASON = "transparency log chain broken";
+const MAX_BRIDGE_PROOF_TTL_SEC = 300;
 const TRUST_BUNDLE_DELTA_KEYS: ReadonlyArray<string> = Object.freeze([
   "addKeys",
   "revokeKeys",
@@ -218,6 +239,195 @@ function stableStringifyJson(value: unknown): string {
     return `{${parts.join(",")}}`;
   }
   throw new Error(`unsupported_value_type:${typeof value}`);
+}
+
+function looksLikeBase64(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return false;
+  }
+  try {
+    const roundTrip = Buffer.from(value, "base64").toString("base64");
+    const normalize = (input: string): string => input.replace(/=+$/u, "");
+    return normalize(roundTrip) === normalize(value);
+  } catch {
+    return false;
+  }
+}
+
+function canonicalizeBridgeProofPayload(proof: Omit<BridgeProof, "signature">): Buffer {
+  return Buffer.from(
+    stableStringifyJson({
+      issuer: proof.issuer,
+      subject: proof.subject,
+      subjectPublicKeyPem: proof.subjectPublicKeyPem,
+      subjectKeyFingerprint: proof.subjectKeyFingerprint,
+      issuedAt: proof.issuedAt,
+      expiresAt: proof.expiresAt,
+      sigAlg: proof.sigAlg
+    }),
+    "utf8"
+  );
+}
+
+function normalizeBridgeProof(input: unknown): BridgeProof {
+  if (!isPlainObject(input)) {
+    throw new Error("bridge proof must be object");
+  }
+
+  const issuer = normalizeNonEmptyString(input.issuer);
+  const subject = normalizeNonEmptyString(input.subject);
+  const subjectPublicKeyPemRaw = typeof input.subjectPublicKeyPem === "string"
+    ? input.subjectPublicKeyPem
+    : "";
+  const subjectPublicKeyPem = subjectPublicKeyPemRaw;
+  const subjectKeyFingerprint = normalizeNonEmptyString(input.subjectKeyFingerprint).toLowerCase();
+  const sigAlg = normalizeNonEmptyString(input.sigAlg).toLowerCase();
+  const signature = normalizeNonEmptyString(input.signature);
+  const issuedAt = parseOptionalUnixSeconds(input.issuedAt);
+  const expiresAt = parseOptionalUnixSeconds(input.expiresAt);
+
+  if (!issuer || !subject || !subjectPublicKeyPem.trim() || !signature) {
+    throw new Error("bridge proof missing required fields");
+  }
+  if (issuedAt === undefined || expiresAt === undefined) {
+    throw new Error("bridge proof issuedAt/expiresAt invalid");
+  }
+  if (!Number.isInteger(issuedAt) || !Number.isInteger(expiresAt)) {
+    throw new Error("bridge proof issuedAt/expiresAt must be integer seconds");
+  }
+  if (expiresAt <= issuedAt) {
+    throw new Error("bridge proof expiresAt must be greater than issuedAt");
+  }
+  if (expiresAt - issuedAt > MAX_BRIDGE_PROOF_TTL_SEC) {
+    throw new Error("bridge proof ttl exceeds max");
+  }
+  if (sigAlg !== "ed25519") {
+    throw new Error("bridge proof sigAlg invalid");
+  }
+  if (!looksLikeBase64(signature)) {
+    throw new Error("bridge proof signature malformed");
+  }
+
+  const computedFingerprint = computeBundleKeyFingerprint(subjectPublicKeyPem).toLowerCase();
+  if (subjectKeyFingerprint && subjectKeyFingerprint !== computedFingerprint) {
+    throw new Error("bridge proof subject fingerprint mismatch");
+  }
+
+  return {
+    issuer,
+    subject,
+    subjectPublicKeyPem,
+    ...(subjectKeyFingerprint ? { subjectKeyFingerprint } : {}),
+    issuedAt,
+    expiresAt,
+    sigAlg: "ed25519",
+    signature
+  };
+}
+
+function resolveBridgeProofInput(options: ProcessReceiptEnvelopeOptions): BridgeProof | null {
+  const raw = options.trustBridgeProofJson ?? options.env?.INTENTOS_TRUST_BRIDGE_PROOF_JSON;
+  if (raw === undefined) {
+    return null;
+  }
+  if (isPlainObject(raw)) {
+    return normalizeBridgeProof(raw);
+  }
+  const text = normalizeNonEmptyString(raw);
+  if (!text) {
+    throw new Error("bridge proof json empty");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`bridge proof json invalid:${message}`);
+  }
+  return normalizeBridgeProof(parsed);
+}
+
+function resolveBridgeTrustedKeys(
+  trustedKeys: TrustedReceiptPublicKeys,
+  bundleIssuerKeys: TrustBundleIssuerKeySet | null
+): TrustedReceiptPublicKeys {
+  const merged: Record<string, string> = {};
+  for (const [issuer, value] of Object.entries(trustedKeys)) {
+    const publicKeyPem = normalizeNonEmptyString(value);
+    if (publicKeyPem) {
+      merged[issuer] = publicKeyPem;
+    }
+  }
+  if (bundleIssuerKeys) {
+    for (const [issuer, keys] of Object.entries(bundleIssuerKeys)) {
+      if (merged[issuer] || !Array.isArray(keys) || keys.length === 0) {
+        continue;
+      }
+      const publicKeyPem = normalizeNonEmptyString(keys[0].publicKeyPem);
+      if (publicKeyPem) {
+        merged[issuer] = publicKeyPem;
+      }
+    }
+  }
+  return Object.freeze(merged);
+}
+
+export function verifyBridgeProof(
+  bridgeProof: unknown,
+  trustedKeysOfA: TrustedReceiptPublicKeys,
+  now: number = Date.now() / 1000
+): BridgeProofVerificationResult {
+  let normalized: BridgeProof;
+  try {
+    normalized = normalizeBridgeProof(bridgeProof);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return { valid: false, reason: `bridge proof invalid: ${message}` };
+  }
+
+  const nowSec = Number.isFinite(now) ? Math.trunc(now) : Math.trunc(Date.now() / 1000);
+  if (nowSec < normalized.issuedAt || nowSec >= normalized.expiresAt) {
+    return { valid: false, reason: "bridge proof expired" };
+  }
+
+  const signerKey = normalizeNonEmptyString(trustedKeysOfA[normalized.issuer]);
+  if (!signerKey) {
+    return { valid: false, reason: "bridge proof issuer not directly trusted" };
+  }
+
+  let signatureValid = false;
+  try {
+    signatureValid = verify(
+      null,
+      canonicalizeBridgeProofPayload({
+        issuer: normalized.issuer,
+        subject: normalized.subject,
+        subjectPublicKeyPem: normalized.subjectPublicKeyPem,
+        subjectKeyFingerprint: normalized.subjectKeyFingerprint,
+        issuedAt: normalized.issuedAt,
+        expiresAt: normalized.expiresAt,
+        sigAlg: normalized.sigAlg
+      }),
+      createPublicKey(signerKey),
+      Buffer.from(normalized.signature, "base64")
+    );
+  } catch {
+    signatureValid = false;
+  }
+  if (!signatureValid) {
+    return { valid: false, reason: "bridge proof signature invalid" };
+  }
+
+  return {
+    valid: true,
+    reason: "bridge proof valid",
+    issuer: normalized.issuer,
+    subject: normalized.subject,
+    subjectPublicKeyPem: normalized.subjectPublicKeyPem
+  };
 }
 
 function normalizeReceiptPolicyMode(
@@ -1374,6 +1584,13 @@ function resolveStrictTrustErrorCode(
   ) {
     return TRUST_SIGNATURE_INVALID_CODE;
   }
+  if (
+    normalizedReason.includes("bridge proof expired") ||
+    normalizedReason.includes("bridge proof issuer not directly trusted") ||
+    normalizedReason.includes("bridge proof subject mismatch")
+  ) {
+    return TRUST_BUNDLE_INVALID_CODE;
+  }
 
   if (attemptReport) {
     if (attemptReport.attempts.some((attempt) => attempt.reasonSkipped === "revoked")) {
@@ -1551,16 +1768,60 @@ export function processReceiptEnvelope(
       trustVersion,
       maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
     });
+  let effectiveVerification = verification;
+  let bridgeProofFailureReason: string | null = null;
+
+  if (trustVersion === "v2" && !verification.verified) {
+    try {
+      const bridgeProof = resolveBridgeProofInput(options);
+      if (bridgeProof) {
+        const bridgeResult = verifyBridgeProof(
+          bridgeProof,
+          resolveBridgeTrustedKeys(trustedKeys, bundleIssuerKeys),
+          Date.now() / 1000
+        );
+        if (!bridgeResult.valid) {
+          bridgeProofFailureReason = bridgeResult.reason;
+        } else if (bridgeResult.subject !== normalizeNonEmptyString(receipt.issuer)) {
+          bridgeProofFailureReason = "bridge proof subject mismatch";
+        } else {
+          const bridgeVerification = verifyReceipt(
+            receipt,
+            {
+              [bridgeResult.subject!]: bridgeResult.subjectPublicKeyPem!
+            },
+            {
+              trustVersion,
+              maxTimestampSkewSec: trustVersion === "v2" ? maxTimestampSkewSec : undefined
+            }
+          );
+          if (bridgeVerification.verified) {
+            effectiveVerification = {
+              ...bridgeVerification,
+              reason: `${bridgeVerification.reason}; bridge proof valid`
+            };
+          } else {
+            bridgeProofFailureReason = "bridge proof subject signature invalid";
+          }
+        }
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      bridgeProofFailureReason = `bridge proof invalid: ${message}`;
+    }
+  }
+
+  const resolvedReason = bridgeProofFailureReason ?? effectiveVerification.reason;
   const reason =
-    verification.verified || !configError
-      ? verification.reason
-      : `${verification.reason}; trusted key config: ${configError}`;
+    effectiveVerification.verified || !configError
+      ? resolvedReason
+      : `${resolvedReason}; trusted key config: ${configError}`;
   const strictErrorCode =
-    trustVersion === "v2" && !verification.verified
+    trustVersion === "v2" && !effectiveVerification.verified
       ? resolveStrictTrustErrorCode(reason, configError, bundleVerification?.attemptReport ?? null)
       : undefined;
 
-  if (verification.verified) {
+  if (effectiveVerification.verified) {
     return {
       accepted: true,
       trusted: true,
