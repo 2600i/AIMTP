@@ -98,8 +98,9 @@ INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC=300
 
 Expected behavior:
 - Signed receipt + trusted issuer + valid signature => trusted.
-- Unsigned terminal receipt => rejected in `enforce`, warning in `warn`.
-- Tampered or unknown-issuer receipt => rejected in `enforce`, warning in `warn`.
+- Unsigned terminal receipt => `accepted=false` in v2.
+- Tampered or unknown-issuer receipt => `accepted=false` in v2.
+- Under v2, `warn` vs `enforce` affects diagnostics, not acceptance outcomes.
 
 ## Examples
 Receipt (completed):

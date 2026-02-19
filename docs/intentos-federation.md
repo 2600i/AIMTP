@@ -357,8 +357,8 @@ INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC=300
   - tampered signed receipts are rejected (invalid signature)
   - unknown issuer receipts are rejected even when signed
 - `v2 + warn`:
-  - processing continues
-  - warnings are emitted for unsigned, tampered, or unknown-issuer receipts
+  - acceptance behavior matches `enforce` for terminal receipt trust decisions
+  - warning/diagnostic messaging may differ from `enforce`
 
 ### What Does NOT Change
 
@@ -415,25 +415,38 @@ This section defines the versioned successor to frozen v1 semantics. v1 remains 
 - A relay MUST trust only explicitly configured issuer keys.
 - A relay MUST NOT infer cross-relay trust transitively from receipt forwarding alone.
 
-### 6) Policy Semantics (v2)
-- `v2 + enforce`:
-  - unsigned terminal receipts MUST be rejected from trusted acceptance
-  - untrusted/unknown issuer receipts MUST be rejected
-- `v2 + warn`:
-  - processing continues
-  - runtime SHOULD emit warnings for unsigned/untrusted receipts
-- `v2 + off`:
-  - processing continues even when trust checks fail
-  - failed trust receipts remain untrusted artifacts
+### Trust v2 Strict Semantics
+- v2 is active when `INTENTOS_TRUST_VERSION=v2`.
+- In v2, terminal receipt trust is fail-closed:
+  - runtime MUST NOT accept unsigned or untrusted terminal receipts in `off`, `warn`, or `enforce`.
+  - `warn` vs `enforce` may differ in warning/diagnostic emission only.
+- Terminal receipt acceptance outcomes in v2:
+  - missing signature => `accepted=false`
+  - invalid or tampered signature => `accepted=false`
+  - revoked anchor or key => `accepted=false`
+  - expired or out-of-skew anchor => `accepted=false`
 
-### 7) Upgrade Guidance
+### Error Codes
+- `TRUST_BUNDLE_INVALID`: trust bundle or anchor validity failure (including malformed bundle and expired/out-of-skew anchor); surfaces in receipt policy and trust bundle apply.
+- `TRUST_ANCHOR_REVOKED`: revoked anchor/key detected during trust evaluation; surfaces in receipt policy and trust bundle apply.
+- `TRUST_SIGNATURE_INVALID`: required trust signature missing or invalid/tampered; surfaces in receipt policy and trust bundle apply.
+
+#### Compatibility Contract
+- These v2 acceptance outcomes and error codes are stable within the `0.4.x` line.
+- Under v2, `warn` vs `enforce` may change warnings/diagnostics, but not acceptance.
+
+#### Regression Tests
+- `tests/federation-v2-policy-regression.test.mjs`
+- `tests/trust-v2-strict-mode.test.mjs`
+
+### Upgrade Guidance
 - Keep existing behavior (default):
   - `INTENTOS_TRUST_VERSION=v1` (or unset)
   - `INTENTOS_RECEIPT_POLICY=off|warn|enforce` as currently configured
 - Stage v2 rollout:
-  1. Keep policy in `warn`, set `INTENTOS_TRUST_VERSION=v2`, and populate `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON`.
-  2. Observe warning volume and issuer coverage.
-  3. Switch to `INTENTOS_RECEIPT_POLICY=enforce` after signing/trust config is complete.
+  1. Set `INTENTOS_TRUST_VERSION=v2` and populate `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON`.
+  2. Choose `warn` or `enforce` based on preferred diagnostics/alerting behavior.
+  3. Note: under v2, acceptance outcomes are strict and identical across `warn` and `enforce`.
 
 ## IntentOS v1 Trust Semantics (Frozen)
 **FROZEN v1:** This section is normative for IntentOS v1 trust behavior. Changes to these rules MUST be versioned explicitly in a future IntentOS trust-semantics revision.

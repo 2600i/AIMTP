@@ -17,3 +17,4 @@ export * from "./runtime/intentos/identity-anchor-distribution";
 export * from "./runtime/intentos/revocation-distribution";
 export * from "./runtime/intentos/trust-bundle-distribution";
 export * from "./runtime/intentos/trust-bundle-apply";
+export * from "./runtime/intentos/trust-bundle-delta";

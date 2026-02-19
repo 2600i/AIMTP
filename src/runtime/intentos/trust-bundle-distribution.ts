@@ -15,6 +15,8 @@ import {
 export type TrustBundleDistributionMode = "off" | "on";
 export type TrustBundlePolicyMode = "off" | "warn" | "enforce";
 
+const TRUST_BUNDLE_INVALID = "TRUST_BUNDLE_INVALID";
+
 interface LoggerLike {
   warn(event: unknown): void;
 }
@@ -59,6 +61,10 @@ function normalizePolicyMode(value: unknown): TrustBundlePolicyMode {
     return normalized;
   }
   return "off";
+}
+
+function normalizeTrustVersion(value: unknown): "v1" | "v2" {
+  return normalizeNonEmptyString(value).toLowerCase() === "v2" ? "v2" : "v1";
 }
 
 function shouldLoadBundle(env: NodeJS.ProcessEnv, mode: TrustDistributionMode): boolean {
@@ -119,7 +125,7 @@ function applyInvalidByPolicy(
   };
 }
 
-function normalizeBundleDiagnostic(error: unknown): string {
+function normalizeBundleDiagnostic(error: unknown, strictTrustV2: boolean): string {
   const message = error instanceof Error ? error.message : String(error);
   if (
     message === "revocation_proof_missing" ||
@@ -128,7 +134,7 @@ function normalizeBundleDiagnostic(error: unknown): string {
   ) {
     return message;
   }
-  return "trust_bundle_invalid";
+  return strictTrustV2 ? TRUST_BUNDLE_INVALID : "trust_bundle_invalid";
 }
 
 export function loadTrustBundleFromDistribution(
@@ -137,7 +143,8 @@ export function loadTrustBundleFromDistribution(
 ): TrustBundleDistributionResult {
   const mode = normalizeTrustDistributionMode(env.INTENTOS_TRUST_DISTRIBUTION);
   const distributionEnabled = shouldLoadBundle(env, mode);
-  const policyMode = normalizePolicyMode(env.INTENTOS_TRUST_BUNDLE_POLICY);
+  const strictTrustV2 = normalizeTrustVersion(env.INTENTOS_TRUST_VERSION) === "v2";
+  const policyMode = strictTrustV2 ? "enforce" : normalizePolicyMode(env.INTENTOS_TRUST_BUNDLE_POLICY);
 
   if (!distributionEnabled) {
     return toEmptyResult(mode, false, policyMode, null);
@@ -190,7 +197,7 @@ export function loadTrustBundleFromDistribution(
       mode,
       policyMode,
       sourcePath,
-      normalizeBundleDiagnostic(error),
+      normalizeBundleDiagnostic(error, strictTrustV2),
       logger
     );
   }

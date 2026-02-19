@@ -1,0 +1,90 @@
+services:
+  redis-a:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+
+  relay-a:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - redis-a
+    ports:
+      - "18787:8787"
+    environment:
+      PORT: "8787"
+      AIMTP_STORE: "redis"
+      AIMTP_REDIS_URL: "redis://redis-a:6379"
+      AIMTP_RELAY_INSTANCE_ID: "relay-a"
+      INTENTOS_RECEIPTS_PATH: "/app/runtime/relay-a-receipts.jsonl"
+      INTENTOS_RECEIPTS_DELIVER: "on"
+      INTENTOS_RECEIPTS_SIGN: "on"
+      INTENTOS_RECEIPTS_ISSUER: "relay://a"
+      INTENTOS_TRUST_VERSION: "${INTENTOS_TRUST_VERSION:-v1}"
+      # Demo-only key material for local federation interop testing.
+      INTENTOS_RECEIPTS_PRIVATE_KEY: |-
+        -----BEGIN PRIVATE KEY-----
+        MC4CAQAwBQYDK2VwBCIEID1Ojr6UbUbvQaY1SFTC6sQpaF8dyhVFsYgQ1RrI8Lcz
+        -----END PRIVATE KEY-----
+      INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: >-
+        {"relay://a":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQfzjXFsveEOYsv55DKXnd7VcM66OXZbDq3ACaKMwdoo=\n-----END PUBLIC KEY-----\n","relay://b":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=\n-----END PUBLIC KEY-----\n"}
+
+  redis-b:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+
+  relay-b:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - redis-b
+    ports:
+      - "28787:8787"
+    environment:
+      PORT: "8787"
+      AIMTP_STORE: "redis"
+      AIMTP_REDIS_URL: "redis://redis-b:6379"
+      AIMTP_RELAY_INSTANCE_ID: "relay-b"
+      INTENTOS_RECEIPTS_PATH: "/app/runtime/relay-b-receipts.jsonl"
+      INTENTOS_RECEIPTS_DELIVER: "on"
+      INTENTOS_RECEIPTS_SIGN: "on"
+      INTENTOS_RECEIPTS_ISSUER: "relay://b"
+      INTENTOS_TRUST_VERSION: "${INTENTOS_TRUST_VERSION:-v1}"
+      # Demo-only key material for local federation interop testing.
+      INTENTOS_RECEIPTS_PRIVATE_KEY: |-
+        -----BEGIN PRIVATE KEY-----
+        MC4CAQAwBQYDK2VwBCIEIIOeZRQ327rtKArRvONoV7k9fow3LfRRQe9ZQ0Y+eHs4
+        -----END PRIVATE KEY-----
+      INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: >-
+        {"relay://a":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQfzjXFsveEOYsv55DKXnd7VcM66OXZbDq3ACaKMwdoo=\n-----END PUBLIC KEY-----\n","relay://b":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=\n-----END PUBLIC KEY-----\n","relay://c":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAPj1Ybwvb3AvgdJyfzrFAVDp2ebq12oJufsYbyxCCeww=\n-----END PUBLIC KEY-----\n"}
+
+  redis-c:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "no"]
+
+  relay-c:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      - redis-c
+    ports:
+      - "38787:8787"
+    environment:
+      PORT: "8787"
+      AIMTP_STORE: "redis"
+      AIMTP_REDIS_URL: "redis://redis-c:6379"
+      AIMTP_RELAY_INSTANCE_ID: "relay-c"
+      INTENTOS_RECEIPTS_PATH: "/app/runtime/relay-c-receipts.jsonl"
+      INTENTOS_RECEIPTS_DELIVER: "on"
+      INTENTOS_RECEIPTS_SIGN: "on"
+      INTENTOS_RECEIPTS_ISSUER: "relay://c"
+      INTENTOS_TRUST_VERSION: "${INTENTOS_TRUST_VERSION:-v1}"
+      # Demo-only key material for local federation interop testing.
+      INTENTOS_RECEIPTS_PRIVATE_KEY: |-
+        -----BEGIN PRIVATE KEY-----
+        MC4CAQAwBQYDK2VwBCIEICbeS1rgxn79kHhNszHxucQw8mQ2p6OgSvkTtsavzCUi
+        -----END PRIVATE KEY-----
+      INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: >-
+        {"relay://b":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=\n-----END PUBLIC KEY-----\n","relay://c":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAPj1Ybwvb3AvgdJyfzrFAVDp2ebq12oJufsYbyxCCeww=\n-----END PUBLIC KEY-----\n"}

@@ -23,6 +23,10 @@ import {
 
 export type TrustBundleApplyPolicy = "off" | "warn" | "enforce";
 
+export const TRUST_BUNDLE_INVALID = "TRUST_BUNDLE_INVALID";
+export const TRUST_ANCHOR_REVOKED = "TRUST_ANCHOR_REVOKED";
+export const TRUST_SIGNATURE_INVALID = "TRUST_SIGNATURE_INVALID";
+
 export interface ApplyTrustBundleOptions {
   readonly env?: NodeJS.ProcessEnv;
   readonly storePath?: string;
@@ -56,6 +60,117 @@ function normalizePolicyMode(value: unknown): TrustBundleApplyPolicy {
     return normalized;
   }
   return "warn";
+}
+
+function normalizeTrustVersion(value: unknown): "v1" | "v2" {
+  const normalized = normalizeNonEmptyString(value).toLowerCase();
+  return normalized === "v2" ? "v2" : "v1";
+}
+
+function isStrictTrustV2(env: NodeJS.ProcessEnv): boolean {
+  return normalizeTrustVersion(env.INTENTOS_TRUST_VERSION) === "v2";
+}
+
+function parseOptionalNonNegativeInt(value: unknown): number | undefined {
+  if (typeof value === "number") {
+    return Number.isFinite(value) && value >= 0 ? Math.trunc(value) : undefined;
+  }
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return undefined;
+  }
+  return parsed;
+}
+
+function resolveIdentityTimestampSkewSec(env: NodeJS.ProcessEnv): number {
+  return parseOptionalNonNegativeInt(env.INTENTOS_IDENTITY_MAX_TIMESTAMP_SKEW_SEC) ?? 300;
+}
+
+function throwTrustError(code: string, legacyCode?: string): never {
+  throw new Error(legacyCode ? `${code}:${legacyCode}` : code);
+}
+
+function computeIdentityAnchorFingerprint(publicKeyPem: string): string {
+  return `sha256:${createHash("sha256").update(publicKeyPem, "utf8").digest("hex")}`;
+}
+
+function looksLikeBase64(value: string): boolean {
+  if (!value) {
+    return false;
+  }
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(value)) {
+    return false;
+  }
+  try {
+    const roundTrip = Buffer.from(value, "base64").toString("base64");
+    const normalize = (input: string): string => input.replace(/=+$/u, "");
+    return normalize(roundTrip) === normalize(value);
+  } catch {
+    return false;
+  }
+}
+
+function validateTrustBundleStrictV2(
+  bundle: TrustBundleV04,
+  env: NodeJS.ProcessEnv,
+  nowMs: number
+): void {
+  const anchors = bundle.identityAnchors?.set?.anchors;
+  if (!Array.isArray(anchors) || anchors.length === 0) {
+    return;
+  }
+
+  const maxSkewSec = resolveIdentityTimestampSkewSec(env);
+  const maxSkewMs = maxSkewSec * 1000;
+  const revokedAnchors = new Set<string>();
+  const revokedKeys = new Set<string>();
+
+  const revocationEntries = bundle.revocations?.set?.revocations;
+  if (Array.isArray(revocationEntries)) {
+    for (const entry of revocationEntries) {
+      const subject = normalizeNonEmptyString(entry?.subject);
+      if (!subject) {
+        continue;
+      }
+      if (entry?.kind === "anchor") {
+        revokedAnchors.add(subject);
+      } else if (entry?.kind === "key") {
+        revokedKeys.add(subject);
+      }
+    }
+  }
+
+  for (const anchor of anchors) {
+    const alg = normalizeNonEmptyString(anchor.alg).toLowerCase();
+    const kid = normalizeNonEmptyString(anchor.kid);
+    const signature = normalizeNonEmptyString(anchor.signature);
+    if (alg !== "ed25519" || !kid || !signature || !looksLikeBase64(signature)) {
+      throwTrustError(TRUST_SIGNATURE_INVALID, "trust_signature_invalid");
+    }
+
+    const timestampMs = Date.parse(anchor.timestamp);
+    if (!Number.isFinite(timestampMs) || Math.abs(nowMs - timestampMs) > maxSkewMs) {
+      throwTrustError(TRUST_BUNDLE_INVALID, "trust_bundle_invalid");
+    }
+
+    const anchorId = normalizeNonEmptyString(anchor.anchorId);
+    const fingerprint = computeIdentityAnchorFingerprint(anchor.publicKeyPem);
+    if (
+      revokedAnchors.has(anchorId) ||
+      revokedAnchors.has(fingerprint) ||
+      revokedKeys.has(kid) ||
+      revokedKeys.has(fingerprint)
+    ) {
+      throwTrustError(TRUST_ANCHOR_REVOKED, "trust_anchor_revoked");
+    }
+  }
 }
 
 function resolveStorePaths(storePath: string): ResolvedStorePaths {
@@ -192,11 +307,17 @@ function atomicWriteJson(filePath: string, payload: unknown): void {
   }
 }
 
-function assertTrustBundleV04(bundle: unknown): asserts bundle is TrustBundleV04 {
+function assertTrustBundleV04(bundle: unknown, strictTrustV2: boolean): asserts bundle is TrustBundleV04 {
   if (!isTrustBundleV04(bundle)) {
+    if (strictTrustV2) {
+      throwTrustError(TRUST_BUNDLE_INVALID, "trust_bundle_invalid");
+    }
     throw new Error("trust_bundle_invalid");
   }
   if (bundle.type !== TRUST_BUNDLE_TYPE || bundle.version !== TRUST_BUNDLE_VERSION) {
+    if (strictTrustV2) {
+      throwTrustError(TRUST_BUNDLE_INVALID, "trust_bundle_invalid");
+    }
     throw new Error("trust_bundle_invalid");
   }
 }
@@ -206,7 +327,11 @@ export function applyTrustBundleToSnapshotStore(
   opts: ApplyTrustBundleOptions = {}
 ): ApplyTrustBundleResult {
   const env = opts.env ?? {};
-  const policy = normalizePolicyMode(opts.policy);
+  const strictTrustV2 = isStrictTrustV2(env);
+  const policy = strictTrustV2
+    ? "enforce"
+    : normalizePolicyMode(opts.policy ?? env.INTENTOS_TRUST_BUNDLE_POLICY);
+  const applyTimestampMs = normalizeApplyTimestamp(opts.nowMs);
 
   if (policy === "off") {
     return {
@@ -217,7 +342,10 @@ export function applyTrustBundleToSnapshotStore(
     };
   }
 
-  assertTrustBundleV04(bundle);
+  assertTrustBundleV04(bundle, strictTrustV2);
+  if (strictTrustV2) {
+    validateTrustBundleStrictV2(bundle, env, applyTimestampMs);
+  }
 
   let revocationProofVerification: RevocationProofVerificationResult | null = null;
   if (normalizeNonEmptyString(env.INTENTOS_REVOCATION_PROOF).toLowerCase() === "on" && bundle.revocations) {
@@ -294,7 +422,7 @@ export function applyTrustBundleToSnapshotStore(
     ...(transparencyHead ? { transparencyHead } : {}),
     bundleId,
     appliedSnapshotId,
-    fetchedAtMs: normalizeApplyTimestamp(opts.nowMs),
+    fetchedAtMs: applyTimestampMs,
     source: "trust_bundle_apply"
   });
   pathsWritten.push(paths.statePath);
