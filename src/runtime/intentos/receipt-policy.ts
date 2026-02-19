@@ -66,6 +66,7 @@ export interface ProcessReceiptEnvelopeResult {
   readonly trustVersion: ReceiptTrustVersion;
   readonly reason: string;
   readonly receipt: Receipt | null;
+  readonly errorCode?: string;
 }
 
 const DEFAULT_POLICY_MODE: ReceiptPolicyMode = "off";
@@ -151,6 +152,9 @@ const TRUST_BUNDLE_SIGNATURE_INVALID_REASON = "bundle signature invalid";
 const TRUST_BUNDLE_SIGNER_NOT_ALLOWED_REASON = "bundle signer not allowed";
 const TRUST_BUNDLE_SIGNER_REVOKED_REASON = "bundle signer revoked";
 const TRUST_BUNDLE_MALFORMED_REASON = "bundle malformed";
+const TRUST_BUNDLE_INVALID_CODE = "TRUST_BUNDLE_INVALID";
+const TRUST_ANCHOR_REVOKED_CODE = "TRUST_ANCHOR_REVOKED";
+const TRUST_SIGNATURE_INVALID_CODE = "TRUST_SIGNATURE_INVALID";
 const TRANSPARENCY_LOG_CHAIN_BROKEN_REASON = "transparency log chain broken";
 const EMPTY_TRUST_BUNDLE_REVOCATIONS: TrustBundleRevocations = Object.freeze({
   signers: Object.freeze(new Set<string>()),
@@ -210,6 +214,13 @@ function readMode(options: ProcessReceiptEnvelopeOptions): ReceiptPolicyMode {
     return normalizeReceiptPolicyMode(options.mode);
   }
   return normalizeReceiptPolicyMode(options.env?.INTENTOS_RECEIPT_POLICY);
+}
+
+function resolveModeForTrustVersion(
+  mode: ReceiptPolicyMode,
+  trustVersion: ReceiptTrustVersion
+): ReceiptPolicyMode {
+  return trustVersion === "v2" ? "enforce" : mode;
 }
 
 function readTrustVersion(options: ProcessReceiptEnvelopeOptions): ReceiptTrustVersion {
@@ -569,9 +580,10 @@ function readTrustBundleRevocations(
 }
 
 function readTrustBundleSignaturePolicy(
-  options: ProcessReceiptEnvelopeOptions
+  options: ProcessReceiptEnvelopeOptions,
+  strictTrustV2: boolean
 ): TrustBundleSignaturePolicy {
-  const requireSignature = normalizeBooleanOnOff(
+  const requireSignature = strictTrustV2 || normalizeBooleanOnOff(
     options.trustBundleRequireSignature ?? options.env?.INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE
   );
   if (!requireSignature) {
@@ -602,6 +614,28 @@ function readTrustBundleSignaturePolicy(
       configError: TRUST_BUNDLE_MALFORMED_REASON
     };
   }
+}
+
+function mapTrustBundleConfigErrorCode(reason: string): string {
+  if (
+    reason === TRUST_BUNDLE_INVALID_CODE ||
+    reason === TRUST_ANCHOR_REVOKED_CODE ||
+    reason === TRUST_SIGNATURE_INVALID_CODE
+  ) {
+    return reason;
+  }
+  if (
+    reason === TRUST_BUNDLE_SIGNATURE_REQUIRED_REASON ||
+    reason === TRUST_BUNDLE_UNKNOWN_SIGNER_REASON ||
+    reason === TRUST_BUNDLE_SIGNATURE_INVALID_REASON ||
+    reason === TRUST_BUNDLE_SIGNER_NOT_ALLOWED_REASON
+  ) {
+    return TRUST_SIGNATURE_INVALID_CODE;
+  }
+  if (reason === TRUST_BUNDLE_SIGNER_REVOKED_REASON) {
+    return TRUST_ANCHOR_REVOKED_CODE;
+  }
+  return TRUST_BUNDLE_INVALID_CODE;
 }
 
 function verifyTrustBundleSignature(
@@ -721,8 +755,10 @@ function appendTransparencyPolicyEvent(
 }
 
 function readTrustedKeys(
-  options: ProcessReceiptEnvelopeOptions
+  options: ProcessReceiptEnvelopeOptions,
+  trustVersion: ReceiptTrustVersion
 ): TrustedKeyResolution {
+  const strictTrustV2 = trustVersion === "v2";
   if (options.trustedReceiptKeys) {
     return {
       trustedKeys: options.trustedReceiptKeys,
@@ -884,7 +920,7 @@ function readTrustedKeys(
       }
     }
 
-    const signaturePolicy = readTrustBundleSignaturePolicy(options);
+    const signaturePolicy = readTrustBundleSignaturePolicy(options, strictTrustV2);
     if (signaturePolicy.configError) {
       appendTransparencyPolicyEvent(transparencyLog, "bundle_rejected", undefined, signaturePolicy.configError);
       return {
@@ -893,7 +929,9 @@ function readTrustedKeys(
         bundleRevocations: null,
         bundleHash: null,
         transparencyLog,
-        configError: signaturePolicy.configError
+        configError: strictTrustV2
+          ? mapTrustBundleConfigErrorCode(signaturePolicy.configError)
+          : signaturePolicy.configError
       };
     }
 
@@ -920,7 +958,7 @@ function readTrustedKeys(
             bundleRevocations: null,
             bundleHash,
             transparencyLog,
-            configError: signatureError
+            configError: strictTrustV2 ? mapTrustBundleConfigErrorCode(signatureError) : signatureError
           };
         }
       }
@@ -999,7 +1037,11 @@ function readTrustedKeys(
         bundleRevocations: null,
         bundleHash: null,
         transparencyLog,
-        configError: signaturePolicy.requireSignature ? TRUST_BUNDLE_MALFORMED_REASON : message
+        configError: strictTrustV2
+          ? TRUST_BUNDLE_INVALID_CODE
+          : signaturePolicy.requireSignature
+            ? TRUST_BUNDLE_MALFORMED_REASON
+            : message
       };
     }
   }
@@ -1168,6 +1210,40 @@ function buildBundleAttemptReport(
   };
 }
 
+function resolveStrictTrustErrorCode(
+  reason: string,
+  configError: string | null,
+  attemptReport: TrustBundleVerificationAttemptReport | null
+): string | undefined {
+  if (configError) {
+    return mapTrustBundleConfigErrorCode(configError);
+  }
+
+  const normalizedReason = reason.toLowerCase();
+  if (
+    normalizedReason.includes("missing signature") ||
+    normalizedReason.includes("invalid signature") ||
+    normalizedReason.includes("signature invalid")
+  ) {
+    return TRUST_SIGNATURE_INVALID_CODE;
+  }
+
+  if (attemptReport) {
+    if (attemptReport.attempts.some((attempt) => attempt.reasonSkipped === "revoked")) {
+      return TRUST_ANCHOR_REVOKED_CODE;
+    }
+    if (attemptReport.attempts.some((attempt) => attempt.reasonSkipped === "expired")) {
+      return TRUST_BUNDLE_INVALID_CODE;
+    }
+  }
+
+  if (normalizedReason.includes("no active key for issuer")) {
+    return TRUST_BUNDLE_INVALID_CODE;
+  }
+
+  return undefined;
+}
+
 function verifyReceiptWithBundleIssuerKeys(
   receipt: Receipt,
   bundleIssuerKeys: TrustBundleIssuerKeySet,
@@ -1287,12 +1363,12 @@ export function processReceiptEnvelope(
   envelope: unknown,
   options: ProcessReceiptEnvelopeOptions = {}
 ): ProcessReceiptEnvelopeResult {
-  const mode = readMode(options);
   const trustVersion = readTrustVersion(options);
+  const mode = resolveModeForTrustVersion(readMode(options), trustVersion);
   const maxTimestampSkewSec = readMaxTimestampSkewSec(options);
   const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
   const { trustedKeys, bundleIssuerKeys, bundleRevocations, bundleHash, transparencyLog, configError } =
-    readTrustedKeys(options);
+    readTrustedKeys(options, trustVersion);
   const receipt = extractReceiptEnvelope(envelope);
   if (!receipt) {
     const reason = "missing receipt";
@@ -1308,7 +1384,8 @@ export function processReceiptEnvelope(
       mode,
       trustVersion,
       reason,
-      receipt: null
+      receipt: null,
+      ...(trustVersion === "v2" ? { errorCode: TRUST_BUNDLE_INVALID_CODE } : {})
     };
   }
 
@@ -1331,6 +1408,10 @@ export function processReceiptEnvelope(
     verification.verified || !configError
       ? verification.reason
       : `${verification.reason}; trusted key config: ${configError}`;
+  const strictErrorCode =
+    trustVersion === "v2" && !verification.verified
+      ? resolveStrictTrustErrorCode(reason, configError, bundleVerification?.attemptReport ?? null)
+      : undefined;
 
   if (verification.verified) {
     return {
@@ -1361,6 +1442,7 @@ export function processReceiptEnvelope(
     mode,
     trustVersion,
     reason,
-    receipt
+    receipt,
+    ...(strictErrorCode ? { errorCode: strictErrorCode } : {})
   };
 }

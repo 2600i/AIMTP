@@ -125,6 +125,10 @@ function normalizePolicyMode(value: unknown): RevocationPolicyMode {
   return "off";
 }
 
+function normalizeTrustVersion(value: unknown): "v1" | "v2" {
+  return normalizeNonEmptyString(value).toLowerCase() === "v2" ? "v2" : "v1";
+}
+
 function shouldLoadRevocations(env: NodeJS.ProcessEnv, mode: TrustDistributionMode): boolean {
   const revocationMode = normalizeRevocationDistributionMode(env.INTENTOS_REVOCATIONS);
   return (
@@ -431,7 +435,9 @@ export function loadRevocationsFromDistribution(
 ): RevocationDistributionResult {
   const mode = normalizeTrustDistributionMode(env.INTENTOS_TRUST_DISTRIBUTION);
   const distributionEnabled = shouldLoadRevocations(env, mode);
-  const policyMode = normalizePolicyMode(env.INTENTOS_REVOCATION_POLICY);
+  const policyMode = normalizeTrustVersion(env.INTENTOS_TRUST_VERSION) === "v2"
+    ? "enforce"
+    : normalizePolicyMode(env.INTENTOS_REVOCATION_POLICY);
   const proofMode = normalizeProofMode(env.INTENTOS_REVOCATION_PROOF);
 
   if (!distributionEnabled) {

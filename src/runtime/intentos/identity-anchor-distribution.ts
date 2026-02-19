@@ -51,6 +51,10 @@ function normalizePolicyMode(value: unknown): PolicyMode {
   return "off";
 }
 
+function normalizeTrustVersion(value: unknown): "v1" | "v2" {
+  return normalizeNonEmptyString(value).toLowerCase() === "v2" ? "v2" : "v1";
+}
+
 function identityDistributionEnabled(env: NodeJS.ProcessEnv, mode: TrustDistributionMode): boolean {
   return (
     env.INTENTOS_PROTOCOL_VERSION === "0.4" &&
@@ -223,7 +227,9 @@ export function loadIdentityAnchorsFromDistribution(
     };
   }
 
-  const policyMode = normalizePolicyMode(env.INTENTOS_RECEIPT_POLICY);
+  const policyMode = normalizeTrustVersion(env.INTENTOS_TRUST_VERSION) === "v2"
+    ? "enforce"
+    : normalizePolicyMode(env.INTENTOS_RECEIPT_POLICY);
   try {
     const snapshot = resolveTrustDistributionSnapshot(env);
     const sourcePath = snapshot?.identityAnchorsPath ?? null;
