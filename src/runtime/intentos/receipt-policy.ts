@@ -452,7 +452,7 @@ function resolveModeForTrustVersion(
   mode: ReceiptPolicyMode,
   trustVersion: ReceiptTrustVersion
 ): ReceiptPolicyMode {
-  return trustVersion === "v2" ? "enforce" : mode;
+  return mode;
 }
 
 function readTrustVersion(options: ProcessReceiptEnvelopeOptions): ReceiptTrustVersion {
@@ -1729,6 +1729,7 @@ export function processReceiptEnvelope(
 ): ProcessReceiptEnvelopeResult {
   const trustVersion = readTrustVersion(options);
   const mode = resolveModeForTrustVersion(readMode(options), trustVersion);
+  const failClosed = trustVersion === "v2";
   const maxTimestampSkewSec = readMaxTimestampSkewSec(options);
   const logger = options.logger ?? DEFAULT_POLICY_LOGGER;
   const { trustedKeys, bundleIssuerKeys, bundleRevocations, bundleHash, transparencyLog, configError } =
@@ -1743,7 +1744,7 @@ export function processReceiptEnvelope(
       appendTransparencyPolicyEvent(transparencyLog, "policy_reject", bundleHash ?? undefined, reason);
     }
     return {
-      accepted: mode !== "enforce",
+      accepted: failClosed ? false : mode !== "enforce",
       trusted: false,
       mode,
       trustVersion,
@@ -1845,7 +1846,7 @@ export function processReceiptEnvelope(
   }
 
   return {
-    accepted: mode !== "enforce",
+    accepted: failClosed ? false : mode !== "enforce",
     trusted: false,
     mode,
     trustVersion,

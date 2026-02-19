@@ -640,8 +640,8 @@ describe("IntentOS trust transparency log", () => {
         }
       }
     );
-    expect(result.accepted).toBe(true);
-    expect(result.trusted).toBe(true);
+    expect(result.accepted).toBe(false);
+    expect(result.trusted).toBe(false);
     expect(existsSync(logPath)).toBe(false);
   });
 });
