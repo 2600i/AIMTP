@@ -291,7 +291,75 @@ function parseRevocations(raw: unknown): TrustBundleRevocationsModel {
   };
 }
 
+function validateTrustStateIssuersShape(issuersRaw: unknown, codePrefix: string): void {
+  if (!isPlainObject(issuersRaw)) {
+    throwTrustError(TRUST_BUNDLE_INVALID, `${codePrefix}_must_be_object`);
+  }
+  for (const [issuerRaw, issuerEntryRaw] of Object.entries(issuersRaw)) {
+    const issuer = normalizeNonEmptyString(issuerRaw);
+    if (!issuer || !isPlainObject(issuerEntryRaw) || !Array.isArray(issuerEntryRaw.keys)) {
+      throwTrustError(TRUST_BUNDLE_INVALID, `${codePrefix}_entry_invalid`);
+    }
+    if (issuerEntryRaw.keys.length === 0) {
+      throwTrustError(TRUST_BUNDLE_INVALID, `${codePrefix}_keys_empty`);
+    }
+    issuerEntryRaw.keys.forEach((entry, index) => {
+      parseBundleKey(entry, `${codePrefix}_${issuer}_${index}`);
+    });
+  }
+}
+
+function validateTrustStateArrayShape(
+  state: Record<string, unknown>,
+  field: string,
+  parser: (entry: unknown, index: number) => void
+): void {
+  if (!Object.prototype.hasOwnProperty.call(state, field) || state[field] === undefined) {
+    return;
+  }
+  const value = state[field];
+  if (!Array.isArray(value)) {
+    throwTrustError(TRUST_BUNDLE_INVALID, `trust_state_${field}_must_be_array`);
+  }
+  value.forEach((entry, index) => parser(entry, index));
+}
+
+export function validateTrustStateShape(state: unknown): void {
+  if (!isPlainObject(state)) {
+    throwTrustError(TRUST_BUNDLE_INVALID, "trust_state_must_be_object");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(state, "issuers")) {
+    validateTrustStateIssuersShape(state.issuers, "trust_state_issuers");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(state, "keys") && state.keys !== undefined) {
+    if (!Array.isArray(state.keys)) {
+      throwTrustError(TRUST_BUNDLE_INVALID, "trust_state_keys_must_be_array");
+    }
+    state.keys.forEach((entry, index) => {
+      parseDeltaAddKeyEntry(entry, index);
+    });
+  }
+
+  validateTrustStateArrayShape(state, "anchors", (entry, index) => {
+    parseAnchor(entry, `trust_state_anchors_${index}`);
+  });
+
+  if (Object.prototype.hasOwnProperty.call(state, "revokedKeys") && state.revokedKeys !== undefined) {
+    parseStringArray(state.revokedKeys, "trust_state_revoked_keys_invalid", true);
+  }
+  if (Object.prototype.hasOwnProperty.call(state, "revokedAnchors") && state.revokedAnchors !== undefined) {
+    parseStringArray(state.revokedAnchors, "trust_state_revoked_anchors_invalid");
+  }
+
+  if (Object.prototype.hasOwnProperty.call(state, "revocations")) {
+    parseRevocations(state.revocations);
+  }
+}
+
 function parseBundle(raw: unknown): TrustBundleModel {
+  validateTrustStateShape(raw);
   if (!isPlainObject(raw)) {
     throwTrustError(TRUST_BUNDLE_INVALID, "delta_bundle_must_be_object");
   }
@@ -706,6 +774,7 @@ export function applyTrustBundleDeltaToPath(
     const message = error instanceof Error ? error.message : String(error);
     throwTrustError(TRUST_BUNDLE_INVALID, `delta_bundle_load_failed:${message}`);
   }
+  validateTrustStateShape(parsedBundle);
 
   const nextBundle = applyTrustBundleDelta(parsedBundle, delta, options);
   atomicWriteJson(resolvedPath, nextBundle);

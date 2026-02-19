@@ -47,7 +47,10 @@ import {
   computeBundleId,
   computeRevocationsId
 } from "./trust-ids";
-import { applyTrustBundleDeltaToPath } from "./trust-bundle-delta";
+import {
+  applyTrustBundleDeltaToPath,
+  validateTrustStateShape
+} from "./trust-bundle-delta";
 
 export type ReceiptPolicyMode = "off" | "warn" | "enforce";
 
@@ -438,6 +441,7 @@ function parseTrustedReceiptKeysBundle(raw: string): ParsedTrustBundle {
   if (!isPlainObject(parsed)) {
     throw new Error("trust_bundle_must_be_object");
   }
+  validateTrustStateShape(parsed);
 
   return {
     bundle: parsed,
@@ -541,6 +545,7 @@ function resolveEffectiveTrustBundlePath(
     applyTrustBundleDeltaToPath(statePath, parsed, { env, nowMs });
     return statePath;
   }
+  validateTrustStateShape(parsed);
 
   if (!statePath) {
     return sourcePath;
