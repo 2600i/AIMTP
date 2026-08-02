@@ -88,7 +88,7 @@ npm run conformance   # conformance kit on its own
 **Run the relay**
 ```sh
 AIMTP_API_KEY=dev-key node dist/runtime/relay.js
-# -> AIMTP relay listening on port 8787/aimtp
+# -> AIMTP relay listening on 0.0.0.0:8787/aimtp
 ```
 
 That is all you need to follow every example below. Useful overrides:
@@ -97,6 +97,7 @@ That is all you need to follow every example below. Useful overrides:
 |---|---|---|
 | `AIMTP_API_KEY` | *(none)* | Admin key. Requests without it get `401`. |
 | `PORT` | `8787` | Listen port. |
+| `AIMTP_BIND_HOST` | *(all interfaces)* | Bind address. Set to `127.0.0.1` when a reverse proxy on the same host is the only intended client. |
 | `AIMTP_ALLOWED_RECIPIENTS` | *(unset)* | Comma-separated recipient allowlist. **Unset means any well-formed recipient is accepted** and the relay logs an `open_mailbox_mode` warning at startup. Set this in any deployment you care about. |
 | `AIMTP_STORE` | `sqlite` | `sqlite`, `redis`, or `memory`. |
 | `INTENTOS` | *(off)* | Set to `on` to enable the IntentOS endpoints and UI at `/aimtp/intentos/ui`. |

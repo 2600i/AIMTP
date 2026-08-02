@@ -16,6 +16,7 @@ node dist/runtime/relay.js
 
 ## Configuration
 - `PORT` (default `8787`)
+- `AIMTP_BIND_HOST` (default: all interfaces; set `127.0.0.1` to bind loopback only)
 - `AIMTP_RELAY_PATH` (default `/aimtp`)
 - `AIMTP_MAX_BODY_BYTES` (default `1048576`)
 - `AIMTP_API_KEY` (shared admin key)

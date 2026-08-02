@@ -1776,9 +1776,34 @@ const server = http.createServer(async (req, res) => {
   recordCounter("enqueue", 1, { recipient, path: "relay" });
 });
 
-server.listen(port, () => {
-  console.log(`AIMTP relay listening on port ${port}${relayPath}`);
-});
+// Unset keeps the historical behaviour of binding every interface. Set to
+// 127.0.0.1 when the relay sits behind a reverse proxy on the same host, so a
+// network-level firewall is not the only thing keeping it off the internet.
+const bindHostRaw = process.env.AIMTP_BIND_HOST?.trim();
+const bindHost = bindHostRaw && bindHostRaw.length > 0 ? bindHostRaw : undefined;
+
+const onListening = () => {
+  console.log(
+    `AIMTP relay listening on ${bindHost ?? "0.0.0.0"}:${port}${relayPath}`
+  );
+  if (!bindHost) {
+    console.log(
+      JSON.stringify({
+        event: "bind_all_interfaces",
+        port,
+        message:
+          "Listening on all interfaces. Set AIMTP_BIND_HOST=127.0.0.1 when a " +
+          "reverse proxy on this host is the only intended client."
+      })
+    );
+  }
+};
+
+if (bindHost) {
+  server.listen(port, bindHost, onListening);
+} else {
+  server.listen(port, onListening);
+}
 
 let shutdownInProgress = false;
 function shutdown(reason: string) {
