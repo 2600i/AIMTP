@@ -12,6 +12,16 @@ this release changes nothing on the wire. See
 contract.
 
 ### Fixed
+- **IntentOS read endpoints bypassed API-key authentication.**
+  `GET /aimtp/intentos/intents`, `/tasks`, and `/intent/<id>` were handled
+  before `evaluateAuth` ran, so they answered without `X-AIMTP-KEY` entirely.
+  Capability checks were the only gate, and those are inert unless
+  `AIMTP_CAPABILITIES=on` with both `INTENTOS_MODE` and `AIMTP_CAP_MODE` set to
+  `enforce`. The endpoints now require the API key like every other data
+  endpoint, with capability checks retained as an additional, narrower gate.
+  Not previously exploitable — the endpoints returned hardcoded empty arrays —
+  but it became live exposure the moment they returned real data. Fixed in both
+  `src/runtime/relay.ts` and `runtime/http.js`.
 - **`POST /aimtp` rejected every documented recipient.** With no
   `AIMTP_ALLOWED_RECIPIENTS` configured, the endpoint fell through to an
   in-process registry lookup that only ever contained the hardcoded
@@ -56,6 +66,18 @@ contract.
   empty queue instead of inheriting `runtime/aimtp-mailbox.sqlite`.
 
 ### Added
+- **IntentOS intents/tasks are now backed by a real store.** `/intentos/intents`,
+  `/intentos/tasks`, and `/intentos/intent/<id>` returned hardcoded `[]`, so the
+  IntentOS Inbox UI could never display anything regardless of relay traffic.
+  Accepted envelopes are now projected onto an intent model
+  (`runtime/intentos/intent-store.js`, `src/runtime/intentos/intent-store.ts`)
+  with sqlite and in-memory backends selected by the existing `AIMTP_STORE`
+  knob. Intents are keyed by `metadata.aimtp.thread_id` when present and the
+  envelope id otherwise, so a request and its response collapse onto one intent
+  and one task row. The projection is read-only, is never allowed to fail
+  delivery, and prunes to `AIMTP_INTENTOS_MAX_INTENTS` (default 500).
+- `tests/intentos-intent-store.test.js` covering projection semantics, both
+  backends, sqlite persistence across reopen, pruning, and store-type parsing.
 - **Conformance kit** (`tests/conformance/`, `npm run conformance`) with 58
   checks across four suites: schema vector validation, canonical signing payload
   byte-equality, signature accept/reject behavior, and schema integrity.

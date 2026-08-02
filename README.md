@@ -100,6 +100,8 @@ That is all you need to follow every example below. Useful overrides:
 | `AIMTP_ALLOWED_RECIPIENTS` | *(unset)* | Comma-separated recipient allowlist. **Unset means any well-formed recipient is accepted** and the relay logs an `open_mailbox_mode` warning at startup. Set this in any deployment you care about. |
 | `AIMTP_STORE` | `sqlite` | `sqlite`, `redis`, or `memory`. |
 | `INTENTOS` | *(off)* | Set to `on` to enable the IntentOS endpoints and UI at `/aimtp/intentos/ui`. |
+| `AIMTP_INTENTOS_SQLITE_PATH` | `runtime/aimtp-intentos.sqlite` | Where the IntentOS projection is stored. Ignored when `AIMTP_STORE` is `memory` or `redis`. |
+| `AIMTP_INTENTOS_MAX_INTENTS` | `500` | Retained intents; the oldest are pruned past this. |
 
 Full reference: [`docs/runtime.md`](docs/runtime.md).
 
