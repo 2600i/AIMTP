@@ -106,9 +106,12 @@ def _build_envelope() -> Dict[str, Any]:
     }
 
 
-def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def _post_json(url: str, payload: Dict[str, Any], api_key: str = "") -> Dict[str, Any]:
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    req = Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["X-AIMTP-KEY"] = api_key
+    req = Request(url, data=data, headers=headers, method="POST")
 
     try:
         with urlopen(req, timeout=30) as resp:
@@ -163,10 +166,13 @@ def _format_relay_logs(stdout: str, stderr: str) -> str:
     return "\n".join(blocks).rstrip()
 
 
-def _start_relay(command: str, cwd: Path) -> subprocess.Popen:
+def _start_relay(command: str, cwd: Path, api_key: str = "") -> subprocess.Popen:
     args = shlex.split(command)
     if not args:
         _exit_with("AIMTP_RELAY_CMD is empty.")
+    env = dict(os.environ)
+    if api_key:
+        env["AIMTP_API_KEY"] = api_key
     try:
         return subprocess.Popen(
             args,
@@ -174,6 +180,7 @@ def _start_relay(command: str, cwd: Path) -> subprocess.Popen:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            env=env,
         )
     except FileNotFoundError as exc:
         _exit_with(f"Failed to start relay: {exc}")
@@ -235,6 +242,43 @@ def _validate_response(
     return ["response is not an object or array"]
 
 
+def _validate_acceptance(payload: Any, envelope_id: str) -> List[str]:
+    """POST /aimtp returns a 202 acceptance receipt, not an envelope."""
+    if not isinstance(payload, dict):
+        return ["acceptance response is not an object"]
+    errors: List[str] = []
+    if payload.get("status") != "accepted":
+        errors.append(f'expected status "accepted", got {payload.get("status")!r}')
+    if payload.get("queued") is not True:
+        errors.append(f'expected queued true, got {payload.get("queued")!r}')
+    if payload.get("id") != envelope_id:
+        errors.append(
+            f'acceptance id {payload.get("id")!r} does not match sent envelope {envelope_id!r}'
+        )
+    return errors
+
+
+def _get_json(url: str, api_key: str = "") -> Any:
+    headers = {}
+    if api_key:
+        headers["X-AIMTP-KEY"] = api_key
+    req = Request(url, headers=headers, method="GET")
+    try:
+        with urlopen(req, timeout=30) as resp:
+            body = resp.read().decode("utf-8")
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8") if exc.fp else ""
+        _exit_with(f"Relay returned HTTP {exc.code}: {body or exc.reason}")
+    except URLError as exc:
+        _exit_with(f"Failed to reach relay: {exc.reason}")
+    if not body:
+        return None
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        _exit_with(f"Relay returned invalid JSON: {exc}")
+
+
 def main() -> None:
     start_relay = _parse_start_relay(sys.argv[1:])
     root = Path(__file__).resolve().parents[2]
@@ -247,6 +291,9 @@ def main() -> None:
     envelope = _build_envelope()
     relay_url = os.getenv("AIMTP_RELAY_URL", "http://localhost:8787/aimtp")
     relay_cmd = os.getenv("AIMTP_RELAY_CMD", "node dist/runtime/relay.js")
+    # The relay is fail-closed: with no API key configured it rejects every
+    # request with 401. Use a demo key by default so this runs standalone.
+    api_key = os.getenv("AIMTP_API_KEY", "").strip() or "demo-key"
     relay_proc: Optional[subprocess.Popen] = None
     relay_started = False
     failed = False
@@ -255,7 +302,7 @@ def main() -> None:
 
     try:
         if start_relay:
-            relay_proc = _start_relay(relay_cmd, root)
+            relay_proc = _start_relay(relay_cmd, root, api_key)
             relay_started = True
 
         request_errors = _validation_errors(validator, envelope)
@@ -269,12 +316,40 @@ def main() -> None:
         if not _wait_for_port(host, port, timeout_seconds=5.0):
             _exit_with(f"Relay not ready on {host}:{port}")
 
-        response = _post_json(relay_url, envelope)
-        response_errors = _validate_response(validator, response)
-        print(f"response errors: {response_errors}")
+        # 1. POST the envelope. The relay validates and enqueues it, returning
+        #    a 202 acceptance receipt (not a response envelope).
+        response = _post_json(relay_url, envelope, api_key)
+        acceptance_errors = _validate_acceptance(response, envelope["id"])
+        print(f"acceptance errors: {acceptance_errors}")
+        if acceptance_errors:
+            _exit_with("Acceptance validation failed.")
 
-        if request_errors or response_errors:
+        # 2. Poll it back out of the mailbox and validate the round-tripped
+        #    envelope against the same schemas. This is the actual interop
+        #    proof: an envelope built in Python survives the Node relay
+        #    unchanged and still validates.
+        recipient = envelope["recipient"]
+        poll_url = f"{relay_url}/poll?recipient={recipient}&max=1"
+        polled = _get_json(poll_url, api_key)
+        if not isinstance(polled, list) or not polled:
+            _exit_with(f"Expected a leased message from poll, got: {polled!r}")
+
+        leased = polled[0]
+        round_tripped = leased.get("envelope")
+        response_errors = _validate_response(validator, round_tripped)
+        print(f"round-trip errors: {response_errors}")
+        if response_errors:
             _exit_with("Validation failed.")
+
+        if round_tripped.get("id") != envelope["id"]:
+            _exit_with(
+                f'round-tripped id {round_tripped.get("id")!r} != sent {envelope["id"]!r}'
+            )
+
+        # 3. Acknowledge the lease so the queue drains.
+        ack_url = f"{relay_url}/ack"
+        ack = _post_json(ack_url, {"recipient": recipient, "lease_id": leased["lease_id"]}, api_key)
+        print(f"ack: {ack.get('status')}")
 
         print("OK")
     except SystemExit:

@@ -1,6 +1,6 @@
 # AIMTP — Agentic Intelligent Message Transfer Protocol
 
-**Status:** stable `v0.3.0`; active branch `codex/v0.3.1-work` for controlled hardening/polish.
+**Wire version:** `aimtp/0.1` (frozen) · **Implementation:** `1.0.0` (stable)
 
 AIMTP is a **schema-first, transport-agnostic** protocol for structured
 agent-to-agent message and task exchange. It defines **what is sent and why**,
@@ -8,41 +8,18 @@ not **how it is transported**. Implementations can pick their own transports
 (HTTP, queues, files, etc.) while sharing a consistent envelope, message model,
 and task semantics.
 
-## Current Track
-- Stable release: `v0.3.0`
-- Work branch: `codex/v0.3.1-work` (controlled hardening/polish)
+## Two version numbers
 
-## 0.4 Alpha Series Summary
+| | Value | Meaning |
+|---|---|---|
+| **Wire version** | `aimtp/0.1` | The envelope `spec` field. The interoperability contract. Frozen. |
+| **Implementation** | `1.0.0` | This repo: reference relay, SDK, tooling. Semver. |
 
-The 0.4 alpha series introduces gated federation trust primitives (handshake, identity anchors, capability negotiation, and revocations) while preserving execution and receipt invariants. All new surfaces are inert by default.
-
-### v0.4.0-alpha.0
-- 0.4 foundation scaffold
-- Handshake skeleton
-- Identity anchors skeleton
-
-### v0.4.0-alpha.1
-- HTTP handshake transport
-- Peer signature verification (gated)
-
-### v0.4.0-alpha.2
-- Capability negotiation (gated)
-
-### v0.4.0-alpha.3
-- Negative cases
-- Policy matrix coverage
-
-### v0.4.0-alpha.4
-- Revocations artifact skeleton
-- Revocation enforcement (gated)
-- No admission/receipt/crypto semantic changes
-
-## Trust Surface (Operator Summary)
-- `v1` trust semantics are the frozen baseline.
-- `v2` is opt-in via `INTENTOS_TRUST_VERSION=v2` with policy modes `off|warn|enforce`.
-- `v3+` trust features are additive/experimental opt-ins (transparency, snapshots, distribution adapters, content-addressed IDs).
-
-Execution semantics and receipt/crypto behavior are unchanged; trust additions are opt-in and default inert.
+The wire version stays `aimtp/0.1` — every deployed peer expects that exact
+string, and the schemas pin it with `"const"`. Reaching implementation 1.0
+changes nothing on the wire. See
+[`docs/aimtp-1.0-freeze.md`](docs/aimtp-1.0-freeze.md) for the full stability
+contract and what it takes to claim conformance.
 
 **Goals**
 - Protocol stability with explicit versioning
@@ -51,25 +28,80 @@ Execution semantics and receipt/crypto behavior are unchanged; trust additions a
 - Interop across runtimes and teams
 - Extensible metadata without breaking changes
 
+## What you get
+
+- A frozen envelope + message model with JSON Schemas ([`schemas/`](schemas/))
+- A reference HTTP relay with at-least-once mailbox delivery: leasing, ack,
+  fail, retry, dead-letter
+- Chain-agnostic envelope signing with a normative canonical payload
+- A **conformance kit** that pins canonical signing bytes across implementations
+  ([`tests/conformance/`](tests/conformance/))
+- An opt-in, default-inert federation trust surface (handshake, identity
+  anchors, trust bundles, revocations, transparency log, bridge proofs)
+
+## Conformance
+
+Any implementation claiming `aimtp/0.1` conformance must agree byte-for-byte on
+the canonical signing payload. That is pinned by committed vectors, not prose:
+
+```sh
+npm run conformance
+```
+
+```
+AIMTP conformance report
+  wire version: aimtp/0.1
+  schema origin: https://aimtp.net
+
+  [PASS] schema     16 passed, 0 failed
+  [PASS] canonical  10 passed, 0 failed
+  [PASS] signing     8 passed, 0 failed
+  [PASS] integrity  24 passed, 0 failed
+
+OK: conformance (58 checks)
+```
+
+The vectors are plain JSON, so non-Node implementations can consume them
+directly. See [`tests/conformance/README.md`](tests/conformance/README.md).
+
+## Trust Surface (Operator Summary)
+- `v1` trust semantics are the frozen baseline.
+- `v2` is opt-in via `INTENTOS_TRUST_VERSION=v2` with policy modes `off|warn|enforce`.
+- `v3+` trust features are additive/experimental opt-ins (transparency, snapshots, distribution adapters, content-addressed IDs).
+
+Execution semantics and receipt/crypto behavior are unchanged; trust additions
+are opt-in and default inert. Per-release detail lives in
+[`CHANGELOG.md`](CHANGELOG.md).
+
 ## Quick Start
 
 **Prerequisites**
-- Node.js and npm
+- Node.js 20+ and npm
 
 ```sh
 npm ci
-npm test
 npm run build
-npm run smoke:rc
-npm run smoke:dist
+npm test              # full suite, including the conformance kit
+npm run conformance   # conformance kit on its own
 ```
 
-## Getting Started
-
-**Run the relay (optional)**
+**Run the relay**
 ```sh
 AIMTP_API_KEY=dev-key node dist/runtime/relay.js
+# -> AIMTP relay listening on port 8787/aimtp
 ```
+
+That is all you need to follow every example below. Useful overrides:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `AIMTP_API_KEY` | *(none)* | Admin key. Requests without it get `401`. |
+| `PORT` | `8787` | Listen port. |
+| `AIMTP_ALLOWED_RECIPIENTS` | *(unset)* | Comma-separated recipient allowlist. **Unset means any well-formed recipient is accepted** and the relay logs an `open_mailbox_mode` warning at startup. Set this in any deployment you care about. |
+| `AIMTP_STORE` | `sqlite` | `sqlite`, `redis`, or `memory`. |
+| `INTENTOS` | *(off)* | Set to `on` to enable the IntentOS endpoints and UI at `/aimtp/intentos/ui`. |
+
+Full reference: [`docs/runtime.md`](docs/runtime.md).
 
 ## Usage Examples
 
@@ -127,6 +159,8 @@ For full request/response schemas and error codes, see
 [`docs/runtime.md`](docs/runtime.md).
 
 ## Documentation
+- **[1.0 freeze and stability contract](docs/aimtp-1.0-freeze.md)** — what is frozen, what may extend, how to claim conformance
+- **[Conformance kit](tests/conformance/README.md)** — how to verify an implementation
 - [Release flow](docs/release-flow.md)
 - [Release governance](docs/release-governance.md)
 - [Trust evolution](docs/trust-evolution.md)
@@ -200,7 +234,13 @@ store choices, and scaling guidance.
 ## Testing
 
 ```sh
-npm test
+npm test              # full suite; ends with the conformance kit
+npm run conformance   # conformance kit only
+```
+
+Optional cross-language schema check (needs `pip install jsonschema`):
+```sh
+python3 tests/conformance/validate_schemas.py
 ```
 
 Opt-in trust distribution smoke (local FS + local HTTP only):
