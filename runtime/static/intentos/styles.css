@@ -70,6 +70,17 @@ body {
   resize: vertical;
 }
 
+.panel-capability input[type="password"] {
+  width: 100%;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+}
+
+.panel-capability h2 + label,
+.panel-capability .hint + h2 {
+  margin-top: 12px;
+}
+
 .capability-actions {
   display: flex;
   gap: 10px;
