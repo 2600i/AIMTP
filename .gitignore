@@ -19,3 +19,10 @@ runtime/*.db
 
 * 2.*
 * 3.*
+.gstack/
+
+# Nested git worktrees checked out inside the repo root
+AIMTP-wt-*/
+
+# Local working notes; contains unredacted host and API credentials
+AIMTP_Story/

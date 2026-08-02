@@ -2,6 +2,11 @@ import * as http from "http";
 import * as fs from "fs";
 import * as path from "path";
 import { createMailboxStore, parseMailboxStoreType, MailboxStore } from "./mailbox";
+import {
+  createIntentStore,
+  parseIntentStoreType,
+  IntentStore
+} from "./intentos/intent-store";
 
 type AuthStatus = "ok" | "missing" | "invalid";
 
@@ -1135,6 +1140,15 @@ if (recipientAllowlist.enabled) {
       count: recipientAllowlist.set.size
     })
   );
+} else {
+  console.log(
+    JSON.stringify({
+      event: "open_mailbox_mode",
+      detail:
+        "No AIMTP_ALLOWED_RECIPIENTS set: any well-formed recipient is accepted. " +
+        "Set AIMTP_ALLOWED_RECIPIENTS to restrict delivery to known agents."
+    })
+  );
 }
 
 const intentosEnabled = String(process.env.INTENTOS || "").trim().toLowerCase() === "on";
@@ -1151,6 +1165,18 @@ if (intentosEnabled) {
     intentosUiAssets = null;
   }
 }
+
+const intentosSqlitePathRaw = process.env.AIMTP_INTENTOS_SQLITE_PATH?.trim();
+const intentStore: IntentStore | null = intentosEnabled
+  ? createIntentStore({
+      type: parseIntentStoreType(process.env.AIMTP_STORE || process.env.AIMTP_MAILBOX_STORE),
+      sqlitePath:
+        intentosSqlitePathRaw && intentosSqlitePathRaw.length > 0
+          ? intentosSqlitePathRaw
+          : undefined,
+      maxIntents: parseOptionalEnvInt(process.env.AIMTP_INTENTOS_MAX_INTENTS)
+    })
+  : null;
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", "http://localhost");
@@ -1214,6 +1240,18 @@ const server = http.createServer(async (req, res) => {
       sendError(res, 404, "not_found", "Not Found");
       return;
     }
+    // IntentOS reads expose relay traffic, so they carry the same API key
+    // requirement as every other data endpoint. Capability checks below are an
+    // additional, narrower gate — not a replacement for authentication.
+    const intentosAuth = evaluateAuth(req, authConfig);
+    if (intentosAuth.enabled && !intentosAuth.ok) {
+      if (intentosAuth.status === "missing") {
+        sendError(res, 401, "unauthorized", "Missing API key");
+      } else {
+        sendError(res, 403, "forbidden", "Invalid API key");
+      }
+      return;
+    }
     const capabilityDecision = requireIntentosCapability(req, {
       pathname: requestPath,
       method,
@@ -1237,13 +1275,22 @@ const server = http.createServer(async (req, res) => {
       sendError(res, 405, "method_not_allowed", "Method not allowed");
       return;
     }
+    const listLimit = parseOptionalEnvInt(url.searchParams.get("limit") ?? undefined);
     if (requestPath === INTENTOS_INTENTS_PATH) {
-      sendJson(res, 200, { intents: [] });
+      sendJson(res, 200, { intents: intentStore ? intentStore.listIntents(listLimit) : [] });
       return;
     }
     if (requestPath === INTENTOS_TASKS_PATH) {
-      sendJson(res, 200, { tasks: [] });
+      sendJson(res, 200, { tasks: intentStore ? intentStore.listTasks(listLimit) : [] });
       return;
+    }
+    if (requestPath.startsWith(INTENTOS_INTENT_PREFIX)) {
+      const intentId = requestPath.slice(INTENTOS_INTENT_PREFIX.length).trim();
+      const detail = intentId && intentStore ? intentStore.getIntent(intentId) : null;
+      if (detail) {
+        sendJson(res, 200, detail);
+        return;
+      }
     }
     sendError(res, 404, "not_found", "Intent not found");
     return;
@@ -1693,15 +1740,13 @@ const server = http.createServer(async (req, res) => {
       logRequest(404);
       return;
     }
-  } else {
-    const handler = relay.registry.get(recipient);
-    if (!handler) {
-      sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
-        recipient
-      });
-      logRequest(404);
-      return;
-    }
+  } else if (!RECIPIENT_PATTERN.test(recipient)) {
+    // Open mailbox mode: with no allowlist configured, any well-formed
+    // recipient is accepted, matching /peek, /poll, /dead, and /aimtp/mailbox.
+    // Set AIMTP_ALLOWED_RECIPIENTS to restrict delivery to known agents.
+    sendError(res, 400, "invalid_request", "Recipient format is invalid", { recipient });
+    logRequest(400);
+    return;
   }
 
   if (!isRecipientAuthorized(authResult, recipient)) {
@@ -1711,6 +1756,15 @@ const server = http.createServer(async (req, res) => {
   }
 
   const enqueueResult = mailbox.enqueue(recipient, payload);
+  if (intentStore) {
+    try {
+      intentStore.recordEnvelope(payload);
+    } catch (err) {
+      // The IntentOS projection is a read-only view; never fail delivery for it.
+      const reason = err instanceof Error ? err.message : String(err);
+      console.log(JSON.stringify({ event: "intentos_record_failed", reason }));
+    }
+  }
   sendJson(res, 202, {
     status: "accepted",
     id: (payload as { id?: string }).id,
@@ -1722,9 +1776,34 @@ const server = http.createServer(async (req, res) => {
   recordCounter("enqueue", 1, { recipient, path: "relay" });
 });
 
-server.listen(port, () => {
-  console.log(`AIMTP relay listening on port ${port}${relayPath}`);
-});
+// Unset keeps the historical behaviour of binding every interface. Set to
+// 127.0.0.1 when the relay sits behind a reverse proxy on the same host, so a
+// network-level firewall is not the only thing keeping it off the internet.
+const bindHostRaw = process.env.AIMTP_BIND_HOST?.trim();
+const bindHost = bindHostRaw && bindHostRaw.length > 0 ? bindHostRaw : undefined;
+
+const onListening = () => {
+  console.log(
+    `AIMTP relay listening on ${bindHost ?? "0.0.0.0"}:${port}${relayPath}`
+  );
+  if (!bindHost) {
+    console.log(
+      JSON.stringify({
+        event: "bind_all_interfaces",
+        port,
+        message:
+          "Listening on all interfaces. Set AIMTP_BIND_HOST=127.0.0.1 when a " +
+          "reverse proxy on this host is the only intended client."
+      })
+    );
+  }
+};
+
+if (bindHost) {
+  server.listen(port, bindHost, onListening);
+} else {
+  server.listen(port, onListening);
+}
 
 let shutdownInProgress = false;
 function shutdown(reason: string) {

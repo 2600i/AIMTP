@@ -10,8 +10,12 @@ const {
   canonicalizeJsonValue,
   validateCapabilityShape,
   loadCapabilityFromInput,
-  buildIntentosRequestHeaders
+  buildIntentosRequestHeaders,
+  setApiKey
 } = require("../runtime/static/intentos/app.js");
+
+const TEST_API_KEY = "intentos-ui-test-key";
+const AUTH_HEADERS = { "X-AIMTP-KEY": TEST_API_KEY };
 
 function startServer(server) {
   return new Promise((resolve, reject) => {
@@ -179,10 +183,29 @@ async function main() {
   const clearedHeaders = buildIntentosRequestHeaders();
   assert.strictEqual(clearedHeaders["X-AIMTP-Capability"], undefined);
 
+  // The relay requires an API key on IntentOS reads, so the UI must be able to
+  // send one alongside any capability.
+  assert.strictEqual(buildIntentosRequestHeaders()["X-AIMTP-KEY"], undefined);
+  setApiKey(TEST_API_KEY);
+  assert.strictEqual(buildIntentosRequestHeaders()["X-AIMTP-KEY"], TEST_API_KEY);
+  setApiKey("  " + TEST_API_KEY + "  ");
+  assert.strictEqual(
+    buildIntentosRequestHeaders()["X-AIMTP-KEY"],
+    TEST_API_KEY,
+    "surrounding whitespace is trimmed"
+  );
+  setApiKey("");
+  assert.strictEqual(
+    buildIntentosRequestHeaders()["X-AIMTP-KEY"],
+    undefined,
+    "clearing the key drops the header"
+  );
+
   const ranOn = await withServer(
     {
       INTENTOS: "on",
-      INTENTOS_MODE: "log"
+      INTENTOS_MODE: "log",
+      AIMTP_API_KEY: TEST_API_KEY
     },
     async (port) => {
       const index = await getText(port, "/intentos/ui");
@@ -234,21 +257,44 @@ async function main() {
       assert.strictEqual(baseStyles.status, 200);
       assert.ok(baseStyles.body.includes(":root"));
 
-      const intents = await getText(port, "/intentos/intents");
+      // UI assets stay unauthenticated; the data endpoints behind them do not.
+      const unauthenticated = await getText(port, "/intentos/intents");
+      assert.strictEqual(unauthenticated.status, 401, "intents require an API key");
+      assert.strictEqual(JSON.parse(unauthenticated.body).code, "unauthorized");
+
+      const wrongKey = await getText(port, "/intentos/intents", {
+        headers: { "X-AIMTP-KEY": "wrong-key" }
+      });
+      assert.strictEqual(wrongKey.status, 403, "a bad API key is rejected");
+      assert.strictEqual(JSON.parse(wrongKey.body).code, "forbidden");
+
+      const unauthenticatedTasks = await getText(port, "/intentos/tasks");
+      assert.strictEqual(unauthenticatedTasks.status, 401, "tasks require an API key");
+
+      const intents = await getText(port, "/intentos/intents", { headers: AUTH_HEADERS });
       assert.strictEqual(intents.status, 200);
       assert.ok(Array.isArray(JSON.parse(intents.body).intents));
 
-      const tasks = await getText(port, "/intentos/tasks");
+      const tasks = await getText(port, "/intentos/tasks", { headers: AUTH_HEADERS });
       assert.strictEqual(tasks.status, 200);
       assert.ok(Array.isArray(JSON.parse(tasks.body).tasks));
 
-      const baseIntents = await getText(port, "/aimtp/intentos/intents");
+      const baseIntents = await getText(port, "/aimtp/intentos/intents", {
+        headers: AUTH_HEADERS
+      });
       assert.strictEqual(baseIntents.status, 200);
       assert.ok(Array.isArray(JSON.parse(baseIntents.body).intents));
 
-      const baseTasks = await getText(port, "/aimtp/intentos/tasks");
+      const baseTasks = await getText(port, "/aimtp/intentos/tasks", {
+        headers: AUTH_HEADERS
+      });
       assert.strictEqual(baseTasks.status, 200);
       assert.ok(Array.isArray(JSON.parse(baseTasks.body).tasks));
+
+      const unknownIntent = await getText(port, "/aimtp/intentos/intent/nope", {
+        headers: AUTH_HEADERS
+      });
+      assert.strictEqual(unknownIntent.status, 404, "unknown intent ids are 404");
     },
     { path: "/aimtp" }
   );
@@ -260,7 +306,8 @@ async function main() {
   const ranOnTrailing = await withServer(
     {
       INTENTOS: "on",
-      INTENTOS_MODE: "log"
+      INTENTOS_MODE: "log",
+      AIMTP_API_KEY: TEST_API_KEY
     },
     async (port) => {
       const index = await getText(port, "/intentos/ui");
@@ -279,11 +326,15 @@ async function main() {
       assert.strictEqual(baseApp.status, 200);
       assert.ok(baseApp.body.includes("const POLL_INTERVAL_MS"));
 
-      const baseIntents = await getText(port, "/aimtp/intentos/intents");
+      const baseIntents = await getText(port, "/aimtp/intentos/intents", {
+        headers: AUTH_HEADERS
+      });
       assert.strictEqual(baseIntents.status, 200);
       assert.ok(Array.isArray(JSON.parse(baseIntents.body).intents));
 
-      const baseTasks = await getText(port, "/aimtp/intentos/tasks");
+      const baseTasks = await getText(port, "/aimtp/intentos/tasks", {
+        headers: AUTH_HEADERS
+      });
       assert.strictEqual(baseTasks.status, 200);
       assert.ok(Array.isArray(JSON.parse(baseTasks.body).tasks));
     },
@@ -298,6 +349,7 @@ async function main() {
   const ranEnforce = await withServer(
     {
       INTENTOS: "on",
+      AIMTP_API_KEY: TEST_API_KEY,
       INTENTOS_MODE: "enforce",
       AIMTP_CAPABILITIES: "on",
       AIMTP_CAP_MODE: "enforce",
@@ -332,21 +384,29 @@ async function main() {
         ]
       });
 
-      const missingIntents = await getText(port, "/aimtp/intentos/intents");
+      // Authentication runs before capability checks, so these carry the key
+      // and are rejected purely for the missing capability.
+      const missingIntents = await getText(port, "/aimtp/intentos/intents", {
+        headers: AUTH_HEADERS
+      });
       assert.strictEqual(missingIntents.status, 403);
       assert.strictEqual(JSON.parse(missingIntents.body).code, "capability_required");
 
-      const missingTasks = await getText(port, "/aimtp/intentos/tasks");
+      const missingTasks = await getText(port, "/aimtp/intentos/tasks", {
+        headers: AUTH_HEADERS
+      });
       assert.strictEqual(missingTasks.status, 403);
       assert.strictEqual(JSON.parse(missingTasks.body).code, "capability_required");
 
-      const missingDetail = await getText(port, "/aimtp/intentos/intent/demo-intent-001");
+      const missingDetail = await getText(port, "/aimtp/intentos/intent/demo-intent-001", {
+        headers: AUTH_HEADERS
+      });
       assert.strictEqual(missingDetail.status, 403);
       assert.strictEqual(JSON.parse(missingDetail.body).code, "capability_required");
 
-      const readHeaders = {
+      const readHeaders = Object.assign({}, AUTH_HEADERS, {
         "X-AIMTP-Capability": JSON.stringify(readPresentation)
-      };
+      });
 
       const allowedIntents = await getText(port, "/aimtp/intentos/intents", {
         headers: readHeaders
@@ -366,9 +426,9 @@ async function main() {
       assert.strictEqual(deniedDetail.status, 403);
       assert.strictEqual(JSON.parse(deniedDetail.body).code, "capability_invalid");
 
-      const detailHeaders = {
+      const detailHeaders = Object.assign({}, AUTH_HEADERS, {
         "X-AIMTP-Capability": JSON.stringify(detailPresentation)
-      };
+      });
       const allowedDetail = await getText(port, "/aimtp/intentos/intent/demo-intent-001", {
         headers: detailHeaders
       });

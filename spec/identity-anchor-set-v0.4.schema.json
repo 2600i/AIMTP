@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://aimtp.dev/spec/identity-anchor-set-v0.4.schema.json",
+  "$id": "https://aimtp.net/spec/identity-anchor-set-v0.4.schema.json",
   "title": "IntentOS Identity Anchor Distribution Set v0.4.0 (Draft)",
   "description": "Opt-in draft trust artifact for distributing identity anchors via trust adapters.",
   "type": "object",

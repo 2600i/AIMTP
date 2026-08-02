@@ -16,6 +16,7 @@ node dist/runtime/relay.js
 
 ## Configuration
 - `PORT` (default `8787`)
+- `AIMTP_BIND_HOST` (default: all interfaces; set `127.0.0.1` to bind loopback only)
 - `AIMTP_RELAY_PATH` (default `/aimtp`)
 - `AIMTP_MAX_BODY_BYTES` (default `1048576`)
 - `AIMTP_API_KEY` (shared admin key)
@@ -51,6 +52,9 @@ node dist/runtime/relay.js
 - `AIMTP_TRUSTED_KEYS_FILE` (optional file with trusted key entries)
 - `AIMTP_SIGNATURE_CLOCK_SKEW_SEC` (default `0`)
 - `AIMTP_LOG_SUMMARY_INTERVAL_MS` (optional periodic log summary interval)
+- `INTENTOS` (`on` enables the IntentOS endpoints and UI; off by default)
+- `AIMTP_INTENTOS_SQLITE_PATH` (default `runtime/aimtp-intentos.sqlite`)
+- `AIMTP_INTENTOS_MAX_INTENTS` (default `500`)
 
 ### Recommended Redis Coordination Defaults
 | Variable | Recommended default | Notes |
@@ -248,6 +252,149 @@ Response `200`:
   }
 ]
 ```
+
+## IntentOS
+
+Opt-in and off by default. Set `INTENTOS=on` to enable a read-only projection of
+relay traffic plus a browser UI. Nothing here changes delivery: the projection is
+written after an envelope is accepted, and a projection failure is logged as
+`intentos_record_failed` and never fails the request.
+
+With `INTENTOS` unset, every path below returns `404`.
+
+### The projection
+
+Envelopes carry `intent` as a label, not an identifier, so intents are keyed by
+thread: `metadata.aimtp.thread_id` when present, and the envelope `id` otherwise.
+A request and its response therefore collapse onto **one** intent, and the
+response advances that intent's status rather than creating a second one.
+
+| Source | Becomes |
+| --- | --- |
+| `metadata.aimtp.thread_id`, else envelope `id` | intent id |
+| `message.content` | intent `goal` (first envelope wins; truncated at 500 chars) |
+| `task.status`, else `in_progress` for a request, else `received` | intent `status` |
+| each accepted envelope | one entry in the intent's event log |
+| `task.in_response_to`, else `task.id` | task id — a response collapses onto the task it answers |
+
+A task row keeps the `type` it was created with and only its `status` advances,
+so a completed request reads `type: request`, `status: succeeded`.
+
+Payloads with no usable id — raw `POST /aimtp/mailbox` bodies, for instance — are
+skipped rather than creating phantom intents. Only `POST /aimtp` feeds the
+projection.
+
+### Storage
+
+The backend follows `AIMTP_STORE`: `sqlite` (default) persists to
+`AIMTP_INTENTOS_SQLITE_PATH` and survives restarts; `memory` resets on restart.
+`redis` maps to the in-memory store rather than adding a second remote
+dependency for a read-only view. Intents prune oldest-first past
+`AIMTP_INTENTOS_MAX_INTENTS`, and each intent retains its most recent 100 events.
+
+### Authentication
+
+All three endpoints below require `X-AIMTP-KEY` exactly like the mailbox
+endpoints — `401 unauthorized` when absent, `403 forbidden` when wrong. When
+capabilities are enforced (`AIMTP_CAPABILITIES=on` with both `INTENTOS_MODE` and
+`AIMTP_CAP_MODE` set to `enforce`), a valid `X-AIMTP-Capability` is required as
+well; capability enforcement is an additional, narrower gate, not a replacement
+for the API key.
+
+The UI assets themselves are served unauthenticated — they contain no data.
+
+### `GET /aimtp/intentos/intents`
+Parameters:
+- `limit` (optional, default `100`)
+
+Response `200`:
+```json
+{
+  "intents": [
+    {
+      "id": "task-task-001",
+      "status": "succeeded",
+      "goal": "Summarize the Q3 pipeline",
+      "sender": "agent-a",
+      "recipient": "agent-b",
+      "created_at": "2026-08-02T12:30:00.000Z",
+      "updated_at": "2026-08-02T12:31:00.000Z"
+    }
+  ]
+}
+```
+
+### `GET /aimtp/intentos/tasks`
+Parameters:
+- `limit` (optional, default `100`)
+
+Response `200`:
+```json
+{
+  "tasks": [
+    {
+      "id": "task-001",
+      "intent_id": "task-task-001",
+      "type": "request",
+      "status": "succeeded",
+      "assigned_to": "agent-b",
+      "created_at": "2026-08-02T12:30:00.000Z",
+      "updated_at": "2026-08-02T12:31:00.000Z"
+    }
+  ]
+}
+```
+
+### `GET /aimtp/intentos/intent/<intent-id>`
+Returns one intent with its ordered event log. `404 not_found` for an unknown id.
+
+Response `200`:
+```json
+{
+  "intent": {
+    "id": "task-task-001",
+    "status": "succeeded",
+    "goal": "Summarize the Q3 pipeline",
+    "sender": "agent-a",
+    "recipient": "agent-b",
+    "created_at": "2026-08-02T12:30:00.000Z",
+    "updated_at": "2026-08-02T12:31:00.000Z"
+  },
+  "events": [
+    {
+      "intent_id": "task-task-001",
+      "seq": 1,
+      "type": "task.request",
+      "status": "",
+      "message": "Summarize the Q3 pipeline",
+      "envelope_id": "env-req-1",
+      "created_at": "2026-08-02T12:30:00.000Z"
+    },
+    {
+      "intent_id": "task-task-001",
+      "seq": 2,
+      "type": "task.response",
+      "status": "succeeded",
+      "message": "Pipeline summary ready",
+      "envelope_id": "env-resp-1",
+      "created_at": "2026-08-02T12:31:00.000Z"
+    }
+  ]
+}
+```
+
+### UI
+
+Served at `<relay-path>/intentos/ui` (for the default relay path,
+`http://127.0.0.1:8787/aimtp/intentos/ui`). The **Access** panel takes the relay
+API key and sends it as `X-AIMTP-KEY`; it is held in `sessionStorage`, so it
+survives a reload and dies with the tab. The **Capability** panel below it takes
+capability JSON for enforce mode. Without a key the panels stay empty and report
+`Relay requires an API key`.
+
+Because the key lives in the browser, treat this UI as a localhost/operator tool.
+Exposing it beyond a trusted network means handing an admin key to a browser
+context; use a scoped capability instead.
 
 ## Delivery Guarantees
 - At-least-once delivery with explicit leasing

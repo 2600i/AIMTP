@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://aimtp.dev/spec/trust-bundle-v0.4.schema.json",
+  "$id": "https://aimtp.net/spec/trust-bundle-v0.4.schema.json",
   "title": "IntentOS Trust Bundle v0.4.0 (Draft)",
   "description": "Composite trust artifact that can package anchors, revocations, and transparency metadata.",
   "type": "object",
@@ -25,7 +25,7 @@
       "additionalProperties": false,
       "properties": {
         "set": {
-          "$ref": "https://aimtp.dev/spec/identity-anchor-set-v0.4.schema.json"
+          "$ref": "https://aimtp.net/spec/identity-anchor-set-v0.4.schema.json"
         },
         "proof": {
           "type": "object"
@@ -40,10 +40,10 @@
       "additionalProperties": false,
       "properties": {
         "set": {
-          "$ref": "https://aimtp.dev/spec/revocation-set-v0.4.schema.json"
+          "$ref": "https://aimtp.net/spec/revocation-set-v0.4.schema.json"
         },
         "proof": {
-          "$ref": "https://aimtp.dev/spec/revocation-proof-v0.4.schema.json"
+          "$ref": "https://aimtp.net/spec/revocation-proof-v0.4.schema.json"
         }
       },
       "required": [

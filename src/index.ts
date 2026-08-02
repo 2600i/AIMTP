@@ -6,6 +6,7 @@ export * from "./protocol/federation-handshake";
 export * from "./protocol/identity-anchor";
 export * from "./protocol/revocation";
 export * from "./protocol/trust-bundle";
+export * from "./protocol/bridge-proof";
 export * from "./protocol/intentos-execution";
 export * from "./protocol/intentos-receipts";
 export * from "./runtime/registry";

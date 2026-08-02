@@ -16,6 +16,21 @@
     </header>
 
     <section class="panel panel-capability">
+      <h2>Access</h2>
+      <label for="api-key-input">API Key (X-AIMTP-KEY)</label>
+      <input
+        id="api-key-input"
+        type="password"
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="relay API key"
+      />
+      <div class="capability-actions">
+        <button id="api-key-save" type="button">Use Key</button>
+        <button id="api-key-clear" type="button">Clear</button>
+      </div>
+      <div id="api-key-status" class="hint">No API key set</div>
+
       <h2>Capability</h2>
       <label for="capability-input">IntentOS Capability (JSON)</label>
       <textarea

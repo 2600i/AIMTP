@@ -1,0 +1,23 @@
+{
+  "name": "empty-containers",
+  "description": "Empty objects and empty arrays MUST be preserved, not dropped.",
+  "spec_reference": "spec/aimtp-v0.1.md#canonical-signing-payload",
+  "envelope": {
+    "spec": "aimtp/0.1",
+    "id": "empty-1",
+    "timestamp": "2025-01-01T00:00:00Z",
+    "message": {
+      "id": "empty-msg-1",
+      "role": "user",
+      "content": "empty"
+    },
+    "metadata": {
+      "emptyObject": {},
+      "emptyArray": [],
+      "emptyString": ""
+    }
+  },
+  "canonical": "{\"id\":\"empty-1\",\"message\":{\"content\":\"empty\",\"id\":\"empty-msg-1\",\"role\":\"user\"},\"metadata\":{\"emptyArray\":[],\"emptyObject\":{},\"emptyString\":\"\"},\"spec\":\"aimtp/0.1\",\"timestamp\":\"2025-01-01T00:00:00Z\"}",
+  "canonical_sha256": "0b3d86089034d9f029388ddeff92a4f75282bbf6107aee1f07c8efa4d7bc2784",
+  "canonical_byte_length": 196
+}

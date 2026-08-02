@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
-import { createHash, sign } from "node:crypto";
 
 const COMPOSE_FILE = "docker-compose.federation-3hop.yml";
 const require = createRequire(import.meta.url);
@@ -63,35 +63,6 @@ const RELAY_CONFIG = Object.freeze({
     capabilityId: "fed3-relay-c-cap-001"
   }
 });
-
-function stableStringifyJson(value) {
-  if (value === null) {
-    return "null";
-  }
-  if (typeof value === "boolean") {
-    return value ? "true" : "false";
-  }
-  if (typeof value === "number") {
-    if (!Number.isFinite(value)) {
-      throw new Error("non_finite_number");
-    }
-    return Object.is(value, -0) ? "0" : JSON.stringify(value);
-  }
-  if (typeof value === "string") {
-    return JSON.stringify(value);
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableStringifyJson(entry)).join(",")}]`;
-  }
-  if (value !== null && typeof value === "object") {
-    const keys = Object.keys(value)
-      .filter((key) => value[key] !== undefined)
-      .sort();
-    const parts = keys.map((key) => `${JSON.stringify(key)}:${stableStringifyJson(value[key])}`);
-    return `{${parts.join(",")}}`;
-  }
-  throw new Error(`unsupported_value_type:${typeof value}`);
-}
 
 function normalizeBridgeFlag(value) {
   const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
@@ -215,42 +186,52 @@ function findCompletedReceipt(receipts, envelopeId) {
   );
 }
 
-function loadReceiptPolicyModule() {
-  const distPath = path.resolve(process.cwd(), "dist/runtime/intentos/receipt-policy.js");
+function loadRuntimeApi() {
+  const distPath = path.resolve(process.cwd(), "dist/index.js");
   if (!fs.existsSync(distPath)) {
-    throw new Error("Missing dist/runtime/intentos/receipt-policy.js. Run: npm run build");
+    throw new Error("Missing dist/index.js. Run: npm run build");
   }
   return require(distPath);
 }
 
-function computeKeyFingerprint(publicKeyPem) {
-  const normalizedPem = publicKeyPem.replace(/\r\n/g, "\n").trim();
-  return createHash("sha256").update(normalizedPem).digest("hex").slice(0, 12);
+function readJsonFromPath(filePath) {
+  return JSON.parse(fs.readFileSync(path.resolve(filePath), "utf8"));
 }
 
-function canonicalizeBridgeProofPayload(bridgeProofPayload) {
-  return Buffer.from(stableStringifyJson(bridgeProofPayload), "utf8");
-}
-
-function createBridgeProof(issuer, subject, subjectPublicKeyPem) {
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const payload = {
-    issuer,
-    subject,
-    subjectPublicKeyPem,
-    subjectKeyFingerprint: computeKeyFingerprint(subjectPublicKeyPem),
-    issuedAt,
-    expiresAt: issuedAt + 120,
-    sigAlg: "ed25519"
-  };
-  const issuerPrivateKey = RELAY_PRIVATE_KEYS[issuer];
-  if (!issuerPrivateKey) {
+function mintBridgeProofWithTool(issuer, subject, subjectPublicKeyPem) {
+  const issuerPrivateKeyPem = RELAY_PRIVATE_KEYS[issuer];
+  if (!issuerPrivateKeyPem) {
     throw new Error(`missing bridge private key for issuer: ${issuer}`);
   }
-  return {
-    ...payload,
-    signature: sign(null, canonicalizeBridgeProofPayload(payload), issuerPrivateKey).toString("base64")
-  };
+
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "aimtp-bridge-proof-demo3-"));
+  const subjectKeyPath = path.join(tempDir, "subject-public.pem");
+  const issuerKeyPath = path.join(tempDir, "issuer-private.pem");
+  const outputPath = path.join(tempDir, "bridge-proof.json");
+  fs.writeFileSync(subjectKeyPath, subjectPublicKeyPem, "utf8");
+  fs.writeFileSync(issuerKeyPath, issuerPrivateKeyPem, "utf8");
+
+  const result = runCommand(process.execPath, [
+    path.resolve(process.cwd(), "tools", "bridge-proof.mjs"),
+    "mint",
+    "--issuer",
+    issuer,
+    "--subject",
+    subject,
+    "--subject-key",
+    subjectKeyPath,
+    "--ttl",
+    "120",
+    "--out",
+    outputPath,
+    "--issuer-key",
+    issuerKeyPath
+  ]);
+  if (result.status !== 0) {
+    const details = `${(result.stdout || "").trim()} ${(result.stderr || "").trim()}`.trim();
+    throw new Error(`bridge proof tool mint failed${details ? `: ${details}` : ""}`);
+  }
+  return readJsonFromPath(outputPath);
 }
 
 function evaluateReceipt(
@@ -296,7 +277,12 @@ function printCaseResult(label, result, expectedAccepted) {
 async function main() {
   const trustVersion = normalizeTrustVersion(process.env.INTENTOS_TRUST_VERSION);
   const bridgeEnabled = normalizeBridgeFlag(process.env.FEDERATION_BRIDGE);
-  const { processReceiptEnvelope } = loadReceiptPolicyModule();
+  const bridgeUseTool = normalizeBridgeFlag(process.env.FEDERATION_BRIDGE_USE_TOOL);
+  const bridgeProofPath = typeof process.env.FEDERATION_BRIDGE_PROOF_PATH === "string"
+    ? process.env.FEDERATION_BRIDGE_PROOF_PATH.trim()
+    : "";
+  const runtimeApi = loadRuntimeApi();
+  const { processReceiptEnvelope } = runtimeApi;
 
   await waitForRelay("relay-a");
   await waitForRelay("relay-b");
@@ -349,7 +335,20 @@ async function main() {
   printCaseResult("Case 3: A verifies C", case3, false);
 
   if (bridgeEnabled && trustVersion === "v2") {
-    const bridgeProof = createBridgeProof("relay://b", "relay://c", RELAY_PUBLIC_KEYS["relay://c"]);
+    const bridgeProof = bridgeProofPath
+      ? readJsonFromPath(bridgeProofPath)
+      : bridgeUseTool
+        ? mintBridgeProofWithTool("relay://b", "relay://c", RELAY_PUBLIC_KEYS["relay://c"])
+        : runtimeApi.createBridgeProof(
+          {
+            issuer: "relay://b",
+            subject: "relay://c",
+            subjectPublicKeyPem: RELAY_PUBLIC_KEYS["relay://c"],
+            issuedAt: Math.floor(Date.now() / 1000),
+            expiresAt: Math.floor(Date.now() / 1000) + 120
+          },
+          RELAY_PRIVATE_KEYS["relay://b"]
+        );
     const case4 = evaluateReceipt(
       processReceiptEnvelope,
       receiptC,

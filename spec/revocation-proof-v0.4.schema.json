@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://aimtp.dev/spec/revocation-proof-v0.4.schema.json",
+  "$id": "https://aimtp.net/spec/revocation-proof-v0.4.schema.json",
   "title": "IntentOS Revocation Proof v0.4.0 (Draft)",
   "description": "Detached Ed25519 proof for a revocation set artifact.",
   "type": "object",

@@ -4,9 +4,115 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
-## [Unreleased]
-### Docs
-- Align README status and operator guidance with 0.3.x (`v0.3.0` stable, `codex/v0.3.1-work` active).
+## [v1.0.0]
+
+Implementation reaches 1.0. **The wire version is unchanged at `aimtp/0.1`** —
+this release changes nothing on the wire. See
+[`docs/aimtp-1.0-freeze.md`](docs/aimtp-1.0-freeze.md) for the stability
+contract.
+
+### Fixed
+- **IntentOS read endpoints bypassed API-key authentication.**
+  `GET /aimtp/intentos/intents`, `/tasks`, and `/intent/<id>` were handled
+  before `evaluateAuth` ran, so they answered without `X-AIMTP-KEY` entirely.
+  Capability checks were the only gate, and those are inert unless
+  `AIMTP_CAPABILITIES=on` with both `INTENTOS_MODE` and `AIMTP_CAP_MODE` set to
+  `enforce`. The endpoints now require the API key like every other data
+  endpoint, with capability checks retained as an additional, narrower gate.
+  Not previously exploitable — the endpoints returned hardcoded empty arrays —
+  but it became live exposure the moment they returned real data. Fixed in both
+  `src/runtime/relay.ts` and `runtime/http.js`.
+- **`POST /aimtp` rejected every documented recipient.** With no
+  `AIMTP_ALLOWED_RECIPIENTS` configured, the endpoint fell through to an
+  in-process registry lookup that only ever contained the hardcoded
+  `aimtp-relay` agent, so a relay started per the README returned
+  `404 unknown_recipient` for every envelope. It now validates the recipient
+  against `RECIPIENT_PATTERN`, consistent with `/peek`, `/poll`, `/dead`, and
+  `/aimtp/mailbox`. An explicit allowlist is still enforced exactly as before,
+  and auth is unchanged. Fixed in both `src/runtime/relay.ts` and
+  `runtime/http.js`.
+- Schema `$id` namespace was split across two domains (`aimtp.dev` for
+  envelope/message/bridge-proof and the five `spec/*.schema.json` files,
+  `aimtp.net` for the four mailbox schemas), making `$ref` resolution ambiguous
+  for outside implementers. All 16 `$id`s and absolute `$ref`s are now rooted at
+  `https://aimtp.net`.
+- `BRIDGE_PROOF_SCHEMA` in `src/protocol/bridge-proof.ts` carried a stale `$id`
+  that disagreed with `schemas/bridge-proof-v1.schema.json`.
+- **`npm run smoke:dist` was failing.** It wrote an unsigned trust bundle, but
+  strict v2 implies `requireSignature`, so the fs and http adapters both
+  rejected it with `TRUST_SIGNATURE_INVALID`. The bundle is now signed the same
+  way `tools/trust-bundle-sign.mjs` signs, with the signer supplied via
+  `INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON`. This was pre-existing: the
+  earlier `fix(smoke): align rc smoke with v2 fail-closed` change updated
+  `rc-smoke.mjs` and missed this one.
+- **Both shipped example clients returned 401 and could not run.** The relay is
+  intentionally fail-closed — with no `AIMTP_API_KEY` configured it rejects
+  every request rather than serving unauthenticated traffic — but neither
+  `examples/webhook-relay/demo.js` nor `examples/python-client/client.py` set a
+  key. Both now default to a demo key. The fail-closed behavior is unchanged.
+- **Both example READMEs documented a request/response model the relay no longer
+  has.** `examples/webhook-relay/README.md` claimed a registered agent's task
+  responses are returned in the HTTP response; the HTTP path actually enqueues
+  to the mailbox and returns `202`. Registering a handler has no effect on the
+  HTTP path (handler dispatch lives on `relay.receive()`). Both demos now walk
+  the real lifecycle — send, peek, poll, ack, drain, plus the rejection path —
+  and both READMEs describe the at-least-once queue model accurately.
+- The Python interop client validated the `202` acceptance receipt as though it
+  were an envelope, which could never succeed. It now validates the acceptance
+  shape, then polls the envelope back out of the mailbox and re-validates the
+  round trip against the same schemas — which is the actual cross-language
+  interop proof — then acks.
+- Both example demos pinned `AIMTP_STORE=memory` so repeated runs start from an
+  empty queue instead of inheriting `runtime/aimtp-mailbox.sqlite`.
+
+### Added
+- **IntentOS intents/tasks are now backed by a real store.** `/intentos/intents`,
+  `/intentos/tasks`, and `/intentos/intent/<id>` returned hardcoded `[]`, so the
+  IntentOS Inbox UI could never display anything regardless of relay traffic.
+  Accepted envelopes are now projected onto an intent model
+  (`runtime/intentos/intent-store.js`, `src/runtime/intentos/intent-store.ts`)
+  with sqlite and in-memory backends selected by the existing `AIMTP_STORE`
+  knob. Intents are keyed by `metadata.aimtp.thread_id` when present and the
+  envelope id otherwise, so a request and its response collapse onto one intent
+  and one task row. The projection is read-only, is never allowed to fail
+  delivery, and prunes to `AIMTP_INTENTOS_MAX_INTENTS` (default 500).
+- `tests/intentos-intent-store.test.js` covering projection semantics, both
+  backends, sqlite persistence across reopen, pruning, and store-type parsing.
+- **Conformance kit** (`tests/conformance/`, `npm run conformance`) with 58
+  checks across four suites: schema vector validation, canonical signing payload
+  byte-equality, signature accept/reject behavior, and schema integrity.
+  - 9 canonicalization vectors pinning the exact canonical bytes, SHA-256, and
+    byte length for key reordering, signature stripping, array order, nested
+    sorting, unicode and escapes, numeric forms, and empty containers.
+  - 8 signing vectors covering valid verification, order-independence,
+    legacy `key_id`/`signature` aliases, tampering, untrusted kid, unsupported
+    alg, and expiry windows — reproducible from a fixed ed25519 seed.
+  - Integrity checks asserting a single schema origin, resolvable absolute
+    `$ref`s, the frozen `aimtp/0.1` spec constant, and no drift between the
+    embedded and file copies of the bridge-proof schema.
+  - Runs as part of `npm test`, so CI covers it with no workflow change.
+- `tests/quickstart-open-mailbox.test.js` — regression guard pinning the
+  documented Quick Start: envelope POST, peek, poll, ack, malformed-recipient
+  rejection, allowlist enforcement, and auth enforcement.
+- `open_mailbox_mode` startup log so operators are told when no recipient
+  allowlist is configured.
+- `docs/aimtp-1.0-freeze.md` — stability contract separating the frozen wire
+  surface from the semver-tracked implementation surface.
+
+### Changed
+- `tests/conformance/validate_schemas.py` now auto-discovers all envelope
+  vectors by `valid-`/`invalid-` prefix instead of checking a hardcoded three,
+  and asserts the frozen spec version.
+- README rewritten for a first-time reader: correct status, the two-version
+  explanation, a Quick Start that works verbatim, and an environment variable
+  table documenting `PORT`, `AIMTP_ALLOWED_RECIPIENTS`, and `INTENTOS`, none of
+  which were previously documented in the Quick Start path.
+
+### Removed
+- 55 untracked macOS duplicate files (`* 2.ext`, `* 3.ext`) across `src/`,
+  `tests/`, `tools/`, `dist/`, `docs/`, `.github/workflows/`, and the repo root.
+  One of them, `src/protocol/federation-handshake 2.ts`, was a stale copy that
+  `tsc` compiled into `dist/` and shipped via the `files` array.
 
 ## [v0.1.14]
 ### Added

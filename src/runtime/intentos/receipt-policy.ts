@@ -8,6 +8,13 @@ import {
   verifyReceipt
 } from "../../protocol/intentos-receipts";
 import {
+  BRIDGE_PROOF_VERSION,
+  BridgeProof,
+  canonicalizeBridgeProofPayload,
+  computeBridgeProofSubjectFingerprint,
+  validateBridgeProofSchema
+} from "../../protocol/bridge-proof";
+import {
   closeSync,
   fsyncSync,
   mkdirSync,
@@ -151,20 +158,10 @@ interface TrustBundleRevocations {
   readonly issuerKeys: Readonly<Record<string, ReadonlySet<string>>>;
 }
 
-export interface BridgeProof {
-  readonly issuer: string;
-  readonly subject: string;
-  readonly subjectPublicKeyPem: string;
-  readonly subjectKeyFingerprint?: string;
-  readonly issuedAt: number;
-  readonly expiresAt: number;
-  readonly sigAlg: "ed25519";
-  readonly signature: string;
-}
-
 export interface BridgeProofVerificationResult {
   readonly valid: boolean;
   readonly reason: string;
+  readonly code?: string;
   readonly issuer?: string;
   readonly subject?: string;
   readonly subjectPublicKeyPem?: string;
@@ -257,26 +254,12 @@ function looksLikeBase64(value: string): boolean {
   }
 }
 
-function canonicalizeBridgeProofPayload(proof: Omit<BridgeProof, "signature">): Buffer {
-  return Buffer.from(
-    stableStringifyJson({
-      issuer: proof.issuer,
-      subject: proof.subject,
-      subjectPublicKeyPem: proof.subjectPublicKeyPem,
-      subjectKeyFingerprint: proof.subjectKeyFingerprint,
-      issuedAt: proof.issuedAt,
-      expiresAt: proof.expiresAt,
-      sigAlg: proof.sigAlg
-    }),
-    "utf8"
-  );
-}
-
 function normalizeBridgeProof(input: unknown): BridgeProof {
   if (!isPlainObject(input)) {
     throw new Error("bridge proof must be object");
   }
 
+  const version = normalizeNonEmptyString(input.version).toLowerCase();
   const issuer = normalizeNonEmptyString(input.issuer);
   const subject = normalizeNonEmptyString(input.subject);
   const subjectPublicKeyPemRaw = typeof input.subjectPublicKeyPem === "string"
@@ -284,6 +267,7 @@ function normalizeBridgeProof(input: unknown): BridgeProof {
     : "";
   const subjectPublicKeyPem = subjectPublicKeyPemRaw;
   const subjectKeyFingerprint = normalizeNonEmptyString(input.subjectKeyFingerprint).toLowerCase();
+  const subjectKeyKid = normalizeNonEmptyString(input.subjectKeyKid);
   const sigAlg = normalizeNonEmptyString(input.sigAlg).toLowerCase();
   const signature = normalizeNonEmptyString(input.signature);
   const issuedAt = parseOptionalUnixSeconds(input.issuedAt);
@@ -294,6 +278,9 @@ function normalizeBridgeProof(input: unknown): BridgeProof {
   }
   if (issuedAt === undefined || expiresAt === undefined) {
     throw new Error("bridge proof issuedAt/expiresAt invalid");
+  }
+  if (version !== BRIDGE_PROOF_VERSION) {
+    throw new Error("bridge proof version invalid");
   }
   if (!Number.isInteger(issuedAt) || !Number.isInteger(expiresAt)) {
     throw new Error("bridge proof issuedAt/expiresAt must be integer seconds");
@@ -310,17 +297,22 @@ function normalizeBridgeProof(input: unknown): BridgeProof {
   if (!looksLikeBase64(signature)) {
     throw new Error("bridge proof signature malformed");
   }
+  if (!subjectKeyFingerprint && !subjectKeyKid) {
+    throw new Error("bridge proof subject key selector missing");
+  }
 
-  const computedFingerprint = computeBundleKeyFingerprint(subjectPublicKeyPem).toLowerCase();
+  const computedFingerprint = computeBridgeProofSubjectFingerprint(subjectPublicKeyPem).toLowerCase();
   if (subjectKeyFingerprint && subjectKeyFingerprint !== computedFingerprint) {
     throw new Error("bridge proof subject fingerprint mismatch");
   }
 
   return {
+    version: BRIDGE_PROOF_VERSION,
     issuer,
     subject,
     subjectPublicKeyPem,
     ...(subjectKeyFingerprint ? { subjectKeyFingerprint } : {}),
+    ...(subjectKeyKid ? { subjectKeyKid } : {}),
     issuedAt,
     expiresAt,
     sigAlg: "ed25519",
@@ -380,22 +372,43 @@ export function verifyBridgeProof(
   trustedKeysOfA: TrustedReceiptPublicKeys,
   now: number = Date.now() / 1000
 ): BridgeProofVerificationResult {
+  const schemaValidation = validateBridgeProofSchema(bridgeProof);
+  if (!schemaValidation.valid) {
+    return {
+      valid: false,
+      code: TRUST_BUNDLE_INVALID_CODE,
+      reason: `bridge proof invalid: ${schemaValidation.error ?? "schema validation failed"}`
+    };
+  }
+
   let normalized: BridgeProof;
   try {
     normalized = normalizeBridgeProof(bridgeProof);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { valid: false, reason: `bridge proof invalid: ${message}` };
+    return {
+      valid: false,
+      code: TRUST_BUNDLE_INVALID_CODE,
+      reason: `bridge proof invalid: ${message}`
+    };
   }
 
   const nowSec = Number.isFinite(now) ? Math.trunc(now) : Math.trunc(Date.now() / 1000);
   if (nowSec < normalized.issuedAt || nowSec >= normalized.expiresAt) {
-    return { valid: false, reason: "bridge proof expired" };
+    return {
+      valid: false,
+      code: TRUST_BUNDLE_INVALID_CODE,
+      reason: "bridge proof expired"
+    };
   }
 
   const signerKey = normalizeNonEmptyString(trustedKeysOfA[normalized.issuer]);
   if (!signerKey) {
-    return { valid: false, reason: "bridge proof issuer not directly trusted" };
+    return {
+      valid: false,
+      code: TRUST_BUNDLE_INVALID_CODE,
+      reason: "bridge proof issuer not directly trusted"
+    };
   }
 
   let signatureValid = false;
@@ -403,10 +416,12 @@ export function verifyBridgeProof(
     signatureValid = verify(
       null,
       canonicalizeBridgeProofPayload({
+        version: normalized.version,
         issuer: normalized.issuer,
         subject: normalized.subject,
         subjectPublicKeyPem: normalized.subjectPublicKeyPem,
         subjectKeyFingerprint: normalized.subjectKeyFingerprint,
+        subjectKeyKid: normalized.subjectKeyKid,
         issuedAt: normalized.issuedAt,
         expiresAt: normalized.expiresAt,
         sigAlg: normalized.sigAlg
@@ -418,7 +433,11 @@ export function verifyBridgeProof(
     signatureValid = false;
   }
   if (!signatureValid) {
-    return { valid: false, reason: "bridge proof signature invalid" };
+    return {
+      valid: false,
+      code: TRUST_SIGNATURE_INVALID_CODE,
+      reason: "bridge proof signature invalid"
+    };
   }
 
   return {
@@ -1580,11 +1599,19 @@ function resolveStrictTrustErrorCode(
   if (
     normalizedReason.includes("missing signature") ||
     normalizedReason.includes("invalid signature") ||
-    normalizedReason.includes("signature invalid")
+    normalizedReason.includes("signature invalid") ||
+    normalizedReason.includes(TRUST_SIGNATURE_INVALID_CODE.toLowerCase())
   ) {
     return TRUST_SIGNATURE_INVALID_CODE;
   }
+  if (normalizedReason.includes(TRUST_ANCHOR_REVOKED_CODE.toLowerCase())) {
+    return TRUST_ANCHOR_REVOKED_CODE;
+  }
+  if (normalizedReason.includes(TRUST_BUNDLE_INVALID_CODE.toLowerCase())) {
+    return TRUST_BUNDLE_INVALID_CODE;
+  }
   if (
+    normalizedReason.includes("bridge proof invalid") ||
     normalizedReason.includes("bridge proof expired") ||
     normalizedReason.includes("bridge proof issuer not directly trusted") ||
     normalizedReason.includes("bridge proof subject mismatch")

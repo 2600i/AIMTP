@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aimtp.dev/schemas/envelope.schema.json",
+  "$id": "https://aimtp.net/schemas/envelope.schema.json",
   "title": "AIMTP Envelope",
   "type": "object",
   "required": ["spec", "id", "timestamp", "message"],

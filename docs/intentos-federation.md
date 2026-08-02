@@ -269,6 +269,43 @@ See the full audited matrix at [`docs/0.4-gates.md`](./0.4-gates.md).
 
 Note: current distribution tooling maps identity policy behavior through the existing receipt policy gate while preserving inert defaults.
 
+## Bridge Proofs
+
+Bridge proofs are signed federation assertions used only for explicit multi-hop bridging in Trust v2. They do not enable transitive trust by default.
+
+- Schema: [`schemas/bridge-proof-v1.schema.json`](../schemas/bridge-proof-v1.schema.json)
+- Activation: bridge proof is evaluated only when supplied to receipt policy (`INTENTOS_TRUST_BRIDGE_PROOF_JSON` or `trustBridgeProofJson` option).
+- Verification: malformed proof shape hard-fails as `TRUST_BUNDLE_INVALID`; bad signature hard-fails as `TRUST_SIGNATURE_INVALID`.
+
+Example bridge proof JSON:
+
+```json
+{
+  "version": "v1",
+  "issuer": "relay://b",
+  "subject": "relay://c",
+  "subjectPublicKeyPem": "-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----\n",
+  "subjectKeyFingerprint": "0123456789ab",
+  "issuedAt": 1771491000,
+  "expiresAt": 1771491120,
+  "sigAlg": "ed25519",
+  "signature": "MEUCIQ..."
+}
+```
+
+Tool commands:
+
+- Mint proof:
+  - `node tools/bridge-proof.mjs mint --issuer relay://b --subject relay://c --subject-key ./relay-c-public.pem --ttl 120 --issuer-key ./relay-b-private.pem --out ./bridge-proof.json`
+- Verify proof:
+  - `node tools/bridge-proof.mjs verify --proof ./bridge-proof.json --trusted-keys ./trusted-keys.json`
+
+3-hop demo integration:
+
+- Default bridge case (runtime-minted): `FEDERATION_BRIDGE=1 INTENTOS_TRUST_VERSION=v2 npm run demo:federation:3hop:v2`
+- Tool-minted bridge proof path: `FEDERATION_BRIDGE=1 FEDERATION_BRIDGE_PROOF_PATH=./bridge-proof.json INTENTOS_TRUST_VERSION=v2 npm run demo:federation:3hop:v2`
+- Tool mint inside demo: `FEDERATION_BRIDGE=1 FEDERATION_BRIDGE_USE_TOOL=1 INTENTOS_TRUST_VERSION=v2 npm run demo:federation:3hop:v2`
+
 ## Threat Model (Brief)
 - Forged receipts: an attacker fabricates `receipt.*` objects that look valid.
 - Replay: old but valid receipts are replayed to mislead state consumers.

@@ -36,6 +36,46 @@ const state = {
 
 let currentCapability = null;
 let currentCapabilityHeaderValue = "";
+let currentApiKey = "";
+
+const API_KEY_STORAGE_KEY = "aimtp.intentos.apiKey";
+
+function readStoredApiKey() {
+  try {
+    if (typeof sessionStorage === "undefined" || !sessionStorage) {
+      return "";
+    }
+    return sessionStorage.getItem(API_KEY_STORAGE_KEY) || "";
+  } catch (_err) {
+    return "";
+  }
+}
+
+function writeStoredApiKey(value) {
+  try {
+    if (typeof sessionStorage === "undefined" || !sessionStorage) {
+      return;
+    }
+    if (value) {
+      sessionStorage.setItem(API_KEY_STORAGE_KEY, value);
+    } else {
+      sessionStorage.removeItem(API_KEY_STORAGE_KEY);
+    }
+  } catch (_err) {
+    // Storage is best-effort; the key still applies for this page load.
+  }
+}
+
+function setApiKey(value) {
+  currentApiKey = typeof value === "string" ? value.trim() : "";
+  writeStoredApiKey(currentApiKey);
+  updateApiKeyStatus();
+  return currentApiKey;
+}
+
+function updateApiKeyStatus() {
+  setText("api-key-status", currentApiKey ? "API key set for this tab" : "No API key set");
+}
 
 function $(id) {
   if (typeof document === "undefined" || !document || typeof document.getElementById !== "function") {
@@ -188,11 +228,24 @@ function buildIntentosRequestHeaders() {
   if (currentCapabilityHeaderValue) {
     headers["X-AIMTP-Capability"] = currentCapabilityHeaderValue;
   }
+  if (currentApiKey) {
+    headers["X-AIMTP-KEY"] = currentApiKey;
+  }
   return headers;
 }
 
 function handleCapabilityResponseError(payload) {
   if (!payload || typeof payload !== "object") {
+    return;
+  }
+  if (payload.code === "unauthorized") {
+    updateApiKeyStatus();
+    setCapabilityError("Relay requires an API key. Enter it above and press Use Key.");
+    return;
+  }
+  if (payload.code === "forbidden") {
+    updateApiKeyStatus();
+    setCapabilityError("Relay rejected the API key. Check the value and try again.");
     return;
   }
   if (payload.code === "capability_required") {
@@ -511,7 +564,33 @@ function init() {
     }
     void refresh();
   };
+  const applyApiKey = () => {
+    setApiKey(queryValue("api-key-input", ""));
+    clearCapabilityError();
+    void refresh();
+  };
+  const clearApiKey = () => {
+    const input = $("api-key-input");
+    if (input) {
+      input.value = "";
+    }
+    setApiKey("");
+    void refresh();
+  };
+
+  // Restore a key stored earlier in this tab so a reload does not 401.
+  const storedApiKey = readStoredApiKey();
+  if (storedApiKey) {
+    currentApiKey = storedApiKey;
+    const input = $("api-key-input");
+    if (input) {
+      input.value = storedApiKey;
+    }
+  }
+  updateApiKeyStatus();
   updateCapabilityStatus();
+  $("api-key-save").addEventListener("click", applyApiKey);
+  $("api-key-clear").addEventListener("click", clearApiKey);
   $("capability-load").addEventListener("click", loadCapability);
   $("refresh-all").addEventListener("click", triggerRefresh);
   $("intents-status").addEventListener("change", triggerRefresh);
@@ -536,6 +615,7 @@ if (typeof module !== "undefined" && module.exports) {
     canonicalizeJsonValue,
     validateCapabilityShape,
     loadCapabilityFromInput,
-    buildIntentosRequestHeaders
+    buildIntentosRequestHeaders,
+    setApiKey
   };
 }

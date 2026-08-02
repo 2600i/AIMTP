@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import http from "node:http";
-import { generateKeyPairSync } from "node:crypto";
+import { createPrivateKey, generateKeyPairSync, sign } from "node:crypto";
 import { spawn } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -10,6 +10,7 @@ import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 
 const ISSUER = "relay://dist-smoke";
+const BUNDLE_SIGNER = "signer://dist-smoke-bundle";
 
 function dirnameFromImportMeta() {
   return path.dirname(fileURLToPath(import.meta.url));
@@ -207,6 +208,7 @@ async function main() {
   const trustTransparency = loadDistModule("dist/runtime/intentos/trust-transparency.js");
   const receiptPolicy = loadDistModule("dist/runtime/intentos/receipt-policy.js");
   const receipts = loadDistModule("dist/protocol/intentos-receipts.js");
+  const trustIds = loadDistModule("dist/runtime/intentos/trust-ids.js");
 
   const demoDir = options.dir;
   const bundlePath = path.join(demoDir, "bundle.json");
@@ -219,11 +221,15 @@ async function main() {
   const checkpointPubPath = path.join(demoDir, "checkpoint-pub.pem");
   const issuerPrivPath = path.join(demoDir, "issuer-priv.pem");
   const issuerPubPath = path.join(demoDir, "issuer-pub.pem");
+  const bundleSignerPrivPath = path.join(demoDir, "bundle-signer-priv.pem");
+  const bundleSignerPubPath = path.join(demoDir, "bundle-signer-pub.pem");
 
   let checkpointPublicKeyPem = "";
   let checkpoint = null;
   let logEntries = [];
   let issuerPrivateKeyPem = "";
+  let bundleSignerPublicKeyPem = "";
+  let trustedSignersJson = "";
   let server = null;
   let baseUrl = "";
 
@@ -236,6 +242,15 @@ async function main() {
   step("generate keys", () => {
     const checkpointKeys = generateKeyPairSync("ed25519");
     const issuerKeys = generateKeyPairSync("ed25519");
+    const bundleSignerKeys = generateKeyPairSync("ed25519");
+    fs.writeFileSync(
+      bundleSignerPrivPath,
+      bundleSignerKeys.privateKey.export({ type: "pkcs8", format: "pem" })
+    );
+    fs.writeFileSync(
+      bundleSignerPubPath,
+      bundleSignerKeys.publicKey.export({ type: "spki", format: "pem" })
+    );
     fs.writeFileSync(
       checkpointPrivPath,
       checkpointKeys.privateKey.export({ type: "pkcs8", format: "pem" })
@@ -254,12 +269,16 @@ async function main() {
     );
     checkpointPublicKeyPem = fs.readFileSync(checkpointPubPath, "utf8");
     issuerPrivateKeyPem = fs.readFileSync(issuerPrivPath, "utf8");
+    bundleSignerPublicKeyPem = fs.readFileSync(bundleSignerPubPath, "utf8");
+    trustedSignersJson = JSON.stringify({ [BUNDLE_SIGNER]: bundleSignerPublicKeyPem });
     return "ok";
   });
 
-  step("write trust bundle + revocations", () => {
+  step("write signed trust bundle + revocations", () => {
     const issuerPublicKeyPem = fs.readFileSync(issuerPubPath, "utf8");
-    writeJson(bundlePath, {
+    // v2 strict trust requires a signed bundle (requireSignature is implied by
+    // strict v2), so sign it the same way tools/trust-bundle-sign.mjs does.
+    const signableBundle = {
       bundleVersion: "v3",
       bundleId: "aimtp-dist-smoke-v3",
       issuedAtSec: 1767225600,
@@ -267,8 +286,17 @@ async function main() {
         [ISSUER]: {
           keys: [{ kid: "relay-dist", alg: "ed25519", publicKeyPem: issuerPublicKeyPem }]
         }
-      }
-    });
+      },
+      signer: BUNDLE_SIGNER,
+      sigAlg: "ed25519",
+      signature: undefined
+    };
+    const signature = sign(
+      null,
+      trustIds.canonicalizeTrustBundleForSigning(signableBundle),
+      createPrivateKey(fs.readFileSync(bundleSignerPrivPath, "utf8"))
+    ).toString("base64");
+    writeJson(bundlePath, { ...signableBundle, signature });
     writeJson(revocationsPath, {
       signers: [],
       issuerKeys: {}
@@ -320,6 +348,7 @@ async function main() {
         trustVersion: "v2",
         env: {
           INTENTOS_TRUST_DISTRIBUTION: "fs",
+          INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: trustedSignersJson,
           INTENTOS_TRUST_BUNDLE_PATH: bundlePath,
           INTENTOS_TRUST_BUNDLE_REVOCATIONS_PATH: revocationsPath,
           INTENTOS_TRUST_SNAPSHOT_POLICY: "warn",
@@ -408,6 +437,7 @@ async function main() {
       trustVersion: "v2",
       env: {
         INTENTOS_TRUST_DISTRIBUTION: "http",
+        INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON: trustedSignersJson,
         INTENTOS_TRUST_HTTP_BUNDLE_URL: `${baseUrl}/bundle.json`,
         INTENTOS_TRUST_HTTP_REVOCATIONS_URL: `${baseUrl}/revocations.json`,
         INTENTOS_TRUST_HTTP_HEAD_URL: `${baseUrl}/head.json`,

@@ -1,0 +1,18 @@
+{
+  "name": "key-order-independence",
+  "description": "Top-level and nested keys supplied in reverse order. Canonical output MUST be identical to minimal-envelope.",
+  "spec_reference": "spec/aimtp-v0.1.md#canonical-signing-payload",
+  "envelope": {
+    "message": {
+      "role": "user",
+      "id": "7f5e2d1c-1f48-4f87-9d2c-2e784684f2b3",
+      "content": "Hello from AIMTP"
+    },
+    "timestamp": "2025-01-01T00:00:00Z",
+    "id": "0b74b6f3-2a2f-4a58-9d0f-2c0d82b8d4f2",
+    "spec": "aimtp/0.1"
+  },
+  "canonical": "{\"id\":\"0b74b6f3-2a2f-4a58-9d0f-2c0d82b8d4f2\",\"message\":{\"content\":\"Hello from AIMTP\",\"id\":\"7f5e2d1c-1f48-4f87-9d2c-2e784684f2b3\",\"role\":\"user\"},\"spec\":\"aimtp/0.1\",\"timestamp\":\"2025-01-01T00:00:00Z\"}",
+  "canonical_sha256": "3eac80ecfe1fd8afc6c8fe22668f941c3a17f33fc9b68640be40578d55dfa82d",
+  "canonical_byte_length": 198
+}

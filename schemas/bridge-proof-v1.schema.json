@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://aimtp.net/schemas/bridge-proof-v1.schema.json",
+  "title": "AIMTP Bridge Proof v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "version",
+    "issuer",
+    "subject",
+    "subjectPublicKeyPem",
+    "issuedAt",
+    "expiresAt",
+    "sigAlg",
+    "signature"
+  ],
+  "properties": {
+    "version": {
+      "const": "v1"
+    },
+    "issuer": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subject": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjectPublicKeyPem": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjectKeyFingerprint": {
+      "type": "string",
+      "minLength": 1
+    },
+    "subjectKeyKid": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issuedAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "expiresAt": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "sigAlg": {
+      "const": "ed25519"
+    },
+    "signature": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9+/]+={0,2}$"
+    }
+  },
+  "anyOf": [
+    {
+      "required": [
+        "subjectKeyFingerprint"
+      ]
+    },
+    {
+      "required": [
+        "subjectKeyKid"
+      ]
+    }
+  ]
+}
