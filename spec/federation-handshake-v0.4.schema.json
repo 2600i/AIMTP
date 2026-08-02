@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://aimtp.dev/spec/federation-handshake-v0.4.schema.json",
+  "$id": "https://aimtp.net/spec/federation-handshake-v0.4.schema.json",
   "title": "IntentOS Federation Handshake v0.4.0 (Draft)",
   "description": "Opt-in draft payloads for local federation handshake scaffolding.",
   "oneOf": [

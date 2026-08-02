@@ -37,7 +37,7 @@ export interface CreateBridgeProofOptions {
 
 export const BRIDGE_PROOF_SCHEMA = Object.freeze({
   $schema: "http://json-schema.org/draft-07/schema#",
-  $id: "https://aimtp.dev/schemas/bridge-proof-v1.schema.json",
+  $id: "https://aimtp.net/schemas/bridge-proof-v1.schema.json",
   title: "AIMTP Bridge Proof v1",
   type: "object",
   additionalProperties: false,

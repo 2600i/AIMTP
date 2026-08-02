@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aimtp.dev/schemas/message.schema.json",
+  "$id": "https://aimtp.net/schemas/message.schema.json",
   "title": "AIMTP Message",
   "type": "object",
   "required": ["id", "role", "content"],

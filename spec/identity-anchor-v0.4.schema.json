@@ -1,6 +1,6 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "$id": "https://aimtp.dev/spec/identity-anchor-v0.4.schema.json",
+  "$id": "https://aimtp.net/spec/identity-anchor-v0.4.schema.json",
   "title": "IntentOS Identity Anchors v0.4.0 (Draft)",
   "description": "Opt-in draft payloads for identity anchor scaffolding.",
   "oneOf": [
