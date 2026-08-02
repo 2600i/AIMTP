@@ -1,0 +1,22 @@
+{
+  "name": "unicode-and-escapes",
+  "description": "Non-ASCII content, quotes, backslashes, newlines, and tabs. Output MUST be UTF-8 with standard JSON string escaping.",
+  "spec_reference": "spec/aimtp-v0.1.md#canonical-signing-payload",
+  "envelope": {
+    "spec": "aimtp/0.1",
+    "id": "uni-1",
+    "timestamp": "2025-01-01T00:00:00Z",
+    "message": {
+      "id": "uni-msg-1",
+      "role": "user",
+      "content": "quote:\" backslash:\\ newline:\n tab:\t emoji:🔐 cjk:中文"
+    },
+    "metadata": {
+      "key with spaces": "v",
+      "é": "accented"
+    }
+  },
+  "canonical": "{\"id\":\"uni-1\",\"message\":{\"content\":\"quote:\\\" backslash:\\\\ newline:\\n tab:\\t emoji:🔐 cjk:中文\",\"id\":\"uni-msg-1\",\"role\":\"user\"},\"metadata\":{\"key with spaces\":\"v\",\"é\":\"accented\"},\"spec\":\"aimtp/0.1\",\"timestamp\":\"2025-01-01T00:00:00Z\"}",
+  "canonical_sha256": "6648f3d429d716bd7c09d1ba142dd082bb4d17b78fce04be7978637e9917d469",
+  "canonical_byte_length": 236
+}

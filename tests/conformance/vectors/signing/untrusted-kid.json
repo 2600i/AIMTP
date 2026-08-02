@@ -1,0 +1,31 @@
+{
+  "name": "untrusted-kid",
+  "description": "A kid absent from the trust store MUST be rejected before crypto runs.",
+  "spec_reference": "spec/aimtp-v0.1.md#security",
+  "alg": "ed25519",
+  "kid": "conformance-ed25519-1",
+  "public_key_pem": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKvQIQSSa5o0l+N0fINLquZOVpOCtapfD9rZuXyZO3zc=\n-----END PUBLIC KEY-----\n",
+  "ed25519_seed_hex": "61696d74702d636f6e666f726d616e63652d746573742d6b65792d76312d3031",
+  "trusted_keys": {
+    "conformance-ed25519-1": "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAKvQIQSSa5o0l+N0fINLquZOVpOCtapfD9rZuXyZO3zc=\n-----END PUBLIC KEY-----\n"
+  },
+  "envelope": {
+    "spec": "aimtp/0.1",
+    "id": "sign-1",
+    "timestamp": "2025-01-01T00:00:00Z",
+    "sender": "agent-a",
+    "recipient": "agent-b",
+    "message": {
+      "id": "sign-msg-1",
+      "role": "user",
+      "content": "signed payload"
+    },
+    "signature": {
+      "alg": "ed25519",
+      "kid": "not-in-trust-store",
+      "sig": "4P0FVZRQeloIenTCN/yTuaNeLkeJE/ZroDmGYhbP70N9b353DhDXTA07o+eYMsdpu423fIc/lucbbf230ZQzDQ=="
+    }
+  },
+  "expect": "reject",
+  "expect_code": "signature_untrusted_key"
+}

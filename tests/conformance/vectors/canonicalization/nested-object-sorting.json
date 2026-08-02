@@ -1,0 +1,28 @@
+{
+  "name": "nested-object-sorting",
+  "description": "Keys MUST be sorted lexicographically at every level of nesting.",
+  "spec_reference": "spec/aimtp-v0.1.md#canonical-signing-payload",
+  "envelope": {
+    "spec": "aimtp/0.1",
+    "id": "nest-1",
+    "timestamp": "2025-01-01T00:00:00Z",
+    "message": {
+      "id": "nest-msg-1",
+      "role": "tool",
+      "content": "nested"
+    },
+    "metadata": {
+      "zulu": {
+        "yankee": 1,
+        "alpha": {
+          "charlie": true,
+          "bravo": null
+        }
+      },
+      "alpha": "first"
+    }
+  },
+  "canonical": "{\"id\":\"nest-1\",\"message\":{\"content\":\"nested\",\"id\":\"nest-msg-1\",\"role\":\"tool\"},\"metadata\":{\"alpha\":\"first\",\"zulu\":{\"alpha\":{\"bravo\":null,\"charlie\":true},\"yankee\":1}},\"spec\":\"aimtp/0.1\",\"timestamp\":\"2025-01-01T00:00:00Z\"}",
+  "canonical_sha256": "25d01c30515c52c1d3ba7926a7991b9d8edab4aff8b06d157d29f15dbfe74f43",
+  "canonical_byte_length": 219
+}

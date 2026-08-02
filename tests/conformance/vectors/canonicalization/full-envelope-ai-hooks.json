@@ -1,0 +1,68 @@
+{
+  "name": "full-envelope-ai-hooks",
+  "description": "Envelope exercising intent, actions, capabilities, negotiation, and task.",
+  "spec_reference": "spec/aimtp-v0.1.md#canonical-signing-payload",
+  "envelope": {
+    "spec": "aimtp/0.1",
+    "id": "full-1",
+    "timestamp": "2025-01-01T00:00:00Z",
+    "sender": "agent-a",
+    "recipient": "agent-b",
+    "intent": {
+      "type": "task.request",
+      "priority": "high",
+      "requires_ack": true,
+      "tags": [
+        "b",
+        "a"
+      ]
+    },
+    "actions": [
+      {
+        "id": "a1",
+        "type": "invoke",
+        "inputs": {
+          "tool": "summarize"
+        },
+        "constraints": {
+          "max_tokens": 100
+        }
+      }
+    ],
+    "capabilities": {
+      "offered": [
+        "summarize.v1"
+      ],
+      "required": [
+        "auth.v1"
+      ]
+    },
+    "negotiation": {
+      "offer": {
+        "price": 10
+      },
+      "accept": false
+    },
+    "task": {
+      "kind": "request",
+      "id": "task-1",
+      "type": "summarize.v1",
+      "input": {
+        "text": "hi"
+      },
+      "expects_response": true
+    },
+    "message": {
+      "id": "full-msg-1",
+      "role": "user",
+      "content": "do the thing",
+      "content_type": "text/plain"
+    },
+    "metadata": {
+      "trace_id": "trace-1"
+    }
+  },
+  "canonical": "{\"actions\":[{\"constraints\":{\"max_tokens\":100},\"id\":\"a1\",\"inputs\":{\"tool\":\"summarize\"},\"type\":\"invoke\"}],\"capabilities\":{\"offered\":[\"summarize.v1\"],\"required\":[\"auth.v1\"]},\"id\":\"full-1\",\"intent\":{\"priority\":\"high\",\"requires_ack\":true,\"tags\":[\"b\",\"a\"],\"type\":\"task.request\"},\"message\":{\"content\":\"do the thing\",\"content_type\":\"text/plain\",\"id\":\"full-msg-1\",\"role\":\"user\"},\"metadata\":{\"trace_id\":\"trace-1\"},\"negotiation\":{\"accept\":false,\"offer\":{\"price\":10}},\"recipient\":\"agent-b\",\"sender\":\"agent-a\",\"spec\":\"aimtp/0.1\",\"task\":{\"expects_response\":true,\"id\":\"task-1\",\"input\":{\"text\":\"hi\"},\"kind\":\"request\",\"type\":\"summarize.v1\"},\"timestamp\":\"2025-01-01T00:00:00Z\"}",
+  "canonical_sha256": "352a431130edcc7f3f5950bae7a3f29ad48ff0ba8f73035ccb8292780dc148cd",
+  "canonical_byte_length": 659
+}

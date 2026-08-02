@@ -1,0 +1,42 @@
+{
+  "name": "array-order-preserved",
+  "description": "Array element order MUST NOT be sorted.",
+  "spec_reference": "spec/aimtp-v0.1.md#canonical-signing-payload",
+  "envelope": {
+    "spec": "aimtp/0.1",
+    "id": "arr-1",
+    "timestamp": "2025-01-01T00:00:00Z",
+    "message": {
+      "id": "arr-msg-1",
+      "role": "assistant",
+      "content": "see attachments",
+      "attachments": [
+        {
+          "name": "z.txt",
+          "content_type": "text/plain",
+          "size": 3
+        },
+        {
+          "name": "a.txt",
+          "content_type": "text/plain",
+          "size": 1
+        }
+      ]
+    },
+    "actions": [
+      {
+        "id": "second",
+        "type": "notify",
+        "inputs": {}
+      },
+      {
+        "id": "first",
+        "type": "invoke",
+        "inputs": {}
+      }
+    ]
+  },
+  "canonical": "{\"actions\":[{\"id\":\"second\",\"inputs\":{},\"type\":\"notify\"},{\"id\":\"first\",\"inputs\":{},\"type\":\"invoke\"}],\"id\":\"arr-1\",\"message\":{\"attachments\":[{\"content_type\":\"text/plain\",\"name\":\"z.txt\",\"size\":3},{\"content_type\":\"text/plain\",\"name\":\"a.txt\",\"size\":1}],\"content\":\"see attachments\",\"id\":\"arr-msg-1\",\"role\":\"assistant\"},\"spec\":\"aimtp/0.1\",\"timestamp\":\"2025-01-01T00:00:00Z\"}",
+  "canonical_sha256": "737d65a69cf6ecb7ceac32cc285487ba12cc1cb8b2f776f7e468c44952437bd4",
+  "canonical_byte_length": 367
+}

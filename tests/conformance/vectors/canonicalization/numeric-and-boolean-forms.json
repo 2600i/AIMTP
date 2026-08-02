@@ -1,0 +1,28 @@
+{
+  "name": "numeric-and-boolean-forms",
+  "description": "Integers, negative numbers, zero, and booleans. Note: JSON has one number type; 1.0 canonicalizes as 1.",
+  "spec_reference": "spec/aimtp-v0.1.md#canonical-signing-payload",
+  "envelope": {
+    "spec": "aimtp/0.1",
+    "id": "num-1",
+    "timestamp": "2025-01-01T00:00:00Z",
+    "message": {
+      "id": "num-msg-1",
+      "role": "user",
+      "content": "numbers"
+    },
+    "metadata": {
+      "zero": 0,
+      "negative": -42,
+      "integral_float": 1,
+      "fractional": 1.5,
+      "large": 1234567890123,
+      "yes": true,
+      "no": false,
+      "nothing": null
+    }
+  },
+  "canonical": "{\"id\":\"num-1\",\"message\":{\"content\":\"numbers\",\"id\":\"num-msg-1\",\"role\":\"user\"},\"metadata\":{\"fractional\":1.5,\"integral_float\":1,\"large\":1234567890123,\"negative\":-42,\"no\":false,\"nothing\":null,\"yes\":true,\"zero\":0},\"spec\":\"aimtp/0.1\",\"timestamp\":\"2025-01-01T00:00:00Z\"}",
+  "canonical_sha256": "c5ea0f469eb9e7dc00c16e48ca149511e9e167e7ec6817a9776c16991f4f932e",
+  "canonical_byte_length": 263
+}
