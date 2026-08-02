@@ -1,10 +1,17 @@
 :root {
-  --bg: #f4f5f7;
-  --panel: #ffffff;
-  --ink: #1f2937;
-  --muted: #6b7280;
-  --border: #d1d5db;
-  --error: #b91c1c;
+  --bg: #0f1115;
+  --panel: #171a21;
+  --field: #0d1016;
+  --ink: #e6e8ec;
+  --muted: #98a2b3;
+  --border: #2b313c;
+  --accent: #4c8dff;
+  --active-bg: #1e2530;
+  --error: #f87171;
+
+  /* Tells the browser to render native scrollbars, focus rings, and form
+     controls dark; without it inputs keep a light chrome on dark panels. */
+  color-scheme: dark;
 }
 
 * {
@@ -66,7 +73,8 @@ body {
   padding: 8px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-size: 12px;
-  background: #fff;
+  color: var(--ink);
+  background: var(--field);
   resize: vertical;
 }
 
@@ -118,15 +126,33 @@ select {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 8px;
-  background: #fff;
+  color: var(--ink);
+  background: var(--field);
+}
+
+input::placeholder {
+  color: var(--muted);
 }
 
 button {
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 6px 10px;
-  background: #fff;
+  color: var(--ink);
+  background: var(--panel);
   cursor: pointer;
+}
+
+button:hover {
+  border-color: var(--accent);
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .hint {
@@ -155,8 +181,8 @@ button {
 }
 
 .list button.active {
-  border-color: #111827;
-  background: #f9fafb;
+  border-color: var(--accent);
+  background: var(--active-bg);
 }
 
 .mono {
