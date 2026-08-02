@@ -2733,18 +2733,13 @@ function createWebhookRelayServer(relay, options = {}) {
         logRequest(404);
         return;
       }
-    } else {
-      const handler =
-        relay && relay.registry && typeof relay.registry.get === "function"
-          ? relay.registry.get(recipient)
-          : null;
-      if (!handler) {
-        sendError(res, 404, "unknown_recipient", `Unknown recipient: ${recipient}`, {
-          recipient
-        });
-        logRequest(404);
-        return;
-      }
+    } else if (!RECIPIENT_PATTERN.test(recipient)) {
+      // Open mailbox mode: with no allowlist configured, any well-formed
+      // recipient is accepted, matching /peek, /poll, /dead, and /aimtp/mailbox.
+      // Set AIMTP_ALLOWED_RECIPIENTS to restrict delivery to known agents.
+      sendError(res, 400, "invalid_request", "Recipient format is invalid", { recipient });
+      logRequest(400);
+      return;
     }
 
     if (!isRecipientAuthorized(authResult, recipient)) {
