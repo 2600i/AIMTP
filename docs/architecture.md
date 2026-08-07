@@ -19,14 +19,23 @@ separates three concerns:
 
 ```mermaid
 flowchart LR
+  PA[Principal A] -. may be represented by .-> A
   A[Actor A<br/>agent, human, organization, service]
-  E[AIMTP envelope<br/>identity + authority + intent<br/>constraints + context + evidence]
-  T[Transport or relay]
-  B[Actor B<br/>local trust and policy]
+  E[AIMTP envelope<br/>identity + authority claims + intent<br/>constraints + context + evidence]
+  T[Transport, relay,<br/>or experimental federation]
+  B[Actor B<br/>agent, human, organization, service]
+  PB[Principal B] -. may be represented by .-> B
+  V[Receiver-local verification,<br/>trust, and policy]
+  PS[Recipient application<br/>or protected system]
   S[Settlement<br/>API, payment, reservation,<br/>database, contract, robot]
+  EV[Evidence<br/>signature, receipt, approval,<br/>audit or provenance]
 
   A --> E --> T --> B
-  B -. separately executed .-> S
+  B --> V
+  V -. if permitted .-> PS
+  PS -. separately executed .-> S
+  V -. record .-> EV
+  PS -. outcome .-> EV
 ```
 
 The envelope can carry claims and supporting evidence; the receiver remains
@@ -44,6 +53,7 @@ action.
 | Capability | Describe what a receiver offers or a request needs | Optional `capabilities`; experimental capability documents add enforcement semantics |
 | Conversation | Maintain state across exchanges | Application-defined metadata such as a thread identifier; IntentOS supplies an optional projection |
 | Trust | Establish confidence across keys, actors, and domains | Canonical signatures; opt-in federation, anchor, revocation, bundle, and bridge experiments |
+| Policy and approval | Decide whether a request may proceed or needs human review | Not defined by the base protocol; receiver-local policy or the Gateway MVP provides current implementation paths |
 | Evidence | Preserve support for decisions and outcomes | Signatures plus implementation-specific receipts, approvals, provenance, and audit events |
 | Settlement | Perform the real-world action | Explicitly outside the base protocol |
 
@@ -59,13 +69,22 @@ The Gateway is the concrete authorization boundary in this repository.
 ```mermaid
 flowchart TD
   A[External agent] -->|signed AIMTP request| G[AIMTP Agent Trust Gateway]
-  G --> I[Authenticate signature<br/>bind key to agent + principal]
-  I --> P[Evaluate trust, action,<br/>policy, and constraints]
-  P -->|ALLOW| S[Protected handler]
-  P -->|DENY| D[Reject + audit]
-  P -->|REQUIRE_APPROVAL| H[Operator approval]
+  G --> I[Authenticate signature<br/>and request freshness]
+  I --> R[Resolve configured agent,<br/>principal, and trust state]
+  I -->|invalid| D[Reject]
+  R -->|unknown or untrusted| D
+  R --> P[Evaluate requested action,<br/>configured authority/policy,<br/>and constraints]
+  P -->|ALLOW| S[Protected system<br/>current MVP: in-process handler]
+  P -->|DENY| D
+  P -->|REQUIRE_APPROVAL| H[Authenticated operator approval]
   H -->|approve after revalidation| S
   H -->|reject| D
+  P -. decision .-> E[Audit evidence]
+  H -. approval outcome .-> E
+  S -. execution outcome .-> E
+  D -. denial outcome .-> E
+  G -. request outcome .-> E
+  S -. future/external .-> X[Settlement<br/>not performed by the demo]
 ```
 
 Implemented Gateway decisions are `ALLOW`, `DENY`, and `REQUIRE_APPROVAL`.
@@ -125,10 +144,10 @@ completed product:
 External Agent
       |
       v
-Local AIMTP Gateway
+Optional local AIMTP Gateway
       |
       v
-Federated AIMTP relay  --->  remote relay or recipient
+Experimental AIMTP relay/federation  --->  remote relay or recipient
 ```
 
 Connecting Gateway authorization, relay delivery, remote-domain trust, and a

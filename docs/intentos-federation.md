@@ -14,19 +14,68 @@ they are not all part of the frozen `aimtp/0.1` base protocol and do not by
 themselves constitute a deployed federated network. For the current system
 boundary, see [`docs/architecture.md`](architecture.md).
 
+## Current repository role
+
+IntentOS remains a current implementation name in this repository, but it is
+not the name of the AIMTP architecture, a required protocol layer, or a separate
+authorization product. Checked-in code uses the name for three related opt-in
+surfaces:
+
+1. an execution-state and receipt model under `src/protocol/intentos-*`;
+2. a read-only relay projection and UI for intents and tasks; and
+3. experimental receipt-trust, handshake, identity-anchor, revocation,
+   trust-bundle, transparency, and bridge-proof work.
+
+Those surfaces share implementation history, not a claim that IntentOS owns
+identity, authority, policy, federation, or workflow execution for AIMTP.
+
+| Current AIMTP concern | What this IntentOS/federation material does | What it does not establish |
+| --- | --- | --- |
+| Identity | Verifies configured relay issuers, keys, peer proofs, and experimental identity anchors | A universal actor/principal identity system |
+| Principal and authority | Uses requester identities and experimental capability checks in specific profiles | Principal representation or delegated action authority for the Agent Trust Gateway |
+| Intent | Projects accepted envelopes into optional intent/task views and defines a separate execution-state model | New base `aimtp/0.1` intent semantics |
+| Trust | Applies local, explicitly configured receipt and relay trust decisions | Transitive or global trust between domains |
+| Evidence | Emits and verifies receipts, trust diagnostics, and transparency artifacts | Gateway approval/audit records or proof that a requested action was authorized |
+| Relay/federation | Provides gated handshake and trust-artifact experiments | A deployed federation or general cross-relay forwarding plane |
+
+The [`AIMTP Agent Trust Gateway`](trust-gateway.md) is separate. It evaluates
+agent identity, represented principal, requested action, configured trust,
+policy, constraints, and approvals before a protected handler runs. IntentOS
+receipt trust can supply evidence about execution events, but it does not grant
+Gateway authority and is not connected to the Gateway request path today.
+
+```text
+AIMTP envelope
+      |
+      v
+Reference relay
+  |-- optional IntentOS intent/task projection
+  |-- optional IntentOS execution receipts
+  `-- experimental federation/trust profiles
+
+AIMTP Agent Trust Gateway -------- separate authorization product/MVP
+```
+
 ## IntentOS v2 Reference Milestone
 
-IntentOS v2 trust semantics are now the reference opt-in trust layer for receipts. This is the line in the sand for v2 behavior.
+IntentOS v2 trust semantics are the current opt-in receipt-trust profile in this
+implementation.
 
 - v2 trust semantics are opt-in via `INTENTOS_TRUST_VERSION=v2`; v1 remains the default.
 - Deterministic canonicalization and Ed25519 signatures remain the trust proof basis.
 - Trusted acceptance requires issuer identity plus lookup in a trusted key map.
-- Policy gating remains `off|warn|enforce`.
+- Policy configuration remains `off|warn|enforce`; under v2, terminal-receipt
+  acceptance is fail-closed in every mode and the modes differ only in
+  diagnostics.
 - Execution semantics are unchanged (`admit/deny/dispatch/complete/fail` behavior is not altered by trust policy).
-- In this repository, `v0.1.39+` is the v2 reference line for operators and implementers.
-- For downstream forks without aligned version tags, use the post-v2-merge baseline commit as the reference line.
+- The historical v2 implementation baseline began in the `v0.1.39` release
+  line. Current behavior must be verified against the checked-in code and tests,
+  not inferred from that old package version.
 
-## Alpha Timeline
+## Historical Alpha Timeline
+
+This table records how the experimental 0.4 surfaces were introduced; it is not
+a current release plan.
 
 | Version | Additions |
 | --- | --- |
@@ -38,7 +87,9 @@ IntentOS v2 trust semantics are now the reference opt-in trust layer for receipt
 
 ## 0.4 Gate Matrix
 
-Authoritative 0.4 gate/default audit: [`docs/0.4-gates.md`](./0.4-gates.md).
+The recorded 0.4 gate/default matrix is in
+[`docs/0.4-gates.md`](./0.4-gates.md). That matrix is marked `NEEDS_UPDATE` and
+must be re-audited before use as current operator guidance.
 
 ## 0.4.0 handshake (draft)
 
@@ -324,8 +375,14 @@ Tool commands:
 - Confused deputy across relays: Relay A accepts receipt authority that only Relay B should have, or mixes trust domains.
 
 ## What Must Be Verifiable
-- Envelope trust (existing): the originating envelope must pass existing signature and capability validation policies.
+- Envelope evaluation is separate: schema validity, signature verification,
+  capability checks, and local authorization apply only where the receiving
+  profile configures them.
 - Receipt authenticity (federation): a receipt must be cryptographically attributable to a relay identity and bound to the referenced execution.
+
+A trusted receipt is evidence about an issuer and execution event. It does not
+prove that an agent represented a particular principal or had authority to
+perform the underlying action; those are separate receiver/Gateway decisions.
 
 Minimum verifiable claims for a receipt:
 - `envelopeId`
@@ -352,7 +409,12 @@ Verification by consumers:
 - Reject unknown issuer or untrusted key.
 - Key distribution must be explicit and pinned (allowlist, trust bundle, or out-of-band key registry). Trust-on-first-use is out of scope.
 
-## Audience and Cross-Relay Routing Boundaries
+## Conceptual Cross-Relay Routing Boundaries (Not Implemented)
+
+The repository does not implement a general cross-relay receipt forwarding
+plane. The following are design requirements for any future implementation,
+not claims about current runtime behavior.
+
 Audience mapping:
 - In federation, receipt audience should resolve to the requester trust domain and relay path, not only a local mailbox address.
 - A relay must only forward receipts to routes authorized for that audience domain.
@@ -365,9 +427,9 @@ Spoofing prevention requirements:
 ## Versioning and Compatibility
 - Current local-only receipts remain valid for single-relay operation.
 - Federation signing fields (`issuer`, `signature`) should be additive for backward compatibility.
-- Consumers must define policy:
-  - local mode: unsigned receipts permitted
-  - federation mode: unsigned receipts rejected
+- Consumers must select an explicit trust version and local policy. In v1,
+  unsigned receipts may remain untrusted artifacts; in v2, unsigned terminal
+  receipts are not accepted as trusted in any policy mode.
 - Any canonicalization/signature profile must be versioned and frozen before broad federation rollout.
 
 ## Runtime Receipt Policy (Opt-In)
@@ -376,12 +438,15 @@ Spoofing prevention requirements:
 - `INTENTOS_TRUSTED_RECEIPT_KEYS_JSON` (existing): JSON object mapping `issuer -> PEM public key`
 - `INTENTOS_TRUST_V2_MAX_TIMESTAMP_SKEW_SEC` (optional): max absolute clock skew for v2 timestamp sanity checks
 
-Policy behavior when a receipt envelope is processed:
+Policy behavior under the default v1 trust semantics:
 - `off`: receipt processing continues even if receipt verification fails or signature/issuer is missing.
 - `warn`: processing continues, and runtime emits a structured warning event (`event=intentos_receipt_policy_warning`).
 - `enforce`: unverified receipts are rejected from trusted receipt processing; runtime continues running and does not crash.
 
-Verified receipts are marked trusted and accepted in all modes.
+Under v2, terminal receipt acceptance is fail-closed in `off`, `warn`, and
+`enforce`; `warn` and `enforce` differ only in diagnostics. Verified receipts
+are marked trusted and accepted in all modes. This receipt policy does not
+authorize Gateway actions or alter IntentOS execution transitions.
 
 ## Migration: v1 → v2 (Operators)
 
@@ -575,7 +640,8 @@ behavior documented below as implementation-specific and non-normative.
 An experimental, opt-in trust bundle loader is available for receipt-policy trust key configuration only.
 
 - New optional env: `INTENTOS_TRUST_BUNDLE_PATH=/path/to/trust-bundle.json`
-- New optional env: `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=on|off` (default `off`)
+- New optional env: `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=on|off`
+  (default `off` under v1; strict v2 requires a signature regardless)
 - New optional env: `INTENTOS_TRUST_BUNDLE_TRUSTED_SIGNERS_JSON='{"signer://name":"<PUBLIC_KEY_PEM>"}'`
 - New optional env: `INTENTOS_TRUST_BUNDLE_SIGNER_ALLOWLIST='signer://a,signer://b'`
 - New optional env: `INTENTOS_TRUST_BUNDLE_REVOCATIONS_JSON='{"signers":[],"issuerKeys":{}}'`
@@ -592,9 +658,11 @@ An experimental, opt-in trust bundle loader is available for receipt-policy trus
   - Excludes revoked issuer keys before signature verification by matching computed key fingerprint.
   - Attempts signature verification against each active key in order until one succeeds.
 - Signed bundle behavior (bundle path only):
-  - Signature verification is opt-in and disabled by default.
-  - If `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=off`, unsigned bundles are accepted (backward compatible).
-  - If `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=on`, the bundle must include:
+  - Under v1, signature verification is opt-in and disabled by default.
+  - Under v1 with `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=off`, unsigned
+    bundles are accepted for backward compatibility.
+  - Under v2, or when `INTENTOS_TRUST_BUNDLE_REQUIRE_SIGNATURE=on`, the bundle
+    must include:
     - `bundleVersion: "v3"`
     - `bundleId` (string)
     - `issuedAtSec` (number)

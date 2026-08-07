@@ -10,6 +10,12 @@ constraints, context, and evidence between independent intelligent actors. An
 actor may be an AI agent, human, organization, or software service; a
 **principal** is the person or organization the actor represents.
 
+AIMTP exists because authentication alone does not answer whether an actor may
+perform a particular action for a principal under current constraints. At a
+boundary between independent principals, the receiver needs enough structured
+information to evaluate who is communicating, what outcome is requested, what
+authority is claimed, what policy applies, and what evidence should be kept.
+
 AIMTP focuses on the boundary between principals:
 
 ```text
@@ -29,6 +35,31 @@ payments, policy engines, or workflow systems. It can travel over or complement
 those systems while giving the receiver enough structured information to make
 its own trust and authorization decision.
 
+## Agent Trust Gateway
+
+The first concrete product in this direction is the
+[`AIMTP Agent Trust Gateway`](trust-gateway.md), an experimental external
+authorization boundary for autonomous agents:
+
+```text
+External agent
+      |
+      v
+AIMTP Agent Trust Gateway
+  authenticate identity and principal representation
+  evaluate action, trust, policy, and constraints
+  ALLOW | DENY | REQUIRE_APPROVAL
+  record approval and audit evidence
+      |
+      v
+Protected system (currently an in-process handler)
+```
+
+The Gateway MVP verifies signed requests, uses configured agent/principal/key
+bindings and action policies, supports operator approval, and records audit
+events. It is not mandatory for AIMTP, and it does not yet proxy to arbitrary
+external systems or execute real settlement.
+
 ## Protocol and product
 
 - **AIMTP Protocol:** the `aimtp/0.1` envelope, message/task semantics,
@@ -47,13 +78,36 @@ replaceable implementation choices.
 
 Canonical definitions for these terms live in [`GLOSSARY.md`](GLOSSARY.md).
 
-## Maturity
+## Relationship to adjacent systems
+
+- **MCP** roughly answers what tools and context a model can use. AIMTP asks who
+  the actor represents, what it wants, what authority and constraints apply,
+  and whether the receiver should trust and permit the interaction.
+- **A2A** addresses agent discovery, communication, and task collaboration;
+  AIMTP can complement it with cross-principal trust and authorization context.
+- **HTTP, APIs, messaging systems, and relays** can transport AIMTP or execute a
+  later action; they are not replaced by AIMTP.
+- **OAuth and PKI** can supply delegated-access and cryptographic building
+  blocks that an AIMTP implementation evaluates or references.
+
+See [`interoperability.md`](interoperability.md) for the boundary model.
+
+## What exists today
 
 The `aimtp/0.1` wire contract is frozen and backed by conformance vectors. The
 repository as a whole is a developer preview. The Gateway is an MVP, and the
 federation/trust extensions are experimental and default-inert. These labels
 describe different surfaces; implementation version `1.0.0` is not a blanket
 production-readiness claim.
+
+- **Implemented:** base envelope/message/task schemas, canonical signing,
+  conformance vectors, SDK/reference runtime, HTTP relay/mailbox delivery, and
+  the Agent Trust Gateway MVP.
+- **Experimental and opt-in:** IntentOS projection and receipts, capabilities,
+  federation handshake, identity anchors, revocations, trust bundles,
+  transparency tooling, and bridge proofs.
+- **Not implemented as an integrated topology:** Gateway forwarding through a
+  federated relay to a remote protected system.
 
 ## Start here
 

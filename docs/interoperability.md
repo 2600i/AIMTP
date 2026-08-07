@@ -24,6 +24,29 @@ These are divisions of responsibility, not competitive claims:
 The reference HTTP relay is one transport profile. Conformance to the base
 protocol does not require that relay or its mailbox endpoints.
 
+## Boundary patterns
+
+```mermaid
+flowchart LR
+  M[MCP or local tool/context environment] -. local integration .-> A
+  A[Actor A<br/>domain A] --> E[AIMTP envelope<br/>identity + intent + authority claims<br/>constraints + context + evidence]
+  E --> T[HTTP/API, A2A exchange,<br/>relay, or other transport]
+  T --> B[Actor B<br/>domain B]
+  T -. optional protected-action path .-> G[AIMTP Agent Trust Gateway]
+  G --> P[Protected system]
+```
+
+MCP generally remains inside an actor's local model/tool environment. HTTP,
+APIs, A2A exchanges, messaging infrastructure, or the reference relay can carry
+or accompany an AIMTP envelope. A receiving actor or optional Gateway then
+makes its own trust and authorization decision. The Gateway is not required for
+base protocol conformance.
+
+The repository's federation handshake and trust artifacts are experimental
+profiles for interactions across independently operated relay domains. They do
+not establish a deployed AIMTP network or make federation part of the base
+interoperability contract.
+
 ## Interoperability contract
 
 An `aimtp/0.1` implementation should:
