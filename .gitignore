@@ -30,3 +30,8 @@ AIMTP_Story/
 # Local working notes: kept out of the repository so they are not published
 # alongside the specification when it opens.
 notes/
+
+# Generated federation demo key material and the Compose files that carry it.
+# Minted locally by scripts/generate-federation-keys.mjs; never committed.
+runtime/federation-keys.json
+docker-compose.*.local.yml

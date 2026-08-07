@@ -7,20 +7,30 @@ import process from "node:process";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 
-const COMPOSE_FILE = "docker-compose.federation.yml";
+// Rendered by scripts/generate-federation-keys.mjs, which the demo npm script
+// runs first. Nothing key-shaped is committed.
+const COMPOSE_FILE = "docker-compose.federation.local.yml";
 const require = createRequire(import.meta.url);
-const RELAY_A_PUBLIC_KEY_PEM = [
-  "-----BEGIN PUBLIC KEY-----",
-  "MCowBQYDK2VwAyEAQfzjXFsveEOYsv55DKXnd7VcM66OXZbDq3ACaKMwdoo=",
-  "-----END PUBLIC KEY-----",
-  ""
-].join("\n");
-const RELAY_B_PUBLIC_KEY_PEM = [
-  "-----BEGIN PUBLIC KEY-----",
-  "MCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=",
-  "-----END PUBLIC KEY-----",
-  ""
-].join("\n");
+
+/**
+ * The relays' public keys, read from the same generated file the Compose
+ * services were rendered from — so the keys this demo verifies against are by
+ * construction the keys those relays are signing with.
+ */
+function loadFederationKeys() {
+  const keyFile = path.resolve(process.cwd(), "runtime/federation-keys.json");
+  if (!fs.existsSync(keyFile)) {
+    console.error(
+      `Missing ${keyFile}.\nRun: node scripts/generate-federation-keys.mjs`
+    );
+    process.exit(1);
+  }
+  return JSON.parse(fs.readFileSync(keyFile, "utf8"));
+}
+
+const FEDERATION_KEYS = loadFederationKeys();
+const RELAY_A_PUBLIC_KEY_PEM = FEDERATION_KEYS["relay://a"].publicKeyPem;
+const RELAY_B_PUBLIC_KEY_PEM = FEDERATION_KEYS["relay://b"].publicKeyPem;
 const DEMO_TRUSTED_RECEIPT_KEYS = Object.freeze({
   "relay://a": RELAY_A_PUBLIC_KEY_PEM,
   "relay://b": RELAY_B_PUBLIC_KEY_PEM
