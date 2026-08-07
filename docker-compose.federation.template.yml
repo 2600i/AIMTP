@@ -10,7 +10,7 @@ services:
     depends_on:
       - redis-a
     ports:
-      - "18787:8787"
+      - "127.0.0.1:18787:8787"
     environment:
       PORT: "8787"
       AIMTP_STORE: "redis"
@@ -37,7 +37,7 @@ services:
     depends_on:
       - redis-b
     ports:
-      - "28787:8787"
+      - "127.0.0.1:28787:8787"
     environment:
       PORT: "8787"
       AIMTP_STORE: "redis"

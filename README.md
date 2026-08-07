@@ -207,11 +207,20 @@ AIMTP is developed as **AIMTP by 2600i**. This repository is the protocol,
 schemas, conformance material, SDK/reference runtime, Gateway MVP, and backend
 implementation repository.
 
-The separate `2600i-aimtp-web` repository is the website/frontend presence. The
-canonical web identity is `aimtp.2600i.com`; `aimtp.net` is the vanity domain
-and is also used as the schema identifier namespace. Future names such as
-AIMTP Identity or AIMTP Trust Network describe product direction only unless a
-repository explicitly implements them.
+The separate `2600i-aimtp-web` repository is the website/frontend presence, and
+`aimtp.2600i.com` is the canonical web identity.
+
+`aimtp.net` is a **protocol namespace, not a vanity domain.** It is the `$id`
+origin for the JSON Schemas in this repository — `https://aimtp.net/schemas/…`,
+`https://aimtp.net/spec/…`, `https://aimtp.net/runtime/schemas/…` — with
+absolute `$ref`s resolving between them. Redirecting the domain wholesale to the
+marketing site would turn every schema identifier into a redirect. Known gap:
+those identifiers do not currently resolve to anything. Serving the schemas at
+their own `$id`s, while redirecting only the marketing paths, is the intended
+fix and is not yet wired up.
+
+Future names such as AIMTP Identity or AIMTP Trust Network describe product
+direction only unless a repository explicitly implements them.
 
 ## Historical direction
 

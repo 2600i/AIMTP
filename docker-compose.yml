@@ -11,10 +11,18 @@ services:
       dockerfile: Dockerfile
     depends_on:
       - redis
+    # Published on loopback only, like the gateway below. This compose file is a
+    # local development topology: no API key is set, so the relay is fail-closed
+    # and denies every request — but supplying AIMTP_API_KEY through a .env file
+    # would otherwise turn this into an authenticated relay reachable from the
+    # network. Put a reverse proxy in front of it before publishing it wider.
     ports:
-      - "8787:8787"
+      - "127.0.0.1:8787:8787"
     environment:
       PORT: "8787"
+      # Bind all interfaces *inside* the container so Docker can forward the
+      # loopback-published port to it. The host mapping above is the boundary.
+      AIMTP_BIND_HOST: "0.0.0.0"
       INTENTOS: "on"
       INTENTOS_MODE: "enforce"
       AIMTP_CAPABILITIES: "on"
