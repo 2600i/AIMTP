@@ -1,104 +1,145 @@
-# System Architecture
+# AIMTP Architecture
 
-## Overview
-AIMTP separates **protocol semantics** (envelopes, messages, tasks) from
-**transport** (HTTP, queues, files). The reference runtime provides an HTTP
-relay and mailbox store, but the protocol can be embedded in other systems.
+## Boundary model
 
-Key components:
-- **Schemas**: JSON Schemas that define the envelope and message model
-- **SDK**: helpers for building and validating envelopes
-- **Relay**: HTTP interface for enqueueing and polling messages
-- **Mailbox Store**: pluggable persistence (in-memory, SQLite, Redis)
+AIMTP is a trust and authorization envelope between independent intelligent
+actors. It separates three concerns:
 
-## Message Flow
+1. **Envelope semantics:** identity claims, intent, capability hints,
+   constraints, context, evidence, and extensible metadata.
+2. **Decision and delivery infrastructure:** a Gateway may authorize an action;
+   a relay or another transport may deliver an envelope.
+3. **Settlement:** the protected system performs the real-world action after an
+   authorization or agreement. Settlement is outside the base protocol.
+
+```mermaid
+flowchart LR
+  A[Actor A<br/>agent, human, organization, service]
+  E[AIMTP envelope<br/>identity + authority + intent<br/>constraints + context + evidence]
+  T[Transport or relay]
+  B[Actor B<br/>local trust and policy]
+  S[Settlement<br/>API, payment, reservation,<br/>database, contract, robot]
+
+  A --> E --> T --> B
+  B -. separately executed .-> S
+```
+
+The envelope can carry claims and supporting evidence; the receiver remains
+responsible for verification and policy. A valid signature authenticates bytes
+and a configured key, not the truth of every claim or permission for every
+action.
+
+## Conceptual layers
+
+| Layer | Responsibility | Base `aimtp/0.1` representation |
+| --- | --- | --- |
+| Identity | Identify the actor and represented principal | `sender`, signature key identifier, extensible metadata |
+| Authority | Describe or prove what the actor may do | No universal base object; capability profiles, metadata, and Gateway configuration provide current implementation paths |
+| Intent | State the requested outcome | `intent`, `task`, and optional `actions` |
+| Capability | Describe what a receiver offers or a request needs | Optional `capabilities`; experimental capability documents add enforcement semantics |
+| Conversation | Maintain state across exchanges | Application-defined metadata such as a thread identifier; IntentOS supplies an optional projection |
+| Trust | Establish confidence across keys, actors, and domains | Canonical signatures; opt-in federation, anchor, revocation, bundle, and bridge experiments |
+| Evidence | Preserve support for decisions and outcomes | Signatures plus implementation-specific receipts, approvals, provenance, and audit events |
+| Settlement | Perform the real-world action | Explicitly outside the base protocol |
+
+This table is an architecture map, not a claim that the frozen schema already
+defines every layer. In particular, principal representation and delegated
+authority need implementation profiles or future versioned protocol work.
+
+## Agent Trust Gateway
+
+The Gateway is the concrete authorization boundary in this repository.
+
+```mermaid
+flowchart TD
+  A[External agent] -->|signed AIMTP request| G[AIMTP Agent Trust Gateway]
+  G --> I[Authenticate signature<br/>bind key to agent + principal]
+  I --> P[Evaluate trust, action,<br/>policy, and constraints]
+  P -->|ALLOW| S[Protected handler]
+  P -->|DENY| D[Reject + audit]
+  P -->|REQUIRE_APPROVAL| H[Operator approval]
+  H -->|approve after revalidation| S
+  H -->|reject| D
+```
+
+Implemented Gateway decisions are `ALLOW`, `DENY`, and `REQUIRE_APPROVAL`.
+Every accepted request is freshness-checked and registered against replay.
+Approval revalidates identity, trust, and current policy before an exactly-once
+claim executes the handler. Operator approvals and audit reads require a
+configured operator token.
+
+Current boundary limitations matter:
+
+- Protected actions are in-process handlers; the included purchase action is a
+  deterministic simulation.
+- The Gateway does not yet proxy to an arbitrary API, payment system, relay, or
+  remote AIMTP recipient.
+- Agent/principal/key bindings and policies come from local configuration; there
+  is no global identity or delegated-authority service.
+- The Gateway is an MVP, not a general policy engine or complete enterprise IAM
+  system.
+
+See [`docs/trust-gateway.md`](trust-gateway.md) for its verified behavior and
+demo.
+
+## Reference relay
+
+The relay is a separate reference transport profile. It validates envelopes,
+enqueues them per recipient, and provides at-least-once delivery through lease,
+acknowledge, fail, retry, and dead-letter operations.
+
 ```mermaid
 sequenceDiagram
   participant Sender
   participant Relay
-  participant Mailbox
+  participant Store as Mailbox store
   participant Recipient
 
   Sender->>Relay: POST /aimtp (envelope)
-  Relay->>Mailbox: enqueue
+  Relay->>Store: validate and enqueue
   Recipient->>Relay: GET /aimtp/poll
-  Relay->>Mailbox: lease messages
-  Relay-->>Recipient: leased envelopes
+  Relay->>Store: lease envelope
+  Relay-->>Recipient: envelope + lease id
   Recipient->>Relay: POST /aimtp/ack or /aimtp/fail
-  Relay->>Mailbox: remove or requeue
+  Relay->>Store: remove, requeue, or dead-letter
 ```
 
-## Delivery Guarantees
-- **At-least-once** delivery with explicit leasing
-- Leases expire and are requeued with backoff
-- Messages exceeding `AIMTP_MAILBOX_MAX_RETRIES` move to the dead-letter queue
+Storage implementations are memory for ephemeral development, SQLite for
+single-process persistence, and Redis for shared mailbox state. The relay is
+not required by the protocol; AIMTP envelopes can use other transports.
 
-## Storage Options
-- **In-memory**: fast, ephemeral, for dev/test
-- **SQLite**: durable, single-node persistence
-- **Redis**: shared state for multi-instance deployments
+## Federation and long-term topology
 
-## Scaling Guidance
-- Run multiple relay instances behind a load balancer.
-- Use Redis storage so all relays share mailbox state.
-- Use `AIMTP_REDIS_KEY_PREFIX` to shard recipients across Redis databases.
-- If you need fan-out notifications, integrate Redis Pub/Sub or streams
-  externally. The relay does not require Pub/Sub to function.
+The repository contains opt-in federation handshake, identity-anchor,
+revocation, trust-bundle, transparency, and bridge-proof work. These surfaces
+are experimental and default-inert. They do not make the following topology a
+completed product:
 
-## Multi-Relay Safety
-- Relay instances use a per-recipient Redis lock so mailbox state transitions are serialized across instances.
-- Lease state is shared in Redis; `ack` and `fail` are valid from any relay instance.
-- Duplicate `ack`/`fail` calls for the same lease id are treated idempotently for a bounded TTL window.
-- Lock acquisition is bounded by timeout to avoid permanent stalls after instance failures.
-
-## Authentication and Signatures
-AIMTP envelopes may include an optional chain-agnostic `signature` block
-(`alg`, `kid`, `sig`, optional `created_at`, `expires_at`). The reference
-runtime verifies signatures over canonicalized envelope bytes (top-level
-`signature` removed, stable JSON key order, UTF-8) based on policy mode
-(`off`, `warn`, `enforce`).
-
-## AI Hooks (Data Model Only)
-Phase 4 introduces optional AI hook fields for richer machine-readable context:
-- `intent`: string (legacy) or structured object (`type`, `priority`, `deadline`, `requires_ack`, `tags`).
-- `actions`: ordered action hints (`id`, `type`, `inputs`, optional constraints/result branches).
-- `capabilities`: optional offered/required capability sets.
-- `negotiation`: optional offer/counter/accept/reject metadata.
-
-These fields are schema-level metadata only in v0.1:
-- No new endpoints.
-- No delivery guarantee changes.
-- No blockchain or provider-specific behavior.
-- Existing clients that only use string `intent` remain valid.
-
-Example envelope-level hook payload:
-```json
-{
-  "intent": {
-    "type": "task.request",
-    "priority": "high",
-    "requires_ack": true,
-    "tags": ["planning", "batch"]
-  },
-  "actions": [
-    {
-      "id": "act-1",
-      "type": "invoke",
-      "inputs": {"tool": "planner", "mode": "fast"}
-    }
-  ],
-  "capabilities": {
-    "required": ["planner.v1"],
-    "offered": ["summarizer.v2"]
-  },
-  "negotiation": {
-    "offer": {"max_latency_ms": 1500},
-    "counter": {"max_latency_ms": 1000}
-  }
-}
+```text
+External Agent
+      |
+      v
+Local AIMTP Gateway
+      |
+      v
+Federated AIMTP relay  --->  remote relay or recipient
 ```
 
-## Protocol Surfaces
-- **Spec**: `spec/aimtp-v0.1.md`
-- **Schemas**: `schemas/`
-- **Runtime**: `docs/runtime.md`
+Connecting Gateway authorization, relay delivery, remote-domain trust, and a
+real protected system remains planned integration work.
+
+## Security boundary
+
+Infrastructure outside the model can prevent actions routed through that
+infrastructure when authentication or policy fails. It cannot prevent actions
+that bypass the boundary, and AIMTP does not replace endpoint security,
+sandboxing, vulnerability management, identity systems, or model-safety work.
+See [`docs/security.md`](security.md).
+
+## Repository surfaces
+
+- **Normative:** `spec/aimtp-v0.1.md`, base schemas, conformance vectors.
+- **Reference implementation:** `src/`, `sdk/`, `runtime/`, relay docs and examples.
+- **Product MVP:** `src/runtime/trust-gateway.ts`, Gateway configuration, demo, and tests.
+- **Experimental profiles:** capability, IntentOS, federation, and trust material.
+- **Historical records:** versioned phase/checklist documents and legacy images.

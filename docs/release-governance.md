@@ -1,6 +1,9 @@
-# AIMTP v0.3.x Release Governance
+# Historical: AIMTP v0.3.x Release Governance
 
-This is the canonical operator workflow for `v0.3.x` releases.
+This was the canonical operator workflow for `v0.3.x` releases. It is retained
+for release history and must not be used as the current package-version or
+branch plan. Current release-tool behavior is documented in
+[`docs/release-flow.md`](release-flow.md).
 
 ## Policy Baseline
 

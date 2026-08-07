@@ -4,10 +4,33 @@
 - Draft specification
 - Version string: `aimtp/0.1`
 
+The `aimtp/0.1` wire contract is frozen for compatibility. “Draft” reflects the
+document's specification status, not permission to change the current schema in
+place. Breaking changes require a new wire version.
+
+## Positioning (Non-normative)
+
+AIMTP is an interoperable envelope for communicating intent, identity,
+authority, constraints, context, and evidence between independent intelligent
+actors, including agents, humans, organizations, and software services.
+
+The minimal v0.1 schema does not define a complete identity system, delegated-
+authority model, policy language, evidence ontology, conversation model, or
+settlement mechanism. Those concerns may be expressed through existing fields,
+implementation profiles, or future versioned specifications. Receivers decide
+which claims and evidence they trust.
+
+AIMTP does not replace transports or adjacent protocols such as HTTP, MCP, A2A,
+OAuth, PKI, email, APIs, or payment systems. It can complement them at a trust
+and authorization boundary. The reference relay and Agent Trust Gateway are
+implementations built around this envelope; neither is required for base
+protocol conformance.
+
 ## Goals
-- Simple JSON envelope for AI message transfer.
+- Minimal JSON envelope for structured interaction between intelligent actors.
 - Clear validation via JSON Schema.
 - Forward compatibility through permissive extension fields.
+- Separation of protocol semantics from transport and settlement.
 
 ## Conformance
 - Producers MUST emit JSON objects that validate against the AIMTP schemas.
@@ -21,7 +44,8 @@
 - Breaking changes require a new `spec` version (e.g., `aimtp/0.2`).
 
 ## Envelope
-The envelope wraps a single message and optional routing/security metadata.
+The envelope wraps a single message and optional routing, intent, task,
+capability, negotiation, security, and extension metadata.
 
 ### Required Fields
 - `spec`: Protocol version string. Must be `aimtp/0.1`.
@@ -41,12 +65,14 @@ The envelope wraps a single message and optional routing/security metadata.
 - `metadata`: Free-form object for extensions.
 
 ## Message
-The message represents a single AI message.
+The message carries one semantic payload within the envelope. It is not limited
+to model-generated text.
 
 ### Required Fields
 - `id`: Unique identifier for this message. Recommended UUID v4.
 - `role`: One of `system`, `user`, `assistant`, `tool`.
-- `content`: UTF-8 text content.
+- `content`: Any JSON value. Interpretation depends on `content_type` and the
+  receiving implementation.
 
 ### Optional Fields
 - `content_type`: MIME type for content. Default `text/plain`.
@@ -59,6 +85,10 @@ AI Hooks are optional, chain-agnostic data model fields for AI-readable intent
 and action planning. They are metadata only in v0.1 and do not change delivery
 semantics or transport behavior.
 
+The name “AI Hooks” is retained for wire-document compatibility. Humans,
+organizations, and software services may also originate or receive these
+fields.
+
 ### `intent`
 - Backward-compatible form: string (e.g., `task.request`).
 - Structured form: object with:
@@ -70,6 +100,9 @@ semantics or transport behavior.
 - Known `type` values include:
   - `task.request`, `task.response`, `task.update`, `task.cancel`, `event`, `query`
 - Implementations MAY use custom `type` strings.
+- Domain vocabularies MAY use values such as `REQUEST`, `QUERY`, `DELEGATE`,
+  `PROPOSE`, `ACCEPT`, `REJECT`, `COMMIT`, `CANCEL`, or `VERIFY`; these are not
+  a required universal enum in v0.1.
 
 ### `actions`
 - Optional array of action objects:
@@ -187,6 +220,23 @@ Recommended behavior for runtimes:
 Implementations MAY expose mailbox-specific HTTP endpoints to support leasing,
 acknowledgement, failure, retries, and dead-letter inspection. These endpoints
 are outside the core AIMTP envelope schema and may vary by deployment.
+
+Mailbox and relay terminology describes this reference delivery profile. It
+does not make AIMTP an email protocol.
+
+## Authorization and Settlement (Non-normative)
+
+A signature can establish that configured key material signed canonical
+envelope bytes. Authorization additionally asks whether that identity may
+perform the requested action for a represented principal under current policy
+and constraints. The base v0.1 schema intentionally does not mandate how a
+receiver answers that question.
+
+An implementation may return `ALLOW`, `DENY`, or `REQUIRE_APPROVAL`, but those
+decision values belong to the Agent Trust Gateway MVP rather than the frozen
+base protocol. After authorization or agreement, a payment, reservation, API
+call, database update, contract, or physical action is settlement and remains
+outside AIMTP.
 
 ## Runtime Trust Policy (Non-normative)
 Reference runtime policy modes:

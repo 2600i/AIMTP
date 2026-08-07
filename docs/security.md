@@ -4,6 +4,26 @@ AIMTP is transport-agnostic and does not mandate a specific security model.
 Implementations should provide confidentiality, integrity, and authentication
 appropriate to their environment.
 
+## Authorization boundary
+
+Authentication and authorization are different decisions. A valid credential
+or envelope signature can establish access or possession of configured key
+material; it does not by itself prove that an agent may perform a particular
+action for a principal under current constraints.
+
+The experimental Agent Trust Gateway provides an external enforcement point for
+requests routed through it. It binds a verified key to a configured agent and
+principal, evaluates local trust and action policy, applies constraints, and may
+require operator approval. This is defense in depth outside the model: an
+unauthorized request can be denied before its protected handler runs.
+
+The boundary is not comprehensive. It does not protect actions that bypass it,
+prove that message content is true, or prevent every exploit, compromise,
+prompt injection, credential theft, or model failure. AIMTP is not antivirus,
+EDR, a vulnerability scanner, a sandbox replacement, or a model-alignment
+system. See [`docs/trust-gateway.md`](trust-gateway.md) for the implemented MVP
+and its limitations.
+
 ## Signatures (Chain-Agnostic)
 AIMTP envelopes may include an optional `signature` object with:
 - `alg`: algorithm identifier (for example `ed25519` or `secp256k1`)

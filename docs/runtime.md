@@ -5,6 +5,11 @@ The relay is a minimal HTTP server that accepts AIMTP envelopes, validates them
 against the JSON Schemas, and enqueues them into a mailbox store per recipient.
 Recipients poll leased messages and must explicitly acknowledge or fail them.
 
+This is the reference asynchronous delivery profile, not the definition of
+AIMTP and not an authorization Gateway. Relay API-key access, schema validity,
+and signature verification must not be treated as proof that an actor is
+authorized for a downstream action.
+
 Delivery is **at-least-once**. Messages are leased on poll, retried with
 exponential backoff, and dead-lettered after the configured retry limit.
 
@@ -25,7 +30,7 @@ node dist/runtime/relay.js
 - `AIMTP_ALLOWED_RECIPIENTS` (comma-separated allowlist)
 - `AIMTP_ALLOWLIST_RECIPIENTS=0` (disable recipient allowlist even if set)
 - `AIMTP_ALLOWED_SENDERS` (comma-separated allowlist)
-- `AIMTP_STORE` (`sqlite` default, `redis` optional)
+- `AIMTP_STORE` (`sqlite` default; `redis` or `memory` optional)
 - `AIMTP_MAILBOX_STORE` (legacy alias; still accepted)
 - `AIMTP_MAILBOX_SQLITE_PATH` (default `runtime/aimtp-mailbox.sqlite`)
 - `AIMTP_MAILBOX_TTL_MS` (default `600000`)

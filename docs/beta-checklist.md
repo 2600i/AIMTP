@@ -1,4 +1,8 @@
-# AIMTP 0.3.0-beta – Operator Checklist
+# Historical: AIMTP 0.3.0-beta Operator Checklist
+
+> Preserved as a release record for the 0.3.0 beta line. It is not the current
+> setup, security, or release checklist. See [`README.md`](../README.md) and
+> [`docs/operations.md`](operations.md).
 
 ## What’s default-off (opt-in only)
 

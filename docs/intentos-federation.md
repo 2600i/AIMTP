@@ -2,6 +2,11 @@
 
 This document defines federation security boundaries for IntentOS receipts. It is intentionally minimal: boundaries, verification, and compatibility constraints only.
 
+These are opt-in implementation profiles and experiments layered around AIMTP;
+they are not all part of the frozen `aimtp/0.1` base protocol and do not by
+themselves constitute a deployed federated network. For the current system
+boundary, see [`docs/architecture.md`](architecture.md).
+
 ## IntentOS v2 Reference Milestone
 
 IntentOS v2 trust semantics are now the reference opt-in trust layer for receipts. This is the line in the sand for v2 behavior.
@@ -553,7 +558,10 @@ This section defines the versioned successor to frozen v1 semantics. v1 remains 
 
 ## IntentOS v3 Trust (Draft)
 
-IntentOS v3 trust design is currently captured as a draft proposal for structured Trust Bundles, intended to support portable issuer trust configuration with multi-key rotation and optional validity windows. See `spec/intentos-v3-trust-draft.md` for the draft structure and resolution model. Core v3 trust semantics remain draft-only and non-normative.
+IntentOS v3 trust work is represented by the experimental bundle loader and the
+checked-in [`spec/trust-bundle-v0.4.schema.json`](../spec/trust-bundle-v0.4.schema.json).
+There is no separate v3 normative specification in this repository. Treat the
+behavior documented below as implementation-specific and non-normative.
 
 ## v3 Bundle Loader (Experimental)
 
@@ -755,12 +763,12 @@ Operational guidance (checkpoint key rotation):
 - During rotation windows, verify with the currently active public key configured in `INTENTOS_TRANSPARENCY_CHECKPOINT_PUBLIC_KEY`.
 - Preserve old checkpoints for audit history; they remain historical artifacts even after key rotation.
 
-## Trust Roadmap (v3, Non-binding)
+## Historical Trust Roadmap (v3, Non-binding)
 
-The following items are directional only. They are not commitments and have no guaranteed delivery order.
-
-- Key rotation and explicit key validity windows.
-- Delegated issuance and chain-of-trust models for multi-relay environments.
-- Trust bundles for portable multi-issuer trust distribution.
+This list is preserved from the v3 planning phase. Experimental trust bundles,
+multi-key rotation, and validity windows now exist in the implementation
+described above. Delegated issuance and generalized chain-of-trust models remain
+conceptual. None of these items is a delivery commitment or evidence of a
+deployed trust network.
 
 Any future trust changes MUST be versioned and opt-in. v1/v2 behavior MUST NOT be silently reinterpreted.

@@ -1,31 +1,51 @@
 # AIMTP Agent Trust Gateway (MVP)
 
-The Agent Trust Gateway is a policy-enforcement point that sits between an external
-agent and a protected AIMTP service. It is not part of the AIMTP wire protocol:
-AIMTP remains the interoperable envelope and intent protocol; this gateway is an
-optional deployment/security layer around it.
+**Positioning:** experimental authorization infrastructure for autonomous
+agents.
+
+The Agent Trust Gateway is an external policy-enforcement point between an
+agent and a protected system. Credentials answer, “Can this identity access the
+system?” The Gateway asks, “Is this agent authorized to perform this specific
+action, right now, on behalf of this principal?”
+
+It is not part of the AIMTP wire protocol and it is not the reference relay.
+The base protocol defines the interoperable envelope; the Gateway is an
+optional product that evaluates a signed action request before a protected
+handler runs.
 
 ```
-External Agent (signed AIMTP envelope)
+External Agent (signed AIMTP request)
                  |
                  v
-      +---------------------------+
-      | AIMTP Trust Gateway       |
-      | - authenticate signature  |
-      | - bind key to identity    |
-      | - evaluate policy         |
-      | - hold approvals          |
-      | - append audit events     |
-      +---------------------------+
+      +--------------------------------+
+      | AIMTP Agent Trust Gateway      |
+      | - authenticate identity        |
+      | - bind agent to principal      |
+      | - evaluate trust + action      |
+      | - apply policy + constraints   |
+      | - hold required approvals      |
+      | - append audit evidence        |
+      +--------------------------------+
                  |
                  v
-       Protected AIMTP service
-       (demo purchase handler)
+       Protected system
+       (in-process simulated handlers)
 ```
+
+The evaluation covers identity/authentication, principal representation, local
+trust, requested action, locally configured authority/policy, constraints,
+human-approval requirements, and audit evidence. The resulting decision is
+`ALLOW`, `DENY`, or `REQUIRE_APPROVAL`.
+
+Authority should not exist only as an instruction inside a model. For actions
+routed through this Gateway, infrastructure can refuse execution even if an
+agent attempts an unauthorized action. This boundary can reduce blast radius;
+it cannot guarantee that every action uses the boundary or prevent every
+compromise, exploit, prompt injection, credential theft, or model failure.
 
 ## MVP behavior
 
-The gateway receives `POST /gateway/requests` with a signed, valid AIMTP
+The Gateway receives `POST /gateway/requests` with a signed, valid AIMTP
 envelope. It deliberately uses existing protocol fields:
 
 - `sender` is the claimed agent ID, which must match the configured identity for
@@ -35,7 +55,7 @@ envelope. It deliberately uses existing protocol fields:
 - `metadata.principal_id`, if supplied, must match the configured principal for
   that verified key.
 
-The existing Ed25519/secp256k1 verifier authenticates the envelope. The gateway
+The existing Ed25519/secp256k1 verifier authenticates the envelope. The Gateway
 then maps its verified `kid` to configured `agent_id`, `principal_id`, and trust
 state. A known-but-untrusted identity is denied after successful signature
 verification; an unknown key or invalid signature is rejected before policy
@@ -112,6 +132,9 @@ exactly-once execution, a duplicate approval being refused, a rejection, a
 known-but-untrusted agent denied, an unrecognised signing key denied, a tampered
 payload denied, a replayed envelope denied, and the resulting audit table.
 
+This demonstrates decision flow and enforcement behavior, not a production
+deployment or real settlement.
+
 To run the HTTP gateway, configure the trusted public key with the existing
 `AIMTP_TRUSTED_KEYS` format (`kid=base64-SPKI-or-PEM`), using the matching key ID
 from the sample configuration, plus at least one operator token:
@@ -140,6 +163,11 @@ identity registry, enterprise IAM, delegation chains, a generalized policy DSL,
 a dashboard, or distributed approval workflows. Its protected purchase is a
 deterministic simulation: it performs no payment.
 
+It is also not an antivirus product, vulnerability scanner, EDR, sandbox,
+model-alignment system, or guarantee against compromise. Endpoint security,
+credential lifecycle, downstream authorization, and protected-system hardening
+remain separate responsibilities.
+
 Two limits are worth stating plainly, because they shape what this can grow into:
 
 - The protected service is an **in-process handler**, not a downstream AIMTP
@@ -151,3 +179,16 @@ Two limits are worth stating plainly, because they shape what this can grow into
   actions are constrained only by the policy they match, so a new action should
   arrive with its own validation rather than relying on the numeric constraint
   alone.
+
+## Direction, not current behavior
+
+A possible longer-term topology is:
+
+```text
+External Agent -> AIMTP Gateway -> federated AIMTP relay -> remote recipient
+```
+
+Gateway-to-relay forwarding, arbitrary downstream connectors, external policy
+engines, broader delegation, and product-family components such as AIMTP
+Identity or AIMTP Trust Network are planned or conceptual unless separately
+implemented and tested.

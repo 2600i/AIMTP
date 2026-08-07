@@ -1,8 +1,17 @@
-This guide complements the diagrams in docs/overview.md.
+This guide complements the current architecture in
+[`docs/architecture.md`](architecture.md).
 
 # Implementing AIMTP (1-Page Guide)
 
-AIMTP is a spec-first, transport-agnostic protocol for agent-to-agent message and task exchange. This guide is for implementers who want a correct, minimal v0.1 implementation.
+AIMTP is a schema-first, transport-agnostic envelope for communicating intent,
+identity, authority, constraints, context, and evidence between independent
+intelligent actors. This guide is for implementers who want a correct, minimal
+`aimtp/0.1` implementation.
+
+The frozen base version is deliberately smaller than the full architecture. It
+defines envelope, message, task, extension, and signature shapes; it does not
+mandate an identity provider, delegated-authority model, policy engine,
+approval workflow, conversation store, or settlement mechanism.
 
 ## 1) Read the Spec First
 Start with `spec/aimtp-v0.1.md`. It defines the envelope, message shape, task semantics, and error model. Do not infer behavior beyond the spec.
@@ -36,6 +45,8 @@ Notes:
 - Preserve unknown fields for forward compatibility.
 - Recommended signature block fields: `alg`, `kid`, `sig` (optional `created_at`, `expires_at`).
 - Backward-compatible aliases: `key_id` for `kid`, `signature` for `sig`.
+- Treat asserted identity and authority as claims until local trust and policy
+  have verified them. Schema validity alone is not authorization.
 
 ## 5) Message Rules (v0.1)
 **Required:**
@@ -78,7 +89,12 @@ Tasks are optional and carried on the envelope under `task`.
 - Preserve `metadata` and optional objects even if you don’t interpret them yet
 
 ## 8) Conformance Testing
-Run `tests/conformance/validate_schemas.py` to validate vectors. Extend vectors for your use cases without changing required fields.
+Run `npm run conformance` for the canonical schema, serialization, signature,
+and integrity checks. The optional
+`python3 tests/conformance/validate_schemas.py` command performs an additional
+cross-language schema check when Python `jsonschema` is installed. Extend
+vectors for new wire behavior rather than changing frozen required fields in
+place.
 
 ## 9) Common Pitfalls
 - Treating `intent` and `task.type` as interchangeable (they are related but distinct)
@@ -117,7 +133,14 @@ Run `tests/conformance/validate_schemas.py` to validate vectors. Extend vectors 
 ```
 
 ## 10) Reference Implementation (TypeScript)
-See `src/` for type definitions and a minimal in-memory demo. It demonstrates registration, routing, and task request/response exchange without networking.
+See `src/` for protocol types, reference runtime components, and the Agent
+Trust Gateway MVP. The repository also includes a JavaScript SDK, an HTTP relay,
+mailbox stores, conformance tooling, and local examples. These are reference
+implementation surfaces, not requirements for every AIMTP implementation.
+
+For action-specific authorization, use the separate Gateway path documented in
+[`docs/trust-gateway.md`](trust-gateway.md). Do not treat relay API-key access or
+a valid envelope signature as sufficient action authority.
 
 ## SDK + Relay (Minimal)
 ```js
