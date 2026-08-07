@@ -48,6 +48,21 @@ services:
     volumes:
       - trust-gateway-data:/app/gateway-data
     command: ["node", "dist/runtime/trust-gateway.js"]
+    # The image's own HEALTHCHECK probes the relay's port, not this one, so it
+    # is replaced here rather than inherited. /healthz is unauthenticated by
+    # design — it reports that the process is serving, nothing about approvals.
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://127.0.0.1:8788/healthz',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
 
 volumes:
   redis-data:
