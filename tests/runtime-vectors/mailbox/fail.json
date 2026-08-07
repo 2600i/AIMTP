@@ -1,0 +1,29 @@
+{
+  "schema": "runtime/schemas/mailbox-fail.schema.json",
+  "cases": [
+    {
+      "name": "failure with diagnostic reason",
+      "valid": true,
+      "value": {
+        "recipient": "agent-b",
+        "lease_id": "lease-123",
+        "reason": "processing_error"
+      }
+    },
+    {
+      "name": "non-string reason is ignored by the runtime",
+      "valid": true,
+      "value": { "recipient": "agent-b", "lease_id": "lease-123", "reason": 503 }
+    },
+    {
+      "name": "missing recipient",
+      "valid": false,
+      "value": { "lease_id": "lease-123" }
+    },
+    {
+      "name": "blank lease id",
+      "valid": false,
+      "value": { "recipient": "agent-b", "lease_id": "\t" }
+    }
+  ]
+}

@@ -40,8 +40,8 @@ Notes:
 - Keep `intent` for routing/interpretation (e.g., `task.request`, `task.response`).
 - `intent` supports two forms: legacy string and structured object:
   - `type` (required), optional `priority`, `deadline`, `requires_ack`, `tags`.
-- `actions`/`capabilities`/`negotiation` are optional metadata hooks for AI-oriented
-  coordination and remain transport-agnostic.
+- `actions`/`capabilities`/`negotiation` are optional metadata hooks for
+  intelligent-actor coordination and remain transport-agnostic.
 - Preserve unknown fields for forward compatibility.
 - Recommended signature block fields: `alg`, `kid`, `sig` (optional `created_at`, `expires_at`).
 - Backward-compatible aliases: `key_id` for `kid`, `signature` for `sig`.
@@ -54,7 +54,9 @@ Notes:
 
 **Optional:**
 - `content_type` (default `text/plain`)
-- `intent`, `actions`, `capabilities`, `negotiation` (optional AI hooks, same shape as envelope-level fields)
+- `intent`, `actions`, `capabilities`, `negotiation` (optional coordination
+  fields, called “AI Hooks” in the v0.1 specification; same shape as
+  envelope-level fields)
 - `attachments` (first-class, metadata references to binary content)
 - `metadata`
 
@@ -98,12 +100,13 @@ place.
 
 ## 9) Common Pitfalls
 - Treating `intent` and `task.type` as interchangeable (they are related but distinct)
-- Assuming AI hooks trigger execution behavior by themselves (they are metadata only in v0.1)
+- Assuming coordination fields trigger execution behavior by themselves (they
+  are metadata only in v0.1)
 - Treating `expects_response` as a hard requirement (it is a hint)
 - Returning `output` with failed responses
 - Assuming transport behavior (AIMTP is transport-agnostic)
 
-## AI Hook Example
+## Coordination-field example
 ```json
 {
   "intent": {

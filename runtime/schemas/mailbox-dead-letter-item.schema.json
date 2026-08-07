@@ -1,6 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aimtp.net/schemas/mailbox-dead-letter-item.schema.json",
+  "title": "AIMTP Reference Relay Dead-Letter Item",
+  "description": "Experimental response item for the ELv2-licensed reference relay HTTP profile. It is not part of the base AIMTP envelope specification.",
   "type": "object",
   "required": [
     "envelope",
@@ -10,7 +12,9 @@
     "delivery_attempt"
   ],
   "properties": {
-    "envelope": { "$ref": "./envelope.schema.json" },
+    "envelope": {
+      "description": "A validated AIMTP envelope or an arbitrary JSON payload accepted through POST /aimtp/mailbox."
+    },
     "enqueued_at": { "type": "string", "format": "date-time" },
     "failed_at": { "type": "string", "format": "date-time" },
     "retry_count": { "type": "integer", "minimum": 0 },

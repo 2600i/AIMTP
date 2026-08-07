@@ -1,11 +1,15 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://aimtp.net/schemas/mailbox-poll-item.schema.json",
+  "title": "AIMTP Reference Relay Mailbox Poll Item",
+  "description": "Experimental response item for the ELv2-licensed reference relay HTTP profile. It is not part of the base AIMTP envelope specification.",
   "type": "object",
   "required": ["envelope", "lease_id", "lease_expires_at", "retry_count", "delivery_attempt"],
   "properties": {
-    "envelope": { "$ref": "./envelope.schema.json" },
-    "lease_id": { "type": "string", "minLength": 1 },
+    "envelope": {
+      "description": "A validated AIMTP envelope or an arbitrary JSON payload accepted through POST /aimtp/mailbox."
+    },
+    "lease_id": { "type": "string", "pattern": "\\S" },
     "lease_expires_at": { "type": "string", "format": "date-time" },
     "retry_count": { "type": "integer", "minimum": 0 },
     "delivery_attempt": { "type": "integer", "minimum": 1 }

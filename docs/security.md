@@ -83,15 +83,9 @@ GitHub Releases that are pinned to specific commits. That cost is not
 proportionate to demo keys that protect nothing. If a secret scanner reports
 them, this section is the disposition.
 
-## Diagrams (Conceptual)
-These diagrams are conceptual and optional. They illustrate one possible
-identity and anchoring approach but are not required by the protocol.
+## Historical diagrams
 
-Identity
-![Blockchain Identity Diagram](whitepaper-images/blockchain-identity-diagram.png)
-
-Anchoring
-![AIMTP Blockchain Anchoring Diagram](whitepaper-images/aimtp-blockchain-anchoring-diagram.png)
-
-Revocation and Trust
-![Revocation and Trust Model Diagram](whitepaper-images/revocation-and-trust-model-diagram.png)
+Earlier blockchain identity, anchoring, and revocation diagrams have been moved
+to the [historical-artifact archive](history/README.md). They illustrate an
+earlier direction and are not current security guidance or required AIMTP
+architecture.

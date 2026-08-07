@@ -1,0 +1,53 @@
+# AIMTP glossary
+
+- **Document status:** Canonical
+- **Last updated:** 2026-08-07
+
+This glossary is the source of truth for terminology in current AIMTP
+documentation. It defines architecture language, not new wire fields. When a
+schema, API, configuration key, or code type uses a different term, preserve
+the implemented name and explain the mapping instead of silently renaming it.
+
+## Canonical terms
+
+| Preferred term | Concise definition | Deprecated or legacy synonyms | Usage notes |
+| --- | --- | --- | --- |
+| **AIMTP** | The **Agentic Intelligent Message Transfer Protocol**: an interoperable envelope for communicating intent, identity, authority, constraints, context, and evidence between independent intelligent actors. | “AI Message Transfer Protocol” is deprecated. “AI email” and “email protocol” are legacy framings, not current definitions. | Use **AIMTP by 2600i** for project/brand attribution. AIMTP does not replace transports, identity systems, policy engines, or settlement systems. The frozen wire identifier remains `aimtp/0.1`. |
+| **intelligent actor** | An independently addressable participant in an interaction, such as an AI agent, human, organization, or software service. | “AI endpoint” and “mail user” are too narrow. | An actor can communicate for itself or represent a principal. Do not imply that every actor is an AI model. |
+| **agent** | A software-based intelligent actor that can formulate, receive, or act on intent. | “bot” may appear informally but is not equivalent in all contexts. | Use **external agent** when describing the actor approaching a Gateway from outside its enforcement boundary. |
+| **principal** | The human or organization whose interests or authority an actor represents. | “owner,” “user,” and `sender` are not reliable synonyms. | The current Gateway binds a configured `agent_id` and `principal_id` to a signing key. The base `aimtp/0.1` schema does not define a universal principal object. |
+| **identity** | Claims and identifiers used to distinguish an actor or principal, together with the evidence and resolution needed to authenticate them. | “account” or “email address” may be identity attributes, not complete identity models. | Identity is distinct from authority. A verified identity is not automatically permitted to act. |
+| **authentication** | Verification that presented credentials or signatures correspond to configured identity material. | “authorization” is not a synonym. | A valid signature authenticates bytes and possession of key material; it does not establish truth, trust, or permission by itself. |
+| **intent** | A representation of the outcome an actor is requesting, proposing, reporting, or otherwise communicating. | “subject,” “command,” and “message type” are narrower concepts. | In `aimtp/0.1`, `intent` may be a string or structured object. Values such as `REQUEST`, `QUERY`, or `COMMIT` are useful domain vocabulary, not a frozen universal enum. Do not conflate `intent`, `task.type`, and a Gateway action. |
+| **authority** | Permission for an actor to perform or request an action for a principal under defined conditions. | “access,” “credential,” “trust,” and “capability” are not interchangeable with authority. | The base protocol can carry claims related to authority but does not define a complete authority model. Receivers evaluate authority locally. |
+| **delegated authority** | Authority explicitly granted by a principal or authorized delegate to another actor, limited by scope, time, context, or other constraints. | “impersonation” is not an acceptable synonym. | The repository contains experimental capability delegation and configured Gateway bindings; it does not implement a universal delegation service or complete delegation-chain standard. |
+| **capability** | A description of what an actor or service can do, or a scoped authorization artifact used by an implementation profile. | “tool,” “permission,” and “authority” are only context-dependent approximations. | This term has two technically meaningful repository uses: optional `capabilities` hints in the base envelope and signed capability documents used by experimental enforcement. Preserve that distinction in code-facing docs. |
+| **coordination fields** | The optional `intent`, `actions`, `capabilities`, and `negotiation` fields used for machine-readable interaction hints. | **AI Hooks** is a legacy section label retained in the frozen v0.1 specification. | Preserve “AI Hooks” when referring to that exact specification section. Prefer **coordination fields** in new explanatory documentation; their presence does not trigger execution. |
+| **trust** | A receiver's local confidence that an identity, key, claim, issuer, or evidence source is acceptable for a particular decision. | “valid signature” and “authentication” are not synonyms. | Trust is contextual and policy-dependent. IntentOS trust versions and Gateway `trusted` configuration are separate implementation mechanisms, not a global AIMTP trust score. |
+| **policy** | Rules used by a receiving system to decide how an authenticated request should be handled. | “prompt,” “model instruction,” and “schema validation” are not policy substitutes. | Gateway action policies and IntentOS `off\|warn\|enforce` modes are distinct implemented policy surfaces. Do not describe AIMTP as a universal policy language. |
+| **constraint** | A condition that narrows when, how, for how long, or within what limits authority or intent may be exercised. | “preference” is weaker and should not be used when enforcement is intended. | The Gateway MVP enforces specific numeric action constraints. The base schema has no universal constraint object; other constraints may be profile- or application-defined. |
+| **context** | Supporting information needed to interpret an interaction without itself necessarily granting authority. | “evidence” is not always equivalent. | Context can inform a decision but must not be treated as verified merely because it is present in an envelope. |
+| **evidence** | Verifiable or reviewable material supporting a claim, decision, approval, or outcome, such as signatures, receipts, provenance, sources, artifacts, and audit events. | “proof” should be reserved for evidence with defined verification semantics. | Evidence does not guarantee that a claim is true. Different evidence types live on different protocol and implementation surfaces. |
+| **approval** | A recorded human or operator decision allowing or rejecting an action that policy did not authorize automatically. | “authentication” and “consent” are not always equivalent. | In the Gateway MVP, approval is operator-authenticated, persisted, revalidated, and exactly-once claimed before handler execution. Approval is evidence and control state; it is not settlement itself. |
+| **settlement** | The real-world action performed after authorization or agreement, such as a payment, API call, reservation, database update, contract, or robot action. | “delivery” and “authorization” are not synonyms. | Settlement is outside the AIMTP base protocol. AIMTP may coordinate or authorize it without executing it. The included Gateway purchase handler is simulated. |
+| **relay** | An optional transport component that validates and delivers AIMTP envelopes between senders and recipients. | “mail server” is legacy framing; “Gateway” is incorrect. | The repository's reference relay implements HTTP and at-least-once mailbox delivery. A relay is not required for base protocol conformance and does not by itself authorize protected actions. |
+| **federation** | Communication and trust establishment across independently operated AIMTP domains, relays, or recipients. | “network” may imply a deployed shared service that is not established here. | Federation, identity anchors, revocations, trust bundles, and bridge proofs are experimental and default-inert in this repository. Do not imply a production AIMTP federation exists. |
+| **AIMTP Agent Trust Gateway** | The source-available AIMTP product/MVP that evaluates signed action requests at an external authorization boundary before a protected handler is invoked. | “AIMTP Gateway” is acceptable after first use. “relay,” “protocol,” and “firewall” are not synonyms. | It is architecturally distinct from the AIMTP base protocol and reference relay. Current protected actions are in-process handlers; arbitrary downstream proxying is planned, not implemented. |
+| **protected system** | The service, handler, API, or other execution surface behind a Gateway authorization boundary. | “recipient” is not always equivalent. | In the current Gateway MVP, the protected system is represented by in-process handlers rather than a general external connector. |
+| **`ALLOW`** | A Gateway policy decision authorizing an attempt to invoke the matched protected handler. | `allowed` is an implemented response/status value, not the canonical decision token. | `ALLOW` does not guarantee successful execution or settlement. Current code may return a response decision of `DENY` after an authorized handler fails; use audit fields to distinguish policy authorization from final outcome. |
+| **`DENY`** | A Gateway decision refusing authorization or returning a fail-closed response. | `denied`, `rejected`, and `failed` are distinct implemented statuses. | State whether the denial occurred during authentication, trust, policy, approval, or execution handling. Do not collapse every failure into a policy denial when describing audit behavior. |
+| **`REQUIRE_APPROVAL`** | A Gateway policy decision that pauses execution until an authorized operator approves or rejects the request. | `pending_approval` is the corresponding implemented status, not the decision token. | Approval does not carry forward blindly: the Gateway revalidates current identity, trust, and policy before execution. |
+
+## Usage rules
+
+- Spell out **Agentic Intelligent Message Transfer Protocol (AIMTP)** at first
+  use in standalone overview, architecture, and specification documents.
+- Use uppercase code formatting for the three Gateway decision tokens. Use the
+  lowercase runtime status values only when documenting the API or code.
+- Use **open protocol** or **open specification** only for designated CC BY 4.0
+  protocol materials. Describe the ELv2 implementation as **source available**,
+  not open source.
+- Use mailbox, inbox, email, Gmail, and SMTP terminology only for implemented
+  delivery surfaces, examples, analogies, or clearly marked historical context.
+- When a document needs a new architecture term, update this glossary and the
+  relevant canonical architecture document together.

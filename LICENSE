@@ -1,30 +1,21 @@
-Copyright 2026 Steve Bianchi
+AIMTP Licensing Notice
 
-All rights reserved.
+Copyright © 2026 Steven Bianchi. All rights reserved.
 
-This software (AIMTP Protocol) is proprietary and may not be copied, modified,
-distributed, or used for any commercial purposes without express written
-consent from the author.
+This repository contains materials under different licenses. The license for a
+file depends on its role and path:
 
-Usage Terms:
-1. Non-Commercial Use: You may use this software for personal, educational, or
-   non-commercial purposes only. Any commercial use, distribution, or
-   modification requires prior written permission from the author.
-2. Modification: You may not modify, adapt, or create derivative works based on
-   this software without express permission from the author.
-3. Redistribution: Redistribution of the software is strictly prohibited. You
-   may not distribute this software in any form, including via external
-   repositories, websites, or other means.
-4. License Grant: This software is licensed, not sold. You do not gain any
-   rights to the software other than those expressly granted by the author.
-5. Commercial Use: For licensing inquiries or commercial use of this software,
-   please contact steve@2600i.com. A separate agreement will be required.
+- The AIMTP software implementation is source available under the Elastic
+  License 2.0 (ELv2). See LICENSES/ELASTIC-LICENSE-2.0.txt.
+- The AIMTP protocol specifications, designated protocol schemas, conformance
+  vectors, and designated protocol documentation are licensed under the
+  Creative Commons Attribution 4.0 International license (CC BY 4.0). See
+  LICENSES/CC-BY-4.0.txt.
+- Brand names, logos, and marks are not licensed under either license.
+  See TRADEMARKS.md.
 
-Disclaimer: This software is provided "as is", without warranty of any kind,
-either express or implied, including but not limited to the warranties of
-merchantability, fitness for a particular purpose, or non-infringement. In no
-event shall the author be liable for any claim, damages, or other liability,
-whether in an action of contract, tort, or otherwise, arising from, out of, or
-in connection with the software or the use or other dealings in the software.
+LICENSING.md defines the controlling file-by-file scope, exclusions, patent
+treatment, and attribution guidance. Do not assume that one license applies to
+the entire repository.
 
-For inquiries, please contact steve@2600i.com.
+This licensing structure is subject to final legal review.

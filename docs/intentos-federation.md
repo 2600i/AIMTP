@@ -1,6 +1,13 @@
 # IntentOS Federation Trust Boundaries (Receipts)
 
-This document defines federation security boundaries for IntentOS receipts. It is intentionally minimal: boundaries, verification, and compatibility constraints only.
+> **Status: NEEDS_UPDATE / Developer Preview.** This is an accumulated record
+> of experimental, opt-in implementation profiles. Individual field,
+> environment, and behavior claims must be checked against code and tests. It
+> is not authoritative for the AIMTP base protocol or current system
+> architecture; use [`architecture.md`](architecture.md) for those boundaries.
+
+This document records federation security boundaries and the evolution of
+IntentOS receipt-trust experiments.
 
 These are opt-in implementation profiles and experiments layered around AIMTP;
 they are not all part of the frozen `aimtp/0.1` base protocol and do not by

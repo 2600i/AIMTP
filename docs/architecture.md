@@ -1,9 +1,14 @@
 # AIMTP Architecture
 
+- **Document authority:** Canonical
+- **Product maturity:** Developer Preview
+- **Last updated:** 2026-08-07
+
 ## Boundary model
 
-AIMTP is a trust and authorization envelope between independent intelligent
-actors. It separates three concerns:
+The **Agentic Intelligent Message Transfer Protocol (AIMTP)** provides a trust
+and authorization envelope between independent intelligent actors. It
+separates three concerns:
 
 1. **Envelope semantics:** identity claims, intent, capability hints,
    constraints, context, evidence, and extensible metadata.
@@ -45,6 +50,7 @@ action.
 This table is an architecture map, not a claim that the frozen schema already
 defines every layer. In particular, principal representation and delegated
 authority need implementation profiles or future versioned protocol work.
+Canonical term definitions are maintained in [`GLOSSARY.md`](GLOSSARY.md).
 
 ## Agent Trust Gateway
 

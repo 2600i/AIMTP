@@ -258,6 +258,18 @@ Response `200`:
 ]
 ```
 
+### Reference relay schemas
+
+Experimental JSON Schemas for the mailbox acknowledgement, failure, poll, and
+dead-letter shapes are in [`runtime/schemas/`](../runtime/schemas/). They model
+this reference relay's HTTP profile, including raw payloads accepted by
+`POST /aimtp/mailbox`; they are not part of the base AIMTP envelope
+specification. Runtime vectors are in
+[`tests/runtime-vectors/mailbox/`](../tests/runtime-vectors/mailbox/).
+The schemas retain their existing `https://aimtp.net/schemas/...` identifiers
+for compatibility even though their repository location and licensing now make
+the implementation boundary explicit.
+
 ## IntentOS
 
 Opt-in and off by default. Set `INTENTOS=on` to enable a read-only projection of

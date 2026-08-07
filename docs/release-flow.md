@@ -1,7 +1,12 @@
 # Hardened Release Flow
 
-This document describes what release tooling enforces. For operator procedures,
-see `docs/release-governance.md`.
+**Status:** Active implementation reference
+
+This document describes what current release tooling enforces. The former
+operator procedure in [`release-governance.md`](release-governance.md) applies
+only to the historical v0.3.x release line and must not be used as current
+guidance. Until a tested current operator checklist exists, the tooling entry
+points and guardrails below are the source of truth.
 
 ## Tooling Entry Points
 

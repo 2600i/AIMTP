@@ -177,18 +177,21 @@ node examples/webhook-relay/demo.js
 | Path | Purpose |
 | --- | --- |
 | `spec/` | Normative base specification and experimental protocol profiles/schemas |
-| `schemas/` | Normative JSON Schemas for the frozen envelope and runtime payloads |
+| `schemas/` | Normative JSON Schemas for the frozen AIMTP envelope and message |
 | `src/` | TypeScript protocol types and reference runtime components |
 | `sdk/` | JavaScript SDK implementation |
-| `runtime/` | JavaScript runtime modules and generated local state |
+| `runtime/` | JavaScript runtime modules and experimental reference-relay schemas; generated local state is excluded from packages |
 | `tests/conformance/` | Cross-implementation canonicalization and signing vectors |
 | `tests/vectors/` | Base schema vectors |
+| `tests/runtime-vectors/` | ELv2 reference-runtime profile vectors |
 | `examples/` | Local relay, client, browser, and reference-agent demos |
 | `docs/` | Architecture, implementation, operations, security, and historical phase notes |
 
 Start with:
 
+- [Documentation index](docs/README.md)
 - [Current overview](docs/overview.md)
+- [Canonical glossary](docs/GLOSSARY.md)
 - [Architecture](docs/architecture.md)
 - [AIMTP `aimtp/0.1` specification](spec/aimtp-v0.1.md)
 - [Agent Trust Gateway MVP](docs/trust-gateway.md)
@@ -196,6 +199,7 @@ Start with:
 - [Runtime and relay reference](docs/runtime.md)
 - [Security boundaries](docs/security.md)
 - [Conformance kit](tests/conformance/README.md)
+- [Documentation status map](docs/DOCUMENTATION_MAP.md)
 
 ## Brand and repositories
 
@@ -222,6 +226,16 @@ use case of the broader trust and authorization envelope.
 Keep changes focused, update specifications and schemas together when wire
 behavior changes, add tests or vectors where applicable, and run `npm test`.
 
-See [LICENSE](LICENSE) for current usage and redistribution terms. The current
-license is not an open-source license; describing AIMTP as an open protocol
-requires a separate licensing/governance decision.
+AIMTP uses a split licensing model:
+
+- Designated protocol specifications, interoperable schemas, conformance
+  vectors, and general protocol documentation are available under CC BY 4.0.
+  This supports AIMTP's open-protocol direction.
+- The SDK, Agent Trust Gateway, relay, backend/server code, examples, and other
+  implementation material are source available under the Elastic License 2.0
+  (ELv2). ELv2-licensed software is not open source.
+- Brand and trademark rights are separate from both licenses.
+
+The exact path-by-path scope is defined in [LICENSING.md](LICENSING.md); see
+[LICENSE](LICENSE) for the summary and [TRADEMARKS.md](TRADEMARKS.md) for the
+interim brand policy. This structure is subject to final legal review.

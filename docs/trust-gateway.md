@@ -1,5 +1,9 @@
 # AIMTP Agent Trust Gateway (MVP)
 
+- **Status:** Developer Preview
+- **Document authority:** Canonical for the implemented Gateway MVP
+- **Last updated:** 2026-08-07
+
 **Positioning:** experimental authorization infrastructure for autonomous
 agents.
 
@@ -36,6 +40,9 @@ The evaluation covers identity/authentication, principal representation, local
 trust, requested action, locally configured authority/policy, constraints,
 human-approval requirements, and audit evidence. The resulting decision is
 `ALLOW`, `DENY`, or `REQUIRE_APPROVAL`.
+
+These decision tokens and the related runtime statuses are distinguished in
+the canonical [`GLOSSARY.md`](GLOSSARY.md).
 
 Authority should not exist only as an instruction inside a model. For actions
 routed through this Gateway, infrastructure can refuse execution even if an

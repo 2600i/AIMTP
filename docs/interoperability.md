@@ -40,21 +40,7 @@ Run `npm run conformance` and see
 
 ## Historical diagrams
 
-The following diagrams predate the current Gateway and trust-envelope framing.
-They are retained as historical explorations rather than normative architecture.
-
-Intent
-
-![Minimalist AIMTP Intent Diagram](whitepaper-images/minimalist-aimtp-intent-diagram.png)
-
-AI-to-AI Negotiation
-
-![AI-to-AI Negotiation Diagram](whitepaper-images/ai-to-ai-negotiation-diagram.png)
-
-Message Lifecycle
-
-![IMTP Message Lifecycle Diagram](whitepaper-images/imtp-message-lifecycle-diagram.png)
-
-Threading
-
-![AIMTP Threading Diagram](whitepaper-images/aimtp-threading-diagram.png)
+Earlier interoperability diagrams have been moved to the
+[historical-artifact archive](history/README.md). They are retained for project
+history but are not part of the current interoperability guidance or normative
+architecture.

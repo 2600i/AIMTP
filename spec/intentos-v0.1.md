@@ -1,5 +1,11 @@
 # IntentOS v0.1
 
+> **Status: NEEDS_UPDATE / Draft experimental profile.** This document
+> accumulated v0.1, v0.2, and v0.3 behavior under a v0.1 filename. Preserve its
+> implemented field and endpoint names, but use
+> [`../docs/runtime.md`](../docs/runtime.md) for the current runtime API until
+> this material is consolidated.
+
 This document tracks additive IntentOS behavior layered on AIMTP runtime endpoints.
 
 ## IntentOS v0.2 (Read-only Web Inbox)

@@ -26,7 +26,7 @@ Defaults:
 
 ## Environment Configuration
 Use [`docs/runtime.md`](runtime.md) as the complete relay variable reference.
-There is no checked-in `.env.example`. Common options:
+Start with the checked-in [`.env.example`](../.env.example). Common options:
 - `AIMTP_STORE=redis` to share mailbox state across relay instances.
 - `AIMTP_ALLOWED_RECIPIENTS` to allow `/aimtp` to accept envelopes without an in-process registry.
 - `AIMTP_API_KEY` or per-recipient keys (`AIMTP_RECIPIENT_KEYS`, `AIMTP_KEY_RECIPIENTS`) to enforce auth.

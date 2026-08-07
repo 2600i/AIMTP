@@ -1,0 +1,29 @@
+{
+  "schema": "runtime/schemas/mailbox-ack.schema.json",
+  "cases": [
+    {
+      "name": "normalized request",
+      "valid": true,
+      "value": { "recipient": "agent-b", "lease_id": "lease-123" }
+    },
+    {
+      "name": "runtime trims surrounding whitespace and ignores extensions",
+      "valid": true,
+      "value": {
+        "recipient": "  agent-b  ",
+        "lease_id": "  lease-123  ",
+        "trace_id": "trace-1"
+      }
+    },
+    {
+      "name": "invalid recipient characters",
+      "valid": false,
+      "value": { "recipient": "not a recipient!", "lease_id": "lease-123" }
+    },
+    {
+      "name": "blank lease id",
+      "valid": false,
+      "value": { "recipient": "agent-b", "lease_id": "   " }
+    }
+  ]
+}

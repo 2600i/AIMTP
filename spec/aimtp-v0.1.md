@@ -3,6 +3,7 @@
 ## Status
 - Draft specification
 - Version string: `aimtp/0.1`
+- Last updated: 2026-08-07
 
 The `aimtp/0.1` wire contract is frozen for compatibility. “Draft” reflects the
 document's specification status, not permission to change the current schema in
@@ -10,9 +11,10 @@ place. Breaking changes require a new wire version.
 
 ## Positioning (Non-normative)
 
-AIMTP is an interoperable envelope for communicating intent, identity,
-authority, constraints, context, and evidence between independent intelligent
-actors, including agents, humans, organizations, and software services.
+The **Agentic Intelligent Message Transfer Protocol (AIMTP)** defines an
+interoperable envelope for communicating intent, identity, authority,
+constraints, context, and evidence between independent intelligent actors,
+including agents, humans, organizations, and software services.
 
 The minimal v0.1 schema does not define a complete identity system, delegated-
 authority model, policy language, evidence ontology, conversation model, or

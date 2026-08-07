@@ -1,0 +1,54 @@
+{
+  "schema": "runtime/schemas/mailbox-dead-letter-item.schema.json",
+  "cases": [
+    {
+      "name": "dead-lettered AIMTP envelope",
+      "valid": true,
+      "value": {
+        "envelope": {
+          "spec": "aimtp/0.1",
+          "id": "env-1",
+          "timestamp": "2026-08-07T12:00:00Z",
+          "message": { "id": "msg-1", "role": "user", "content": "ping" }
+        },
+        "enqueued_at": "2026-08-07T12:00:00Z",
+        "failed_at": "2026-08-07T12:05:00Z",
+        "retry_count": 5,
+        "delivery_attempt": 6,
+        "last_error": "processing_error"
+      }
+    },
+    {
+      "name": "dead-lettered raw payload",
+      "valid": true,
+      "value": {
+        "envelope": ["raw", "payload"],
+        "enqueued_at": "2026-08-07T12:00:00Z",
+        "failed_at": "2026-08-07T12:05:00Z",
+        "retry_count": 2,
+        "delivery_attempt": 3
+      }
+    },
+    {
+      "name": "missing failure timestamp",
+      "valid": false,
+      "value": {
+        "envelope": { "text": "raw" },
+        "enqueued_at": "2026-08-07T12:00:00Z",
+        "retry_count": 2,
+        "delivery_attempt": 3
+      }
+    },
+    {
+      "name": "delivery attempt starts at one",
+      "valid": false,
+      "value": {
+        "envelope": { "text": "raw" },
+        "enqueued_at": "2026-08-07T12:00:00Z",
+        "failed_at": "2026-08-07T12:05:00Z",
+        "retry_count": 0,
+        "delivery_attempt": 0
+      }
+    }
+  ]
+}

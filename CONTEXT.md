@@ -48,4 +48,4 @@ simulation and does not perform settlement.
 - Use a feature branch, keep changes reviewable, and preserve unrelated work.
 - Run `npm test` before completion.
 - Consult [`README.md`](README.md) and
-  [`docs/architecture.md`](docs/architecture.md) for current positioning.
+  [`docs/README.md`](docs/README.md) for the current documentation hierarchy.

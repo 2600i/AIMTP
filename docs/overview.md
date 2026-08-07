@@ -1,9 +1,14 @@
 # AIMTP Overview
 
-AIMTP is an interoperable protocol for communicating intent, identity,
-authority, constraints, context, and evidence between independent intelligent
-actors. An actor may be an AI agent, human, organization, or software service;
-a **principal** is the person or organization the actor represents.
+- **Document authority:** Canonical
+- **Product maturity:** Developer Preview
+- **Last updated:** 2026-08-07
+
+The **Agentic Intelligent Message Transfer Protocol (AIMTP)** is an
+interoperable protocol for communicating intent, identity, authority,
+constraints, context, and evidence between independent intelligent actors. An
+actor may be an AI agent, human, organization, or software service; a
+**principal** is the person or organization the actor represents.
 
 AIMTP focuses on the boundary between principals:
 
@@ -40,6 +45,8 @@ The base protocol owns the envelope, not the systems behind it. Identity
 providers, policy engines, approval workflows, and settlement mechanisms remain
 replaceable implementation choices.
 
+Canonical definitions for these terms live in [`GLOSSARY.md`](GLOSSARY.md).
+
 ## Maturity
 
 The `aimtp/0.1` wire contract is frozen and backed by conformance vectors. The
@@ -61,7 +68,8 @@ production-readiness claim.
 
 ## Historical diagrams
 
-The images in `docs/whitepaper-images/` predate the current trust-envelope and
-Gateway framing. They are retained as historical design artifacts, not as the
-current architecture source of truth. Use the diagrams in
+The images in [`docs/history/whitepaper-images/`](history/whitepaper-images/)
+predate the current trust-envelope and Gateway framing. They are retained as
+historical design artifacts, not as the current architecture source of truth.
+See the [historical-artifact notice](history/README.md) and use the diagrams in
 [`docs/architecture.md`](architecture.md) for current system boundaries.

@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://aimtp.net/schemas/mailbox-ack.schema.json",
+  "title": "AIMTP Reference Relay Mailbox Acknowledgement Request",
+  "description": "Experimental request shape for the ELv2-licensed reference relay HTTP profile. It is not part of the base AIMTP envelope specification.",
+  "type": "object",
+  "required": ["recipient", "lease_id"],
+  "properties": {
+    "recipient": {
+      "type": "string",
+      "pattern": "^\\s*[a-zA-Z0-9._:-]{1,128}\\s*$"
+    },
+    "lease_id": { "type": "string", "pattern": "\\S" }
+  },
+  "additionalProperties": true
+}
