@@ -6,6 +6,49 @@ Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sd
 
 ## [Unreleased]
 
+### Added
+
+- `SECURITY.md` — vulnerability disclosure process, scope, supported versions,
+  and an explicit "known and accepted" list so the demo keys in git history, the
+  simulated purchase handler, the fail-closed relay, the default-inert
+  federation surfaces, and the unauthenticated `/healthz` are not re-reported as
+  findings.
+
+### Fixed
+
+- **Two `docs/history/whitepaper-images/` diagrams were not historical
+  artifacts.** They had been regenerated on 2026-08-07 and carried signed C2PA
+  Content Credentials (`caBX` chunks) identifying `gpt-image` v2.0 via the
+  OpenAI Media Service API, with `digitalSourceType: trainedAlgorithmicMedia`.
+  That contradicted three statements in `docs/history/README.md`: that the files
+  were added with the initial draft, that they are historical, and that they
+  carry no embedded authorship metadata. It also placed material self-declaring
+  as AI-generated under an "all rights reserved" notice.
+
+  Both files are restored byte-for-byte from the initial draft (`84a4a13`); all
+  thirteen are now identical to their originals and contain `IHDR`/`IDAT`/`IEND`
+  only. `docs/history/README.md` drops the naming-correction claim, states the
+  chunk-level check so it is verifiable rather than asserted, and records why
+  regenerating an archive in place is not a maintenance operation. The
+  regeneration's stated purpose — correcting legacy naming — was unreachable
+  anyway, since the originals remain in repository history.
+
+- **`docker-compose.yml` published the relay on all interfaces** (`8787:8787`)
+  directly beside the gateway's loopback binding and its comment explaining why.
+  The relay is fail-closed with no `AIMTP_API_KEY`, so this denied rather than
+  leaked, but supplying a key through a `.env` file silently converted it into
+  an authenticated, network-reachable relay. All six published ports across
+  `docker-compose.yml` and both federation templates now bind `127.0.0.1`, with
+  `AIMTP_BIND_HOST=0.0.0.0` inside the container so Docker still forwards. CI is
+  unaffected: it reaches the relay with `docker compose exec`, not the published
+  port.
+
+- `README.md` described `aimtp.net` as "the vanity domain," contradicting the
+  website repository and inviting a blanket redirect that would turn every
+  schema `$id` into a redirect. It is now described as the protocol namespace it
+  is, with the known gap — that the identifiers currently resolve to nothing —
+  stated rather than implied.
+
 ### Changed
 
 - The four reference-relay mailbox schemas moved out of the protocol `$id`
