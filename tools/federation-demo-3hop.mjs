@@ -7,37 +7,40 @@ import process from "node:process";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 
-const COMPOSE_FILE = "docker-compose.federation-3hop.yml";
+// Rendered by scripts/generate-federation-keys.mjs, which the demo npm script
+// runs first. Nothing key-shaped is committed.
+const COMPOSE_FILE = "docker-compose.federation-3hop.local.yml";
 const require = createRequire(import.meta.url);
 
+/**
+ * The relays' keys, read from the same generated file the Compose services were
+ * rendered from — so what this demo verifies against is by construction what
+ * those relays are signing with. Nothing key-shaped is committed; see
+ * scripts/generate-federation-keys.mjs, which the demo npm script runs first.
+ */
+function loadFederationKeys() {
+  const keyFile = path.resolve(process.cwd(), "runtime/federation-keys.json");
+  if (!fs.existsSync(keyFile)) {
+    console.error(
+      `Missing ${keyFile}.\nRun: node scripts/generate-federation-keys.mjs`
+    );
+    process.exit(1);
+  }
+  return JSON.parse(fs.readFileSync(keyFile, "utf8"));
+}
+
+const FEDERATION_KEYS = loadFederationKeys();
+
 const RELAY_PUBLIC_KEYS = Object.freeze({
-  "relay://a": [
-    "-----BEGIN PUBLIC KEY-----",
-    "MCowBQYDK2VwAyEAQfzjXFsveEOYsv55DKXnd7VcM66OXZbDq3ACaKMwdoo=",
-    "-----END PUBLIC KEY-----",
-    ""
-  ].join("\n"),
-  "relay://b": [
-    "-----BEGIN PUBLIC KEY-----",
-    "MCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=",
-    "-----END PUBLIC KEY-----",
-    ""
-  ].join("\n"),
-  "relay://c": [
-    "-----BEGIN PUBLIC KEY-----",
-    "MCowBQYDK2VwAyEAPj1Ybwvb3AvgdJyfzrFAVDp2ebq12oJufsYbyxCCeww=",
-    "-----END PUBLIC KEY-----",
-    ""
-  ].join("\n")
+  "relay://a": FEDERATION_KEYS["relay://a"].publicKeyPem,
+  "relay://b": FEDERATION_KEYS["relay://b"].publicKeyPem,
+  "relay://c": FEDERATION_KEYS["relay://c"].publicKeyPem
 });
 
+// Only relay-b's private key is needed here: this tool mints a bridge proof as
+// relay-b, and the other two relays sign their own receipts in-container.
 const RELAY_PRIVATE_KEYS = Object.freeze({
-  "relay://b": [
-    "-----BEGIN PRIVATE KEY-----",
-    "MC4CAQAwBQYDK2VwBCIEIIOeZRQ327rtKArRvONoV7k9fow3LfRRQe9ZQ0Y+eHs4",
-    "-----END PRIVATE KEY-----",
-    ""
-  ].join("\n")
+  "relay://b": FEDERATION_KEYS["relay://b"].privateKeyPem
 });
 
 const RELAY_CONFIG = Object.freeze({

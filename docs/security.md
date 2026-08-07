@@ -26,6 +26,43 @@ Signatures should be created over canonical envelope bytes:
 - Preserve array ordering.
 - Encode as UTF-8 with no extra whitespace.
 
+## Key material in this repository
+
+No private key is committed to this repository. The local federation demos need
+Ed25519 keypairs so three throwaway relays can sign receipts to each other, and
+those are minted on demand:
+
+```sh
+npm run federation:keys          # mint or reuse; writes ignored files only
+npm run federation:keys -- --force   # rotate
+```
+
+The generator writes `runtime/federation-keys.json` and renders
+`docker-compose.federation.local.yml` and
+`docker-compose.federation-3hop.local.yml` from the committed
+`*.template.yml` files. All four are ignored. The templates carry placeholders,
+never keys.
+
+### Keys that remain in git history
+
+Earlier revisions of `docker-compose.federation.yml`,
+`docker-compose.federation-3hop.yml` and `tools/federation-demo-3hop.mjs`
+carried three hardcoded Ed25519 private keys, and those commits are still
+reachable. They are inert:
+
+- They were only ever demo material for the local federation topology, and were
+  labelled as such where they appeared.
+- They were trusted by nothing outside those demo files — no deployed relay, no
+  release artifact, and no configuration in this repository referenced them.
+- They no longer appear at the tip, and nothing reads them, so anything signed
+  with them now verifies against nothing.
+
+They have deliberately **not** been removed from history. Doing so would rewrite
+every commit in the repository, which would invalidate 82 tags and the published
+GitHub Releases that are pinned to specific commits. That cost is not
+proportionate to demo keys that protect nothing. If a secret scanner reports
+them, this section is the disposition.
+
 ## Diagrams (Conceptual)
 These diagrams are conceptual and optional. They illustrate one possible
 identity and anchoring approach but are not required by the protocol.

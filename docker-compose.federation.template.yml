@@ -21,13 +21,10 @@ services:
       INTENTOS_RECEIPTS_SIGN: "on"
       INTENTOS_RECEIPTS_ISSUER: "relay://a"
       INTENTOS_TRUST_VERSION: "${INTENTOS_TRUST_VERSION:-v1}"
-      # Demo-only key material for local federation interop testing.
-      INTENTOS_RECEIPTS_PRIVATE_KEY: |-
-        -----BEGIN PRIVATE KEY-----
-        MC4CAQAwBQYDK2VwBCIEID1Ojr6UbUbvQaY1SFTC6sQpaF8dyhVFsYgQ1RrI8Lcz
-        -----END PRIVATE KEY-----
-      INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: >-
-        {"relay://a":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQfzjXFsveEOYsv55DKXnd7VcM66OXZbDq3ACaKMwdoo=\n-----END PUBLIC KEY-----\n","relay://b":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=\n-----END PUBLIC KEY-----\n"}
+      # Rendered by scripts/generate-federation-keys.mjs into the .local.yml
+      # that the demo actually runs. No key material is committed.
+      INTENTOS_RECEIPTS_PRIVATE_KEY: __RELAY_A_PRIVATE_KEY__
+      INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: __TRUSTED_KEYS_A__
 
   redis-b:
     image: redis:7-alpine
@@ -51,10 +48,7 @@ services:
       INTENTOS_RECEIPTS_SIGN: "on"
       INTENTOS_RECEIPTS_ISSUER: "relay://b"
       INTENTOS_TRUST_VERSION: "${INTENTOS_TRUST_VERSION:-v1}"
-      # Demo-only key material for local federation interop testing.
-      INTENTOS_RECEIPTS_PRIVATE_KEY: |-
-        -----BEGIN PRIVATE KEY-----
-        MC4CAQAwBQYDK2VwBCIEIIOeZRQ327rtKArRvONoV7k9fow3LfRRQe9ZQ0Y+eHs4
-        -----END PRIVATE KEY-----
-      INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: >-
-        {"relay://a":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAQfzjXFsveEOYsv55DKXnd7VcM66OXZbDq3ACaKMwdoo=\n-----END PUBLIC KEY-----\n","relay://b":"-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEApGNKaYbjOmsXFIzMGv5S27A3s/ORB2vcILeZCkxRjNc=\n-----END PUBLIC KEY-----\n"}
+      # Rendered by scripts/generate-federation-keys.mjs into the .local.yml
+      # that the demo actually runs. No key material is committed.
+      INTENTOS_RECEIPTS_PRIVATE_KEY: __RELAY_B_PRIVATE_KEY__
+      INTENTOS_TRUSTED_RECEIPT_KEYS_JSON: __TRUSTED_KEYS_B__
