@@ -26,5 +26,29 @@ services:
       AIMTP_ALLOWED_RECIPIENTS: "demo-agent"
       AIMTP_RELAY_INSTANCE_ID: "relay-1"
 
+  trust-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Published on loopback only: the operator routes control real approvals.
+    ports:
+      - "127.0.0.1:8788:8788"
+    environment:
+      PORT: "8788"
+      AIMTP_BIND_HOST: "0.0.0.0"
+      AIMTP_TRUST_GATEWAY_CONFIG: "/app/config/trust-gateway.demo.json"
+      AIMTP_TRUST_GATEWAY_STORE: "sqlite"
+      AIMTP_TRUST_GATEWAY_SQLITE_PATH: "/app/gateway-data/aimtp-trust-gateway.sqlite"
+      # Required. Public keys only; never put private keys here.
+      # Without it every request is denied.
+      AIMTP_TRUSTED_KEYS: "${AIMTP_TRUSTED_KEYS:-}"
+      # Required for /gateway/approvals and /gateway/audit. Format:
+      # operator-id=token,operator-id=token. Without it those routes return 503.
+      AIMTP_GATEWAY_OPERATOR_TOKENS: "${AIMTP_GATEWAY_OPERATOR_TOKENS:-}"
+    volumes:
+      - trust-gateway-data:/app/gateway-data
+    command: ["node", "dist/runtime/trust-gateway.js"]
+
 volumes:
   redis-data:
+  trust-gateway-data:

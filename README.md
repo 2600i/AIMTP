@@ -38,6 +38,9 @@ contract and what it takes to claim conformance.
   ([`tests/conformance/`](tests/conformance/))
 - An opt-in, default-inert federation trust surface (handshake, identity
   anchors, trust bundles, revocations, transparency log, bridge proofs)
+- An optional [Agent Trust Gateway MVP](docs/trust-gateway.md) for signed-agent
+  authentication, simple action policy, approvals, and audit logging around a
+  protected service
 
 ## Conformance
 
