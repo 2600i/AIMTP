@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://aimtp.net/schemas/mailbox-ack.schema.json",
+  "$id": "https://aimtp.net/runtime/schemas/mailbox-ack.schema.json",
   "title": "AIMTP Reference Relay Mailbox Acknowledgement Request",
   "description": "Experimental request shape for the ELv2-licensed reference relay HTTP profile. It is not part of the base AIMTP envelope specification.",
   "type": "object",

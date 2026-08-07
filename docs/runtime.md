@@ -266,9 +266,12 @@ this reference relay's HTTP profile, including raw payloads accepted by
 `POST /aimtp/mailbox`; they are not part of the base AIMTP envelope
 specification. Runtime vectors are in
 [`tests/runtime-vectors/mailbox/`](../tests/runtime-vectors/mailbox/).
-The schemas retain their existing `https://aimtp.net/schemas/...` identifiers
-for compatibility even though their repository location and licensing now make
-the implementation boundary explicit.
+Their `$id` values sit under `https://aimtp.net/runtime/schemas/...`, deliberately
+outside the `https://aimtp.net/schemas/...` protocol namespace. That namespace
+holds the CC BY 4.0 protocol schemas; these are ELv2 reference-relay material,
+and identifiers that sat beside the protocol ones would imply a standing this
+profile does not have. Every `$id` mirrors its repository path, so the mapping
+from file to identifier is the same rule everywhere.
 
 ## IntentOS
 
