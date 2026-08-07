@@ -4,3 +4,7 @@ dist
 *.log
 .DS_Store
 .env
+
+# Local runtime state must never be baked into the image
+runtime/*.sqlite
+runtime/*.db

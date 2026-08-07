@@ -1,0 +1,40 @@
+{
+  "protected_recipient": "protected-demo-service",
+  "identities": [
+    {
+      "agent_id": "procurement-agent-1",
+      "principal_id": "demo-procurement-principal",
+      "public_key_id": "demo-procurement-key",
+      "trusted": true,
+      "organization": "AIMTP Demo"
+    },
+    {
+      "agent_id": "untrusted-demo-agent",
+      "principal_id": "untrusted-demo-principal",
+      "public_key_id": "untrusted-demo-key",
+      "trusted": false
+    }
+  ],
+  "policies": [
+    {
+      "id": "demo-purchase-within-limit",
+      "agent_id": "procurement-agent-1",
+      "action": "purchase.create",
+      "decision": "ALLOW",
+      "constraints": { "amount": { "lte": 50 } }
+    },
+    {
+      "id": "demo-purchase-over-limit",
+      "agent_id": "procurement-agent-1",
+      "action": "purchase.create",
+      "decision": "REQUIRE_APPROVAL",
+      "constraints": { "amount": { "gt": 50 } }
+    },
+    {
+      "id": "demo-echo",
+      "agent_id": "procurement-agent-1",
+      "action": "demo.echo",
+      "decision": "ALLOW"
+    }
+  ]
+}
