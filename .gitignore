@@ -26,3 +26,7 @@ AIMTP-wt-*/
 
 # Local working notes; contains unredacted host and API credentials
 AIMTP_Story/
+
+# Local working notes: kept out of the repository so they are not published
+# alongside the specification when it opens.
+notes/
