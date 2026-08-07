@@ -1,76 +1,51 @@
-# AIMTP – Working Context
+# AIMTP Working Context
 
-## What AIMTP Is
-AIMTP (Agentic Intelligent Message Transfer Protocol) is a protocol and reference implementation
-for structured, agent-to-agent message and task exchange.
+## Current architecture
 
-It is:
-- Spec-first
-- Transport-agnostic
-- Implementation-neutral
-- Designed for interoperability between AI agents and systems
+AIMTP is an interoperable protocol for communicating intent, identity,
+authority, constraints, context, and evidence between independent intelligent
+actors. It owns the envelope at a principal boundary, not the identity system,
+policy engine, transport, workflow engine, or settlement mechanism behind it.
 
-It is NOT:
-- A UI
-- A hosted platform
-- A blockchain requirement
-- An application framework
+The principal repository surfaces are:
 
----
+- Frozen `aimtp/0.1` specification, schemas, canonical signatures, and
+  conformance vectors.
+- JavaScript SDK and TypeScript protocol/runtime components.
+- Reference HTTP relay with mailbox delivery and memory/SQLite/Redis stores.
+- Experimental Agent Trust Gateway MVP with signed-agent identity binding,
+  action policy, constraints, approval, replay protection, and audit events.
+- Opt-in IntentOS, capabilities, federation, and trust experiments.
 
-## Current Goals (v0.1)
-1. Define a stable AIMTP message + envelope specification
-2. Provide JSON Schemas for validation
-3. Provide a minimal Node/TypeScript reference implementation
-4. Provide examples and conformance test vectors
+The Gateway, relay, and base protocol are distinct architecture layers. The
+Gateway currently invokes only in-process handlers; its purchase action is a
+simulation and does not perform settlement.
 
----
+## Design principles
 
-## Design Principles
-- Clarity over cleverness
-- Explicit versioning
-- Forward compatibility
-- Minimal mandatory fields
-- Optional extensibility via metadata and policy blocks
+- Own the envelope, not the world.
+- Keep protocol semantics separate from transport and settlement.
+- Treat authentication, trust, and authorization as separate decisions.
+- Keep delegated authority explicit, narrow, inspectable, and receiver-evaluated.
+- Preserve evidence without claiming that signatures prove content truth.
+- Prefer optional, versioned profiles over a rigid universal ontology.
+- Keep experimental features opt-in and default-inert.
+- Do not frame AIMTP as a replacement for MCP, A2A, HTTP, APIs, OAuth, PKI,
+  email, payments, policy engines, or workflow systems.
 
----
+## Claims and maturity
 
-## Current Architectural Notes
-- `AIMTPMessage` represents semantic content
-- `AIMTPEnvelope` represents transport, routing, and policy
-- Envelope is generic over payload type
-- Attachments are first-class
-- Security and policy are optional but structured
+- Package version `1.0.0` is a compatibility line, not a blanket maturity claim.
+- Describe the repository as a reference implementation or developer preview.
+- Describe the Gateway as an MVP and federation/trust extensions as experimental.
+- Do not claim customers, deployments, scale, certifications, compliance,
+  production readiness, or security guarantees without independent evidence.
 
----
+## Contributor guardrails
 
-## Known Design Decisions
-- Envelope versioning is explicit (aimtp/0.1)
-- Content is typed via content_type
-- Protocol avoids LLM-specific assumptions
-- Reference implementation is intentionally minimal
-
----
-
-## Immediate Next Tasks
-- Review and finalize `task.ts`
-- Align JSON schemas with TypeScript interfaces
-- Lock versioning and timestamp rules in spec
-- Tighten role semantics (avoid LLM coupling)
-
----
-
-## Guardrails for Contributors (Including Codex)
-- Do not add networking, blockchain, or auth without discussion
-- Do not introduce UI
-- Do not over-engineer abstractions
-- Ask before making breaking changes
-
-## Phase 2 — Runtime & SDK
-
-- Protocol v0.1 is frozen.
-- spec/ and schemas/ MUST NOT change.
-- All work is limited to runtime, sdk, examples, and docs.
-- Field names must exactly match v0.1.
-- Goal: SDK helpers + HTTP webhook relay + interop demo.
-
+- The `aimtp/0.1` wire contract is frozen. Breaking changes require a new wire
+  version plus coordinated spec, schema, and vector updates.
+- Use a feature branch, keep changes reviewable, and preserve unrelated work.
+- Run `npm test` before completion.
+- Consult [`README.md`](README.md) and
+  [`docs/README.md`](docs/README.md) for the current documentation hierarchy.

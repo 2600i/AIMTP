@@ -1,6 +1,8 @@
-IntentOS v2.1 receipts contract — frozen
-
 # IntentOS Receipts and Receipt Routing (v2.1)
+
+- **Status:** Active implementation profile
+- **Compatibility:** IntentOS v2.1 receipt contract frozen; not part of the
+  `aimtp/0.1` base protocol
 
 ## Scope
 This document defines the protocol contract for runtime-generated receipts and optional internal receipt routing. It is normative for IntentOS v2.1.

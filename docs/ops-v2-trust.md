@@ -1,7 +1,9 @@
 # IntentOS v2 Trust Rollout (Operators)
 
 ## Purpose
-Safely enable IntentOS v2 trust semantics in production without changing execution behavior.
+Roll out the experimental IntentOS v2 receipt-trust semantics in an
+operator-controlled environment without changing execution behavior. This is a
+configuration procedure, not a production-readiness or security assurance.
 
 ## Prerequisites
 - Trusted issuer public keys are collected and distributed to each relay.

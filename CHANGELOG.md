@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sdk/docs/examples only.
 
+## [Unreleased]
+
+### Changed
+
+- The four reference-relay mailbox schemas moved out of the protocol `$id`
+  namespace: `https://aimtp.net/schemas/mailbox-*.schema.json` becomes
+  `https://aimtp.net/runtime/schemas/mailbox-*.schema.json`, matching their move
+  to `runtime/schemas/`. The protocol namespace now holds only the CC BY 4.0
+  protocol schemas (`envelope`, `message`, `bridge-proof-v1`); the mailbox
+  schemas are ELv2 reference-relay material, and sibling identifiers implied a
+  standing this profile does not have.
+
+  **Not a wire change.** These schemas were never part of the `aimtp/0.1`
+  envelope specification, no `$ref` resolves to them, nothing in the repository
+  or the conformance suite references them by URL, and the entire
+  `https://aimtp.net` schema namespace is currently unserved — so no consumer
+  can have pinned the old identifiers.
+
 ## [v1.0.0]
 
 Implementation reaches 1.0. **The wire version is unchanged at `aimtp/0.1`** —

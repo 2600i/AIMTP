@@ -1,19 +1,23 @@
-# AIMTP CLI Sender
+# AIMTP Envelope Sender
 
-Minimal Node 20+ CLI to send AIMTP v0.1 envelopes to a relay over HTTPS.
+Minimal Node 20+ CLI to validate and send AIMTP v0.1 envelopes to an HTTP
+relay. It demonstrates one transport profile; it is not the Agent Trust Gateway
+client and does not perform an authorization decision.
 
 ## Usage
 
 ```sh
 node cli/aimtp-send.mjs \
-  --url https://relay.aimtp.net/aimtp \
-  --api-key <key> \
+  --url http://127.0.0.1:8787/aimtp \
+  --api-key dev-key \
   --file cli/sample-envelope.json
 ```
 
 ### Flags
 
-- `--url <url>` Relay URL (default: `https://relay.aimtp.net/aimtp`)
+- `--url <url>` Relay URL. The CLI's historical default is
+  `https://relay.aimtp.net/aimtp`; pass an explicit local or verified deployment
+  URL because this repository does not assert hosted-service availability.
 - `--api-key <key>` API key (sent as `Authorization: Bearer <key>`)
 - `--file <path>` Envelope JSON file
 - `--json <json>` Inline envelope JSON (quote in your shell)
@@ -31,19 +35,21 @@ The CLI:
 
 Health check:
 ```sh
-curl https://relay.aimtp.net/healthz
+curl http://127.0.0.1:8787/healthz
 ```
 
 Send the sample envelope:
 ```sh
 node cli/aimtp-send.mjs \
-  --url https://relay.aimtp.net/aimtp \
+  --url http://127.0.0.1:8787/aimtp \
+  --api-key dev-key \
   --file cli/sample-envelope.json
 ```
 
 Send inline JSON:
 ```sh
 node cli/aimtp-send.mjs \
-  --url https://relay.aimtp.net/aimtp \
+  --url http://127.0.0.1:8787/aimtp \
+  --api-key dev-key \
   --json '{"spec":"aimtp/0.1","message":{"id":"msg_1","role":"user","content":"hello"}}'
 ```

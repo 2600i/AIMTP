@@ -1,7 +1,12 @@
-# Reference Agents Demo (Phase 5)
+# Reference Agents Demo
 
 This demo provides optional AI behavior on top of AIMTP data model fields
 (`intent`, `actions`, `capabilities`, `negotiation`) without protocol changes.
+
+It demonstrates local routing, negotiation, and simulated execution. Capability
+hints in this example are not delegated-authority proofs, and the demo does not
+use the Agent Trust Gateway. Use the Gateway demo for signed identity, action
+policy, approval, replay protection, and audit behavior.
 
 Included reference components:
 - `ReferenceRouterAgent`: deterministic routing and negotiation counter-offers.

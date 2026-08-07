@@ -1,4 +1,9 @@
-# 0.3.0-alpha Trust Evolution (Phases 6–8)
+# Historical: 0.3.0-alpha Trust Evolution (Phases 6–8)
+
+> This document records the incremental 0.3.0-alpha implementation phases. The
+> features remain opt-in, but phase numbering is historical. See
+> [`docs/intentos-federation.md`](intentos-federation.md) and
+> [`README.md`](../README.md#what-exists-today) for current status.
 
 ## Phase 6 – Transparency Log (Opt-in)
 

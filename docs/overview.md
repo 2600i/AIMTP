@@ -1,30 +1,129 @@
-# Overview
+# AIMTP Overview
 
-AIMTP defines a minimal JSON envelope for transporting AI messages between systems. The protocol separates transport from message semantics so different environments can interoperate without custom adapters.
+- **Document authority:** Canonical
+- **Product maturity:** Developer Preview
+- **Last updated:** 2026-08-07
 
-## Getting Started
+The **Agentic Intelligent Message Transfer Protocol (AIMTP)** is an
+interoperable protocol for communicating intent, identity, authority,
+constraints, context, and evidence between independent intelligent actors. An
+actor may be an AI agent, human, organization, or software service; a
+**principal** is the person or organization the actor represents.
 
-- **Protocol specification:** `spec/aimtp-v0.1.md` (normative)
-- **Implementer guide:** `docs/implementing-aimtp.md` (1-page, non-normative)
-- **Schemas:** `schemas/` (normative validation)
-- **Reference implementation:** `src/` (TypeScript, in-memory)
+AIMTP exists because authentication alone does not answer whether an actor may
+perform a particular action for a principal under current constraints. At a
+boundary between independent principals, the receiver needs enough structured
+information to evaluate who is communicating, what outcome is requested, what
+authority is claimed, what policy applies, and what evidence should be kept.
 
-## Core Diagrams
+AIMTP focuses on the boundary between principals:
 
-Architecture  
-![Minimalist AIMTP Architecture Diagram](whitepaper-images/minimalist-aimtp-architecture-diagram.png)
+```text
+Actor A
+  |
+  | AIMTP envelope
+  | identity | authority | intent | constraints | context | evidence
+  v
+Transport or relay
+  |
+  v
+Actor B -> local policy decision -> settlement outside AIMTP
+```
 
-Protocol  
-![AIMTP Protocol Diagram](whitepaper-images/aimtp-protocol-diagram.png)
+The protocol does not replace HTTP, APIs, MCP, A2A, OAuth, PKI, email,
+payments, policy engines, or workflow systems. It can travel over or complement
+those systems while giving the receiver enough structured information to make
+its own trust and authorization decision.
 
-Message Envelope  
-![AIMTP Message Envelope Diagram](whitepaper-images/aimtp-message-envelope-diagram.png)
+## Agent Trust Gateway
 
-Routing  
-![Minimalist AIMTP Routing Diagram](whitepaper-images/minimalist-aimtp-routing-diagram.png)
+The first concrete product in this direction is the
+[`AIMTP Agent Trust Gateway`](trust-gateway.md), an experimental external
+authorization boundary for autonomous agents:
 
-Transport Layer  
-![AIMTP Transport Layer Diagram](whitepaper-images/aimtp-transport-layer-diagram.png)
+```text
+External agent
+      |
+      v
+AIMTP Agent Trust Gateway
+  authenticate identity and principal representation
+  evaluate action, trust, policy, and constraints
+  ALLOW | DENY | REQUIRE_APPROVAL
+  record approval and audit evidence
+      |
+      v
+Protected system (currently an in-process handler)
+```
 
-Technical Sheet  
-![Minimalist AIMTP Technical Diagrams Sheet](whitepaper-images/minimalist-aimtp-technical-diagrams-sheet.png)
+The Gateway MVP verifies signed requests, uses configured agent/principal/key
+bindings and action policies, supports operator approval, and records audit
+events. It is not mandatory for AIMTP, and it does not yet proxy to arbitrary
+external systems or execute real settlement.
+
+## Protocol and product
+
+- **AIMTP Protocol:** the `aimtp/0.1` envelope, message/task semantics,
+  signatures, schemas, and conformance contract.
+- **AIMTP reference implementation:** the SDK, HTTP relay, mailbox delivery
+  profile, tools, and examples in this repository.
+- **AIMTP Agent Trust Gateway:** a separate experimental enforcement product
+  that evaluates signed AIMTP action requests before invoking a protected
+  in-process handler.
+- **IntentOS and federation/trust surfaces:** opt-in implementation profiles and
+  experiments; they are not all part of the frozen base protocol.
+
+The base protocol owns the envelope, not the systems behind it. Identity
+providers, policy engines, approval workflows, and settlement mechanisms remain
+replaceable implementation choices.
+
+Canonical definitions for these terms live in [`GLOSSARY.md`](GLOSSARY.md).
+
+## Relationship to adjacent systems
+
+- **MCP** roughly answers what tools and context a model can use. AIMTP asks who
+  the actor represents, what it wants, what authority and constraints apply,
+  and whether the receiver should trust and permit the interaction.
+- **A2A** addresses agent discovery, communication, and task collaboration;
+  AIMTP can complement it with cross-principal trust and authorization context.
+- **HTTP, APIs, messaging systems, and relays** can transport AIMTP or execute a
+  later action; they are not replaced by AIMTP.
+- **OAuth and PKI** can supply delegated-access and cryptographic building
+  blocks that an AIMTP implementation evaluates or references.
+
+See [`interoperability.md`](interoperability.md) for the boundary model.
+
+## What exists today
+
+The `aimtp/0.1` wire contract is frozen and backed by conformance vectors. The
+repository as a whole is a developer preview. The Gateway is an MVP, and the
+federation/trust extensions are experimental and default-inert. These labels
+describe different surfaces; implementation version `1.0.0` is not a blanket
+production-readiness claim.
+
+- **Implemented:** base envelope/message/task schemas, canonical signing,
+  conformance vectors, SDK/reference runtime, HTTP relay/mailbox delivery, and
+  the Agent Trust Gateway MVP.
+- **Experimental and opt-in:** IntentOS projection and receipts, capabilities,
+  federation handshake, identity anchors, revocations, trust bundles,
+  transparency tooling, and bridge proofs.
+- **Not implemented as an integrated topology:** Gateway forwarding through a
+  federated relay to a remote protected system.
+
+## Start here
+
+- **Architecture:** [`docs/architecture.md`](architecture.md)
+- **Base specification:** [`spec/aimtp-v0.1.md`](../spec/aimtp-v0.1.md)
+- **Agent Trust Gateway:** [`docs/trust-gateway.md`](trust-gateway.md)
+- **Implementation guide:** [`docs/implementing-aimtp.md`](implementing-aimtp.md)
+- **Runtime/API reference:** [`docs/runtime.md`](runtime.md)
+- **Security boundaries:** [`docs/security.md`](security.md)
+- **Schemas:** [`schemas/`](../schemas/)
+- **Conformance kit:** [`tests/conformance/`](../tests/conformance/)
+
+## Historical diagrams
+
+The images in [`docs/history/whitepaper-images/`](history/whitepaper-images/)
+predate the current trust-envelope and Gateway framing. They are retained as
+historical design artifacts, not as the current architecture source of truth.
+See the [historical-artifact notice](history/README.md) and use the diagrams in
+[`docs/architecture.md`](architecture.md) for current system boundaries.

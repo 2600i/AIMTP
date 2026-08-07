@@ -1,21 +1,11 @@
-AIMTP Project Context
+# Deprecated: AIMTP project context
 
-- Public relay: https://relay.aimtp.net
-- Auth: AIMTP_API_KEY
-- Allowlists enforced
-- Mailbox polling implemented
-- CORS enabled for localhost demo
-- Current phase: Phase 4 – Persistence
-- Non-goals: do not change protocol, auth, or CORS unless asked
-- Release rule: tests must pass, version bump + tag required
+- **Status:** Deprecated
+- **Superseded by:** [`CONTEXT.md`](CONTEXT.md)
+- **Last updated:** 2026-08-07
 
-
-## Git & Release Rules
-
-- Codex may commit and tag releases.
-- Codex must never push unless explicitly instructed.
-- All releases require:
-  - tests passing
-  - version bump
-  - CHANGELOG update
-  - annotated git tag
+This file previously duplicated project and contributor guidance. Use
+[`CONTEXT.md`](CONTEXT.md) for the concise working context and
+[`docs/README.md`](docs/README.md) for the canonical documentation hierarchy.
+It is retained temporarily as a redirect for tools or contributors that may
+still reference the old filename.

@@ -1,0 +1,54 @@
+{
+  "schema": "runtime/schemas/mailbox-poll-item.schema.json",
+  "cases": [
+    {
+      "name": "validated envelope delivery",
+      "valid": true,
+      "value": {
+        "envelope": {
+          "spec": "aimtp/0.1",
+          "id": "env-1",
+          "timestamp": "2026-08-07T12:00:00Z",
+          "message": { "id": "msg-1", "role": "user", "content": "ping" }
+        },
+        "lease_id": "lease-123",
+        "lease_expires_at": "2026-08-07T12:00:30Z",
+        "retry_count": 0,
+        "delivery_attempt": 1
+      }
+    },
+    {
+      "name": "raw mailbox payload delivery",
+      "valid": true,
+      "value": {
+        "envelope": { "text": "raw mailbox payload" },
+        "lease_id": "lease-456",
+        "lease_expires_at": "2026-08-07T12:01:30Z",
+        "retry_count": 1,
+        "delivery_attempt": 2
+      }
+    },
+    {
+      "name": "negative retry count",
+      "valid": false,
+      "value": {
+        "envelope": null,
+        "lease_id": "lease-789",
+        "lease_expires_at": "2026-08-07T12:01:30Z",
+        "retry_count": -1,
+        "delivery_attempt": 1
+      }
+    },
+    {
+      "name": "invalid lease expiration",
+      "valid": false,
+      "value": {
+        "envelope": "raw payload",
+        "lease_id": "lease-789",
+        "lease_expires_at": "tomorrow",
+        "retry_count": 0,
+        "delivery_attempt": 1
+      }
+    }
+  ]
+}

@@ -1,5 +1,10 @@
 # AIMTP v0.4 Capabilities
 
+> **Status: NEEDS_UPDATE / Draft experimental profile.** The implemented
+> capability field names and verification behavior remain technically
+> meaningful, but this document is not part of the frozen `aimtp/0.1` base
+> protocol and needs a consolidated versioned profile before broader use.
+
 This document captures operational guidance for capability minting and use with
 IntentOS enforcement mode.
 

@@ -1,6 +1,7 @@
 # AIMTP 1.0 Freeze and Stability Contract
 
-**Status:** stable
+**Compatibility status:** stable for the surfaces enumerated below
+**Maturity:** reference implementation / developer preview
 **Wire version:** `aimtp/0.1` (frozen)
 **Implementation version:** `1.0.0`
 
@@ -15,8 +16,8 @@ common way to misread this project:
 | **Implementation version** | `1.0.0` | The version of this repository: reference relay, SDK, tooling, docs. |
 
 The wire version stays at `aimtp/0.1`. It has been frozen since the v0.1.0
-release, every deployed implementation emits and expects that exact string, and
-the schemas pin it with `"const": "aimtp/0.1"`. Bumping it to `aimtp/1.0` would
+release, the schemas and conformance vectors expect that exact string, and the
+schemas pin it with `"const": "aimtp/0.1"`. Bumping it to `aimtp/1.0` would
 be a breaking protocol change requiring new schemas and coordinated upgrades
 across every peer, in exchange for nothing but a nicer-looking number. We are
 not doing that.
@@ -25,6 +26,11 @@ not doing that.
 error codes, and its operational surface are now stable and covered by the
 compatibility promise below. Reaching 1.0 does not change a single byte on the
 wire.
+
+This compatibility contract is not a claim that the repository is
+production-ready, hardened, scalable, compliant, or suitable for a particular
+deployment. Experimental and default-inert surfaces remain explicitly outside
+the frozen set.
 
 ## What is frozen
 
