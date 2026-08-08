@@ -35,3 +35,7 @@ notes/
 # Minted locally by scripts/generate-federation-keys.mjs; never committed.
 runtime/federation-keys.json
 docker-compose.*.local.yml
+
+# Audit and review reports. These name local credential files and describe
+# unpatched findings, so they are working material and not publishable.
+reports/
