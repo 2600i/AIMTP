@@ -19,7 +19,7 @@ Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sd
   This was not theoretical. Three local federation images
   (`2600i-aimtp-relay-a/b/c`) were confirmed to contain `/app/.env.local`,
   `/app/.env.dev`, `/app/notes`, `/app/runtime/federation-keys.json`, and the
-  generated local Compose file. `.env.local` carries a Hetzner Cloud
+  generated local Compose file. `.env.local` carries a cloud provider
   control-plane token, an SSH key reference, a deployment host, a firewall id,
   and two relay API keys. `docs/operations.md` documents `docker compose up
   --build` as the normal startup path, so an ordinary local run reproduced it.
