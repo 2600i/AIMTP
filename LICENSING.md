@@ -103,10 +103,40 @@ reviewed for reclassification as protocol material.
 - A file containing its own license or attribution notice is governed by that
   notice to the extent it conflicts with this repository-level map.
 
+## Inbound contributions
+
+Contributions are inbound-under-outbound: **a contribution is licensed under the
+same terms this document already assigns to the file it touches.** A change to
+`spec/**` or another CC BY 4.0 path is contributed under CC BY 4.0; a change to
+`src/**`, `runtime/**`, or another ELv2 path is contributed under ELv2. A pull
+request that spans both categories is contributed under each category's terms
+for the files in it. There is no separate contributor license agreement, and
+contributors are not asked to assign copyright.
+
+By opening a pull request you represent that you wrote the contribution or are
+otherwise entitled to submit it under these terms, and that you are not
+knowingly including third-party material under incompatible terms. Flag any
+third-party material in the pull request description so its license can be
+recorded under [Exclusions and third-party material](#exclusions-and-third-party-material).
+
+Two consequences worth stating plainly, because the split model makes them
+non-obvious:
+
+- Moving a file between the CC BY 4.0 and ELv2 sets changes the terms that apply
+  to it going forward. Propose such a move as its own pull request, and update
+  the path lists above in that same change rather than afterwards.
+- The maintainers may relicense or dual-license the project's own materials.
+  They cannot unilaterally relicense a contribution outside the terms it came in
+  under, so a contribution that must carry different terms needs to say so at
+  submission time.
+
+Brand names, logos, and marks are never granted by a contribution; see
+[`TRADEMARKS.md`](TRADEMARKS.md).
+
 ## Legal review
 
 Final counsel review is required before a public standards/specification
 release, particularly for copyright ownership, schema classification, patent
-strategy for CC BY 4.0 protocol materials, trademark policy, and compatibility
-with contributions. Commercial licensing inquiries may be directed to
+strategy for CC BY 4.0 protocol materials, trademark policy, and the inbound
+contribution terms above. Commercial licensing inquiries may be directed to
 `steve@2600i.com`.
