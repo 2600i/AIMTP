@@ -23,5 +23,7 @@ jobs:
         run: npm run build
       - name: Test
         run: npm test
+      - name: Receipt and trust tests
+        run: npm run test:receipts
       - name: Verify release state
         run: npm run release:verify

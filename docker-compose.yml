@@ -9,6 +9,11 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      # The dev stage, not the deployable one: CI runs `npm test` and
+      # `npm run smoke:revocations` inside this container, which needs
+      # typescript, jest and tests/. `docker build .` with no target still
+      # produces the lean non-root runtime image.
+      target: dev
     depends_on:
       - redis
     # Published on loopback only, like the gateway below. This compose file is a
@@ -38,6 +43,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: dev
     # Published on loopback only: the operator routes control real approvals.
     ports:
       - "127.0.0.1:8788:8788"
@@ -56,9 +62,9 @@ services:
     volumes:
       - trust-gateway-data:/app/gateway-data
     command: ["node", "dist/runtime/trust-gateway.js"]
-    # The image's own HEALTHCHECK probes the relay's port, not this one, so it
-    # is replaced here rather than inherited. /healthz is unauthenticated by
-    # design — it reports that the process is serving, nothing about approvals.
+    # The image defines no HEALTHCHECK, and this service runs the gateway rather
+    # than the relay, so the probe is declared here. /healthz is unauthenticated
+    # by design — it reports that the process is serving, nothing about approvals.
     healthcheck:
       test:
         [

@@ -233,7 +233,13 @@ use case of the broader trust and authorization envelope.
 ## Contributing and license
 
 Keep changes focused, update specifications and schemas together when wire
-behavior changes, add tests or vectors where applicable, and run `npm test`.
+behavior changes, add tests or vectors where applicable, and run `npm test` and
+`npm run test:receipts`.
+
+Contributions are inbound-under-outbound: your change is licensed under whatever
+terms this repository already applies to the files you touched. There is no
+contributor license agreement and no copyright assignment. See the inbound
+contributions section of [LICENSING.md](LICENSING.md).
 
 AIMTP uses a split licensing model:
 

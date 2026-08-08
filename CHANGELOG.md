@@ -6,7 +6,56 @@ Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sd
 
 ## [Unreleased]
 
+### Security
+
+- **The Docker build context could bake local credentials into image layers,
+  and had already done so.** `Dockerfile` used `COPY . .` while `.dockerignore`
+  restated a few `.gitignore` entries by hand. The two lists had drifted:
+  `.env` was excluded but `.env.local` and `.env.dev` were not, and neither were
+  `notes/`, `runtime/federation-keys.json`, `docker-compose.*.local.yml`, or the
+  ignored white-paper artifacts. Git's ignore rules were never a build-context
+  boundary.
+
+  This was not theoretical. Three local federation images
+  (`2600i-aimtp-relay-a/b/c`) were confirmed to contain `/app/.env.local`,
+  `/app/.env.dev`, `/app/notes`, `/app/runtime/federation-keys.json`, and the
+  generated local Compose file. `.env.local` carries a cloud provider
+  control-plane token, an SSH key reference, a deployment host, a firewall id,
+  and two relay API keys. `docs/operations.md` documents `docker compose up
+  --build` as the normal startup path, so an ordinary local run reproduced it.
+
+  `.dockerignore` is now deny-by-default: everything is excluded and build
+  inputs are re-included by name, so a new file stays out of the image until
+  someone adds it deliberately. The affected images and the BuildKit cache
+  holding the old context layers were deleted locally. **The credentials in
+  `.env.local` must still be rotated** — deleting the images does not undo
+  their exposure.
+
+- **The runtime image shipped the full dev toolchain.** `npm ci` ran without
+  `--omit=dev` in a single-stage build, so `ts-jest`'s `handlebars` (critical)
+  and `jest`'s `js-yaml`, `minimatch` and `picomatch` (high) shipped in an image
+  that never runs a test. `Dockerfile` is now two-stage: the default stage
+  installs production dependencies only and runs as `node` rather than root,
+  while a `dev` stage keeps the toolchain for the in-container CI run.
+  `docker-compose.yml` targets `dev` explicitly.
+
+- **All eight dependency advisories resolved** (1 low, 1 moderate, 5 high, 1
+  critical; 2 of them production). `ajv` 8.17.1 → 8.20.0 and `fast-uri` → 3.1.5
+  within the existing `^8.17.1` range, so no direct dependency changed. Neither
+  production advisory was reachable here — `$data` is disabled and schema `$id`s
+  are trusted — but they are gone rather than argued about.
+
+- **`reports/` is now gitignored.** Audit and review reports name local
+  credential files and describe unpatched findings; a `git add -A` before making
+  the repository public would have committed one.
+
 ### Added
+
+- Inbound contribution terms in `LICENSING.md`: contributions are licensed under
+  the same terms already applying to the files they touch, with no CLA and no
+  copyright assignment. The split CC BY 4.0 / ELv2 model made this ambiguous,
+  and the ambiguity hardens once outside pull requests arrive. `LICENSE` and
+  `README.md` point at the rule.
 
 - `SECURITY.md` — vulnerability disclosure process, scope, supported versions,
   and an explicit "known and accepted" list so the demo keys in git history, the
@@ -15,6 +64,71 @@ Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sd
   findings.
 
 ### Fixed
+
+- **`npm run test:receipts` had not run since February.** `jest-util` is a peer
+  dependency of `ts-jest` and was not installed at the top level, so npm nested
+  it under `@jest/core` where `ts-jest` could not resolve it; the script exited
+  with "Cannot find module 'jest-util'" and zero of four suites executed. The
+  suite was also absent from CI, so receipt, trust-transparency and
+  receipt-policy behavior could regress while CI stayed green. `jest-util` is
+  now a direct dev dependency, all four suites pass (85 tests), and both
+  workflows run the script as a required step.
+
+- **"Exactly once" claimed more than the Gateway guarantees.** The
+  compare-and-swap out of `PENDING_APPROVAL` stops two concurrent approvers from
+  both executing, but it is not crash-safe: a process that dies between
+  performing the protected action and writing `COMPLETED` leaves the approval in
+  `EXECUTING`, and nothing transitions it out — there is no timeout, reconciler,
+  or operator route for that state. `docs/architecture.md`, `docs/GLOSSARY.md`,
+  `docs/trust-gateway.md` and the `transitionApproval`/`approve` comments now
+  scope the claim to concurrency and state the crash window and its manual
+  recovery. No behavior changed.
+
+- **"Every decision is audited" was false on the operator path.** The request
+  path is fully audited, but eight refusal paths return an error and write no
+  audit event: approve/reject on an unknown approval id, acting on an
+  already-decided approval, losing the claim race, operator auth failure (401),
+  unconfigured operator routes (503), and malformed or oversized bodies
+  (400/413). Audit writes are also not transactional with the state transitions
+  they describe. `docs/trust-gateway.md` now enumerates the gaps rather than
+  claiming completeness.
+
+- **`docs/operations.md` said Redis was reachable at `redis://localhost:6379`.**
+  The Compose definition publishes no host port for Redis, so that never worked
+  from the host. Corrected to the in-network address with the `docker compose
+  exec` route for inspection.
+
+- **`AGENTS.md` documented `npm run format`, which does not exist.** Replaced
+  with the real command set, including `npm run test:receipts`.
+
+- **`docs/whitepapers/WHITEPAPER_STATUS.md` said the historical diagram naming
+  "was normalized."** It was not — git records a directory move with basenames
+  unchanged, and `docs/history/README.md` states they are preserved byte-for-byte
+  including legacy naming such as `imtp-`. The two documents now agree.
+
+- `docs/DOCUMENTATION_MAP.md` omitted `SECURITY.md`, `CLAUDE.md`, and every
+  build, packaging and CI file. Added, along with `verify-docker-parity-and-ship`
+  marked `NEEDS_UPDATE` — nothing references it.
+
+- `docs/security.md` now says "No private key is present at `HEAD`" and links
+  the history disposition, rather than a bare "not committed" that a security
+  reader could read as covering history too.
+
+- `docs/trust-gateway.md` documents why policy denials answer HTTP 200, and that
+  monitoring must alert on `decision` and the audit log rather than status codes.
+
+- `docs/runtime.md` documents the relay's authentication status codes, which were
+  previously undocumented and are easy to misread: `401` means no key was
+  presented, `403` means a key was presented and rejected. A rejected credential
+  is therefore `403`, not `401`. It also notes that `403` covers two distinct
+  failures — `Invalid API key` and `Recipient access denied` — so callers must
+  check `code`/`message` rather than the status alone, records the fail-closed
+  behavior when no key variable is configured, and explains that multiple keys
+  are simultaneously valid (which is what makes an overlapping key rotation
+  possible, and why rotating `AIMTP_API_KEY` alone is a hard cutover).
+
+- A `docker-compose.yml` comment described a HEALTHCHECK the image has never
+  defined.
 
 - **Two `docs/history/whitepaper-images/` diagrams were not historical
   artifacts.** They had been regenerated on 2026-08-07 and carried signed C2PA

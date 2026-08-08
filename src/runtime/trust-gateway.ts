@@ -104,7 +104,9 @@ export interface TrustGatewayStore {
   /**
    * Atomically move an approval out of `from`, applying `changes`. Returns the updated
    * record, or null when the approval was not in `from` (already decided or missing).
-   * This is the single-claim primitive that makes approval execution exactly-once.
+   * This is the single-claim primitive that stops two concurrent approvers from both
+   * executing. It does not survive a crash: see `approve` for why `EXECUTING` is a
+   * terminal state in practice.
    */
   transitionApproval(
     approvalId: string,
@@ -410,6 +412,12 @@ export class AgentTrustGateway {
 
     // Claim the approval atomically. Losing this race means another approver (or
     // another gateway process) already took it, so this call must not execute.
+    //
+    // Crash window: if the process dies after `execute` performs the protected
+    // action but before `COMPLETED` is written below, the record stays in
+    // `EXECUTING` and nothing moves it out — there is no timeout or reconciler.
+    // Closing that properly needs a durable idempotency key or outbox shared with
+    // the protected system, not a change here. Documented in docs/trust-gateway.md.
     const claimed = this.store.transitionApproval(approvalId, "PENDING_APPROVAL", { decision: "EXECUTING", decision_at: nowIso(), approver_id: approverId });
     if (!claimed) return { request_id: approval.request_id, status: "denied", decision: "DENY", reason: "Approval has already been decided", approval_id: approvalId };
 

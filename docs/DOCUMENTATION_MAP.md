@@ -33,6 +33,8 @@ These curation states do not indicate product maturity. See
 | `CONTEXT.md` | ACTIVE | Working context for contributors and coding agents | Concise contributor guardrails and current architecture summary | — | Keep short and point to canonical docs. |
 | `CODEX_PROJECT.md` | DEPRECATED | Former duplicate coding-agent context | Nothing current | `CONTEXT.md` | Retain only as a redirect until external references are confirmed absent. |
 | `AGENTS.md` | ACTIVE | Repository working instructions | Required development workflow and validation commands | — | Keep synchronized with actual package scripts and branch policy. |
+| `CLAUDE.md` | ACTIVE | Agent-facing repository invariants | Rules that apply to coding agents and are not derivable from the code | — | Keep limited to what `CONTEXT.md` and `AGENTS.md` do not already say. |
+| `SECURITY.md` | CANONICAL | Vulnerability reporting policy | Report channel, disclosure window, scope, and the known/accepted list | `docs/security.md` for the technical boundary detail | Review whenever a new surface becomes reportable or an accepted item is fixed. |
 | `.claude/skills/release/SKILL.md` | ACTIVE | Release automation instructions | Claude-specific release workflow | `docs/release-flow.md` for human-facing behavior | Review with release tooling changes. |
 | `CHANGELOG.md` | ACTIVE | Release history | Completed implementation changes by package version | — | Continue recording releases; do not use as a roadmap. |
 
@@ -71,6 +73,22 @@ These curation states do not indicate product maturity. See
 | `examples/python-client/README.md` | ACTIVE | Python interop demo | Running and interpreting the Python example | Base spec and conformance kit | Avoid implying a supported Python SDK. |
 | `examples/reference-agents/README.md` | ACTIVE | Local agent-flow demo | Router/executor example behavior | Gateway doc for authorization behavior | Keep relay and Gateway roles distinct. |
 | `examples/webhook-relay/README.md` | ACTIVE | Reference relay demo | At-least-once webhook-relay example | Runtime doc | Verify commands and queue semantics with runtime changes. |
+
+## Build, packaging, and CI
+
+These are not documentation, but they encode release-relevant decisions and were
+previously absent from this inventory.
+
+| Path | Status | Purpose | Authoritative for | Replacement | Action needed |
+| --- | --- | --- | --- | --- | --- |
+| `Dockerfile` | ACTIVE | Image definition | The deployable runtime image (production dependencies, non-root) and the `dev` stage CI tests inside | — | Keep the default stage free of dev dependencies; add new runtime paths explicitly. |
+| `.dockerignore` | ACTIVE | Build-context boundary | What may enter an image | — | Deny-by-default. Add allowlist entries deliberately; never relax the leading `*`. |
+| `docker-compose.yml` | ACTIVE | Local development topology | Loopback-published relay, gateway, and Redis for development and CI | — | Keep host publishing on loopback; keep the `dev` build target aligned with CI. |
+| `docker-compose.federation*.template.yml` | ACTIVE | Federation demo templates | Input to `scripts/generate-federation-keys.mjs` | — | Never add key material; the generated `*.local.yml` outputs are ignored. |
+| `.github/workflows/ci.yml` | ACTIVE | Required checks | Which suites gate `main` and tags | — | Keep in step with `package.json` scripts. |
+| `.github/workflows/dev-release-gate.yml` | ACTIVE | Dev-branch gate | Checks on the dev release line | — | Keep in step with `ci.yml`. |
+| `scripts/**` | ACTIVE | Release, key-generation, and demo tooling | Implemented release guardrails and demo setup | `docs/release-flow.md` for behavior | Keep generated key material gitignored. |
+| `verify-docker-parity-and-ship` | NEEDS_UPDATE | Interactive docker-parity and ship helper | Nothing current | `scripts/release.mjs` and `docs/release-flow.md` | Confirm it is still used; otherwise move under `scripts/` or remove. |
 
 ## Experimental material needing reconciliation
 

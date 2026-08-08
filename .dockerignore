@@ -1,10 +1,59 @@
-node_modules
-.git
-dist
-*.log
-.DS_Store
-.env
+# Deny-by-default build context.
+#
+# The previous version mirrored a handful of .gitignore entries by hand and
+# drifted: `.env` was excluded but `.env.local` and `.env.dev` were not, so a
+# plain `docker compose up --build` baked deployment credentials into image
+# layers. Git's ignore rules are not a build-context boundary, and keeping two
+# hand-maintained lists in sync had already failed once.
+#
+# Everything is excluded, then re-included by name below. A new file is out of
+# the image until someone adds it here on purpose. If a build or an in-container
+# `npm test` fails on a missing path, add that path — do not relax the `*`.
 
-# Local runtime state must never be baked into the image
+*
+
+# Sources compiled by `npm run build` and loaded at runtime.
+!src/
+!runtime/
+!sdk/
+!cli/
+
+# Test, conformance, tooling and demo surfaces. CI runs `npm test` and
+# `npm run smoke:revocations` inside this image, so they must be present.
+!tests/
+!tools/
+!scripts/
+!schemas/
+!spec/
+!config/
+!examples/
+
+# Two docs are test fixtures: 0.4-defaults-inert asserts the runtime gate
+# defaults against the gate table, and error-code-stability asserts every major
+# error code is documented. The rest of docs/ stays out — it carries the ignored
+# white-paper PDF and zip, plus history/ images whose redistribution rights are
+# unresolved.
+!docs/0.4-gates.md
+!docs/intentos-federation.md
+
+# Build and test configuration.
+!package.json
+!package-lock.json
+!tsconfig.json
+!tsconfig.jest.json
+!jest.config.cjs
+
+# License and notice material travels with the distributed artifact.
+!LICENSE
+!LICENSES/
+!LICENSING.md
+!NOTICE
+!TRADEMARKS.md
+
+# Re-exclusions: these live inside allowed directories, so `*` no longer covers
+# them and they need to be named again.
 runtime/*.sqlite
 runtime/*.db
+runtime/federation-keys.json
+**/.DS_Store
+**/node_modules
