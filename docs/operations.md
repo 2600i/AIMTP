@@ -19,7 +19,9 @@ docker compose up --build
 
 Defaults:
 - Relay listens on `http://localhost:8787/aimtp`.
-- Redis is reachable at `redis://localhost:6379`.
+- Redis is reachable at `redis://redis:6379` from inside the Compose network.
+  It publishes no host port, so it is not reachable from the host — use
+  `docker compose exec redis redis-cli` to inspect it.
 - Gateway listens on `http://127.0.0.1:8788` but denies agent requests until
   trusted public keys are configured and refuses operator routes until operator
   tokens are configured.

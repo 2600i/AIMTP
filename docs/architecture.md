@@ -89,14 +89,20 @@ flowchart TD
 
 Implemented Gateway decisions are `ALLOW`, `DENY`, and `REQUIRE_APPROVAL`.
 Every accepted request is freshness-checked and registered against replay.
-Approval revalidates identity, trust, and current policy before an exactly-once
-claim executes the handler. Operator approvals and audit reads require a
-configured operator token.
+Approval revalidates identity, trust, and current policy before a single-claim
+compare-and-swap executes the handler, so concurrent approvers cannot both
+execute. Operator approvals and audit reads require a configured operator token.
 
 Current boundary limitations matter:
 
 - Protected actions are in-process handlers; the included purchase action is a
   deterministic simulation.
+- The single-claim guarantee covers concurrency, not process crashes. A gateway
+  that dies between performing the protected action and recording `COMPLETED`
+  leaves the approval in `EXECUTING`, and nothing transitions it out — there is
+  no timeout, reconciler, or operator route for that state. Crash-safe
+  exactly-once against an external system needs a durable idempotency or outbox
+  protocol with that system, which the Gateway does not implement.
 - The Gateway does not yet proxy to an arbitrary API, payment system, relay, or
   remote AIMTP recipient.
 - Agent/principal/key bindings and policies come from local configuration; there

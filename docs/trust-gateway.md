@@ -114,15 +114,50 @@ from separate gateway processes sharing one SQLite file) execute exactly once.
 Invalid approval IDs, already-decided approvals, and approvals of rejected
 requests are all refused.
 
+That guarantee is about concurrency, not crash recovery. The claim moves the
+approval to `EXECUTING`, the handler runs, and only then is `COMPLETED` written.
+A process that dies between those last two steps leaves the approval in
+`EXECUTING` permanently: no timeout, reconciler, or operator route transitions
+it out, and the record does not say whether the protected action took effect.
+Resolving one is a manual database operation today. Treat "exactly once" as
+scoped to competing approvers against a shared store — end-to-end exactly-once
+against a real external system requires a durable idempotency key or outbox
+agreed with that system, which this MVP does not implement.
+
 `GET /gateway/approvals` returns summaries only; the stored envelope stays
 server-side. Audit events are append-only and contain no envelope payloads or key
-material. Every decision is audited, including a pre-execution `authorized` event
-so that a protected handler which crashes or is missing still leaves a complete
-record. Downstream error text is never returned to the caller — failures respond
-with a generic `Protected action failed` and HTTP 502, with details on the server
-log only.
+material. Every decision on the request path is audited, including a
+pre-execution `authorized` event so that a protected handler which crashes or is
+missing still leaves a record. Downstream error text is never returned to the
+caller — failures respond with a generic `Protected action failed` and HTTP 502,
+with details on the server log only.
+
+The operator path is narrower, and the gap is worth knowing before you rely on
+the audit log for reconstruction. These refusals return an error to the caller
+but write no audit event: approving or rejecting an unknown approval ID, acting
+on an already-decided approval, losing the compare-and-swap race to another
+approver, failing operator authentication (401), operator routes being
+unconfigured (503), and malformed or oversized request bodies (400/413). Audit
+writes are also separate statements from the state transitions they describe, so
+they are not transactional with them. The audit log is reliable evidence of what
+the Gateway decided and executed; it is not yet a complete record of every
+attempt made against it.
 
 Request bodies are capped at `AIMTP_GATEWAY_MAX_BODY_BYTES` (default 256 KB).
+
+### HTTP status codes
+
+`POST /gateway/requests` answers **200 for `DENY` as well as `ALLOW`**. This is
+deliberate: the request was well-formed, authenticated where required, and
+evaluated, and the policy decision is the body's `decision` field. A denial is a
+successful evaluation with a negative outcome, not a transport error. Reserve
+non-2xx for the Gateway failing to answer: 502 when a protected handler throws,
+400/413 for malformed or oversized bodies, 401/503 on the operator routes, and
+409 when an approval was already decided.
+
+The practical consequence is that generic monitoring cannot infer authorization
+outcomes from status codes alone. Alert on `decision` and on the audit log, not
+on the 2xx rate.
 
 ## Run the demo
 
@@ -135,7 +170,7 @@ npm run demo:trust-gateway
 The demo generates ephemeral Ed25519 keys locally; it does not write or commit a
 private key, and needs no services running. It walks the full lifecycle in one
 pass: an allowed request, an approval-required request, a human approval and its
-exactly-once execution, a duplicate approval being refused, a rejection, a
+single-claim execution, a duplicate approval being refused, a rejection, a
 known-but-untrusted agent denied, an unrecognised signing key denied, a tampered
 payload denied, a replayed envelope denied, and the resulting audit table.
 

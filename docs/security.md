@@ -48,7 +48,10 @@ Signatures should be created over canonical envelope bytes:
 
 ## Key material in this repository
 
-No private key is committed to this repository. The local federation demos need
+No private key is present at `HEAD`. Three throwaway demo keys remain reachable
+in git history and are dispositioned in
+[Keys that remain in git history](#keys-that-remain-in-git-history) below; the
+statement here is about the current tree. The local federation demos need
 Ed25519 keypairs so three throwaway relays can sign receipts to each other, and
 those are minted on demand:
 

@@ -83,6 +83,52 @@ Accepted headers:
 - `Authorization: Bearer <key>`
 - `X-AIMTP-KEY: <key>`
 
+`X-AIMTP-KEY` wins when both are present. A bare `Authorization` header that is
+not `Bearer <token>` is treated as no key at all.
+
+### Authentication status codes
+
+The relay separates "you sent no key" from "you sent a key I do not accept", and
+the distinction matters when you are debugging a deployment or rotating a key:
+
+| Condition | Status | `code` | Meaning |
+| --- | --- | --- | --- |
+| No key presented | `401` | `unauthorized` | `Missing API key` |
+| Key presented, not recognized | `403` | `forbidden` | `Invalid API key` |
+| Key recognized, but not for that recipient | `403` | `forbidden` | `Recipient access denied` |
+
+So a rejected credential is **`403`, not `401`** — `401` means the header never
+arrived. A key rotation that worked looks like `403 forbidden` for the old key.
+Because two different failures both answer `403`, check the `code` and `message`
+fields rather than the status alone: `forbidden`/`Invalid API key` is an
+authentication failure, while `forbidden`/`Recipient access denied` means the key
+authenticated and was then scoped out of that recipient.
+
+Confirming a key is live is easiest by elimination — post an obviously invalid
+body and check that the error is about the envelope rather than the key:
+
+```sh
+curl -s -w '\nHTTP %{http_code}\n' -X POST http://127.0.0.1:8787/aimtp \
+  -H "x-aimtp-key: $KEY" -H 'content-type: application/json' -d '{}'
+```
+
+`400 invalid_schema` means the key authenticated and the request reached envelope
+validation. `403 forbidden` means it did not.
+
+### Fail-closed default
+
+If neither `AIMTP_API_KEY` nor a per-recipient key variable is set, the relay
+does not disable authentication — it rejects **every** request to the endpoints
+above, `401` when no key is presented and `403` when one is. An unconfigured
+relay serves nothing rather than serving everything.
+
+Multiple keys are valid at the same time: the admin key and every entry in
+`AIMTP_RECIPIENT_KEYS` / `AIMTP_KEY_RECIPIENTS` are all accepted, and two keys
+may map to the same recipient. That is what makes an overlapping key rotation
+possible — add the new key, move clients, then remove the old one. Note that
+`AIMTP_API_KEY` is a single value with no recipient scope, so rotating it on its
+own is a hard cutover with no overlap window.
+
 AIMTP envelopes may include an optional `signature` object. The protocol is
 chain-agnostic and does not mandate a specific blockchain.
 
@@ -106,8 +152,6 @@ Verification policy behavior:
 Exempt endpoints:
 - `GET /healthz`
 - `GET /readyz` (if enabled)
-
-Unauthorized recipient access returns `403`.
 
 ## API Endpoints
 
