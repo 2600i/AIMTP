@@ -21,6 +21,8 @@ jobs:
         run: npm ci
       - name: Unit tests
         run: npm test
+      - name: Receipt and trust tests
+        run: npm run test:receipts
       - name: Build
         run: npm run build
       - name: Start docker compose
