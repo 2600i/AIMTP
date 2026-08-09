@@ -51,6 +51,14 @@ Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sd
 
 ### Added
 
+- `CONTRIBUTING.md` — contribution entry point covering the branch workflow, the
+  two commands that gate CI, the rules that are easy to trip over (the frozen
+  wire contract, the two version numbers, deny-by-default `.dockerignore`, never
+  committing key material), inbound licensing, and the redirect of security
+  reports away from public issues. Deliberately short: it links to `CONTEXT.md`,
+  `AGENTS.md`, `SECURITY.md` and `LICENSING.md` rather than restating them, and
+  says outright that those documents win on any disagreement.
+
 - Inbound contribution terms in `LICENSING.md`: contributions are licensed under
   the same terms already applying to the files they touch, with no CLA and no
   copyright assignment. The split CC BY 4.0 / ELv2 model made this ambiguous,
@@ -116,6 +124,14 @@ Note: The protocol surface is frozen since v0.1.0; later versions are runtime/sd
 
 - `docs/trust-gateway.md` documents why policy denials answer HTTP 200, and that
   monitoring must alert on `decision` and the audit log rather than status codes.
+
+- Removed `CODEX_PROJECT.md`. It had been reduced to a redirect pointing at
+  `CONTEXT.md`, and its `DOCUMENTATION_MAP.md` row said to retain it "only as a
+  redirect until external references are confirmed absent." A tree-wide grep
+  found exactly one referrer: the map row documenting its own deprecation. The
+  repository has never been public, so external references cannot exist. The
+  retention condition was satisfied, so the file is gone rather than shipped as
+  one of the first things a visitor sees.
 
 - `docs/runtime.md` documents the relay's authentication status codes, which were
   previously undocumented and are easy to misread: `401` means no key was

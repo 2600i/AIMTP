@@ -232,9 +232,10 @@ use case of the broader trust and authorization envelope.
 
 ## Contributing and license
 
-Keep changes focused, update specifications and schemas together when wire
-behavior changes, add tests or vectors where applicable, and run `npm test` and
-`npm run test:receipts`.
+Start with [CONTRIBUTING.md](CONTRIBUTING.md). In short: keep changes focused,
+update specifications and schemas together when wire behavior changes, add tests
+or vectors where applicable, and run `npm test` and `npm run test:receipts`.
+Security issues go through [SECURITY.md](SECURITY.md), not public issues.
 
 Contributions are inbound-under-outbound: your change is licensed under whatever
 terms this repository already applies to the files you touched. There is no
