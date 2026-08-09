@@ -31,7 +31,7 @@ These curation states do not indicate product maturity. See
 | `docs/DOCUMENTATION_MAP.md` | CANONICAL | Documentation inventory | Document authority and curation status | — | Review during material documentation or architecture changes. |
 | `docs/DOCUMENT_VERSIONING.md` | CANONICAL | Lifecycle policy | Documentation status, version, and supersession conventions | — | Apply selectively to high-impact documents. |
 | `CONTEXT.md` | ACTIVE | Working context for contributors and coding agents | Concise contributor guardrails and current architecture summary | — | Keep short and point to canonical docs. |
-| `CODEX_PROJECT.md` | DEPRECATED | Former duplicate coding-agent context | Nothing current | `CONTEXT.md` | Retain only as a redirect until external references are confirmed absent. |
+| `CONTRIBUTING.md` | ACTIVE | Contribution entry point | Where a contributor starts: workflow, required checks, inbound license terms, and where security reports go | `AGENTS.md` for the full command set, `LICENSING.md` for controlling license text | Keep short; link rather than restate. |
 | `AGENTS.md` | ACTIVE | Repository working instructions | Required development workflow and validation commands | — | Keep synchronized with actual package scripts and branch policy. |
 | `CLAUDE.md` | ACTIVE | Agent-facing repository invariants | Rules that apply to coding agents and are not derivable from the code | — | Keep limited to what `CONTEXT.md` and `AGENTS.md` do not already say. |
 | `SECURITY.md` | CANONICAL | Vulnerability reporting policy | Report channel, disclosure window, scope, and the known/accepted list | `docs/security.md` for the technical boundary detail | Review whenever a new surface becomes reportable or an accepted item is fixed. |
