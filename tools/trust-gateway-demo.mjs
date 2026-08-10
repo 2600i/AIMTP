@@ -44,7 +44,7 @@ show("A. Trusted agent, amount 25 -> ALLOW, protected action executes", await ga
 
 const pending = await gateway.receive(request({ id: "demo-approval", amount: 100 }));
 show("B. Trusted agent, amount 100 -> REQUIRE_APPROVAL, nothing executes yet", pending);
-show("C. Operator approves -> original request executes exactly once", await gateway.approve(pending.approval_id, "demo-operator"));
+show("C. Operator approves -> original request executes; the approval is claimed once", await gateway.approve(pending.approval_id, "demo-operator"));
 show("   A second approval of the same id is refused", await gateway.approve(pending.approval_id, "demo-operator"));
 
 const toReject = await gateway.receive(request({ id: "demo-reject", amount: 250 }));
