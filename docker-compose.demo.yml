@@ -1,0 +1,60 @@
+# The Agent Trust Gateway web demo, as a service.
+#
+# This is what makes the demo on aimtp.2600i.com live rather than recorded. The
+# website has no copy of the Gateway and cannot get one — `aimtp` is private and
+# unpublished, and the website's build context is its own repository — so the
+# public page proxies to this container instead. The Gateway, the ephemeral
+# keys and the signing all stay on this side of the boundary; the website only
+# ever forwards JSON.
+#
+#   docker network create aimtp-demo        # once, shared with the website
+#   docker compose -f docker-compose.demo.yml up --build -d
+#
+# Then set AIMTP_DEMO_ORIGIN=http://aimtp-gateway-demo:8090 on the website
+# container and attach it to the same network. With that variable unset the
+# public page renders an "unavailable" state and points at the recorded run —
+# it never fakes a live Gateway.
+
+services:
+  gateway-demo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    container_name: aimtp-gateway-demo
+    command: ["node", "examples/trust-gateway-web-demo/server.js"]
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8090"
+      # Every visitor gets an isolated in-memory Gateway. These bound what that
+      # costs: idle sessions expire, the cap evicts least-recently-used, and a
+      # single session cannot spend more than its share of request budget.
+      DEMO_SESSION_TTL_MS: "${DEMO_SESSION_TTL_MS:-900000}"
+      DEMO_MAX_SESSIONS: "${DEMO_MAX_SESSIONS:-500}"
+      DEMO_SESSION_RATE_LIMIT: "${DEMO_SESSION_RATE_LIMIT:-240}"
+    # Not published to the host. The website reaches it over the shared Docker
+    # network; nothing outside needs a route to it, and the demo has no
+    # authentication of its own precisely because it is never public.
+    expose:
+      - "8090"
+    networks:
+      - aimtp-demo
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "require('http').get('http://127.0.0.1:8090/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+
+networks:
+  aimtp-demo:
+    external: true
+    name: aimtp-demo

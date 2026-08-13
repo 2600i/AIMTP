@@ -47,6 +47,10 @@ COPY tools ./tools
 COPY schemas ./schemas
 COPY spec ./spec
 COPY config ./config
+# Only the Gateway web demo, not all of examples/. It is the one example served
+# as a long-running service (docker-compose.demo.yml), so it has to be in the
+# deployable image; the rest are scripts run from a checkout.
+COPY examples/trust-gateway-web-demo ./examples/trust-gateway-web-demo
 COPY LICENSE LICENSING.md NOTICE TRADEMARKS.md ./
 COPY LICENSES ./LICENSES
 
