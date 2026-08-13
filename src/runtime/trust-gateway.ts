@@ -14,13 +14,21 @@ const { createSignatureTrustConfig, verifyEnvelopeSignature } = require("../../r
 };
 
 export type GatewayDecision = "ALLOW" | "DENY" | "REQUIRE_APPROVAL";
-export type GatewayStatus = "allowed" | "denied" | "pending_approval" | "completed" | "rejected" | "failed";
+export type GatewayStatus = "allowed" | "denied" | "pending_approval" | "completed" | "rejected" | "failed" | "in_doubt";
 /** `authorized` is audit-only: the decision was recorded before the protected action ran. */
-export type GatewayAuditOutcome = GatewayStatus | "authorized";
+export type GatewayAuditOutcome = GatewayStatus | "authorized" | "resolved";
 
 export const DEFAULT_MAX_REQUEST_AGE_SEC = 300;
 export const DEFAULT_CLOCK_SKEW_SEC = 60;
 export const DEFAULT_MAX_BODY_BYTES = 256 * 1024;
+
+/**
+ * How long an execution may sit in `EXECUTING` before `reconcile` treats it as
+ * unaccounted for. Generous on purpose: marking a slow-but-live call in doubt
+ * costs an operator a pointless investigation, and the cost of waiting longer is
+ * only that a genuine crash is noticed later. Neither error double-executes.
+ */
+export const DEFAULT_EXECUTION_TIMEOUT_MS = 15 * 60 * 1000;
 /** Callers never receive downstream error text; details go to the server log only. */
 export const EXECUTION_FAILED_REASON = "Protected action failed";
 
@@ -72,10 +80,33 @@ export interface PendingApproval {
   action: string;
   envelope: AIMTPEnvelope;
   created_at: string;
-  decision: "PENDING_APPROVAL" | "APPROVED" | "REJECTED" | "EXECUTING" | "COMPLETED" | "FAILED";
+  decision:
+    | "PENDING_APPROVAL"
+    | "APPROVED"
+    | "REJECTED"
+    | "EXECUTING"
+    | "COMPLETED"
+    | "FAILED"
+    /**
+     * The handler was entered and never returned an outcome the gateway
+     * recorded. Whether the protected action took effect is genuinely unknown
+     * here — that is the honest state, and it is why this is distinct from
+     * FAILED, which means the handler returned an error and did not act.
+     */
+    | "IN_DOUBT";
   decision_at?: string;
   approver_id?: string;
   result?: Record<string, unknown>;
+  /** Set immediately before the handler is entered. Absence means it never was. */
+  execution_started_at?: string;
+  /** Attempts that have entered the handler. Above 1 implies a prior in-doubt attempt. */
+  attempts?: number;
+  /** Stable across attempts; handed to the handler so a cooperating system can dedupe. */
+  idempotency_key?: string;
+  /** How an operator settled an IN_DOUBT record, and who said so. */
+  resolution?: "executed" | "not_executed";
+  resolved_by?: string;
+  resolved_at?: string;
 }
 
 /** Approval records without the stored envelope, safe to list to an operator UI. */
@@ -120,6 +151,14 @@ export interface TrustGatewayStore {
    * seen, which is what makes a captured envelope non-replayable.
    */
   registerRequestId(requestId: string, expiresAtMs: number): boolean;
+  /**
+   * Approvals sitting in `EXECUTING` since before `startedBeforeIso`. These are
+   * the candidates for reconciliation: the handler was entered and no outcome
+   * was ever written, which after a crash is indistinguishable from a call that
+   * is merely slow. That ambiguity is why the caller supplies the cutoff rather
+   * than the store guessing one.
+   */
+  listStaleExecuting(startedBeforeIso: string): PendingApproval[];
 }
 
 function copy<T>(value: T): T { return JSON.parse(JSON.stringify(value)) as T; }
@@ -150,6 +189,15 @@ export class InMemoryTrustGatewayStore implements TrustGatewayStore {
   }
   appendAudit(event: AuditEvent): void { this.audits.push(copy(event)); }
   listAudit(limit: number): AuditEvent[] { return this.audits.slice(-limit).reverse().map(copy); }
+  listStaleExecuting(startedBeforeIso: string): PendingApproval[] {
+    return Array.from(this.approvals.values())
+      // A record with no execution_started_at predates this field. It is left
+      // alone rather than swept: reconciling one would assert a start time the
+      // gateway never observed.
+      .filter((record) => record.decision === "EXECUTING" && typeof record.execution_started_at === "string" && record.execution_started_at < startedBeforeIso)
+      .map(copy)
+      .sort((a, b) => (a.execution_started_at || "").localeCompare(b.execution_started_at || ""));
+  }
   registerRequestId(requestId: string, expiresAtMs: number): boolean {
     const now = Date.now();
     if (this.seenRequests.size > 1000) {
@@ -194,6 +242,20 @@ export class SQLiteTrustGatewayStore implements TrustGatewayStore {
     });
     return claim();
   }
+  listStaleExecuting(startedBeforeIso: string): PendingApproval[] {
+    // Records written before execution_started_at existed have a NULL extract and
+    // are excluded by the comparison, which is the wanted behaviour: sweeping one
+    // would assert a start time never observed.
+    return this.db
+      .prepare(
+        `SELECT record_json FROM trust_gateway_approvals
+          WHERE json_extract(record_json, '$.decision') = 'EXECUTING'
+            AND json_extract(record_json, '$.execution_started_at') < ?
+          ORDER BY json_extract(record_json, '$.execution_started_at') ASC`
+      )
+      .all(startedBeforeIso)
+      .map((row: any) => JSON.parse(row.record_json));
+  }
   appendAudit(event: AuditEvent): void { this.db.prepare("INSERT INTO trust_gateway_audit (event_json) VALUES (?)").run(JSON.stringify(event)); }
   listAudit(limit: number): AuditEvent[] { return this.db.prepare("SELECT event_json FROM trust_gateway_audit ORDER BY sequence DESC LIMIT ?").all(limit).map((row: any) => JSON.parse(row.event_json)); }
   registerRequestId(requestId: string, expiresAtMs: number): boolean {
@@ -233,7 +295,20 @@ export function evaluateGatewayPolicy(config: TrustGatewayConfig, identity: Gate
   return { decision: matched.decision, matched_policy: matched.id, reason: `Matched policy ${matched.id}`, timestamp: nowIso() };
 }
 
-type ProtectedHandler = (input: Record<string, unknown>, context: { request_id: string; agent_id: string }) => Promise<Record<string, unknown>> | Record<string, unknown>;
+/**
+ * `idempotency_key` is stable for a given authorization and does not change
+ * between attempts. A protected system that stores it and refuses a repeat is
+ * what makes a retry after an in-doubt execution safe; one that ignores it gets
+ * no such protection, and the gateway cannot supply it on that system's behalf.
+ *
+ * `attempt` starts at 1. Anything above that means a previous attempt reached
+ * this handler and its outcome was never recorded — the handler is being asked
+ * to complete work that may already have happened.
+ */
+type ProtectedHandler = (
+  input: Record<string, unknown>,
+  context: { request_id: string; agent_id: string; idempotency_key: string; attempt: number }
+) => Promise<Record<string, unknown>> | Record<string, unknown>;
 
 type RevalidationResult =
   | { ok: true; identity: GatewayIdentity; input: Record<string, unknown> }
@@ -371,10 +446,22 @@ export class AgentTrustGateway {
     }
   }
 
-  private async execute(envelope: AIMTPEnvelope, identity: GatewayIdentity, action: string, input: Record<string, unknown>): Promise<Record<string, unknown>> {
+  /**
+   * The idempotency key is the envelope id. That id is already unique and
+   * single-use per authorization, so deriving a second identifier would add a
+   * value to correlate without adding meaning. Handlers should treat it as
+   * opaque; what matters is that it is identical on every attempt.
+   */
+  private async execute(
+    envelope: AIMTPEnvelope,
+    identity: GatewayIdentity,
+    action: string,
+    input: Record<string, unknown>,
+    attempt = 1
+  ): Promise<Record<string, unknown>> {
     const handler = this.handlers.get(action);
     if (!handler) throw new Error(`No protected handler for action ${action}`);
-    return handler(input, { request_id: envelope.id, agent_id: identity.agent_id });
+    return handler(input, { request_id: envelope.id, agent_id: identity.agent_id, idempotency_key: envelope.id, attempt });
   }
 
   /**
@@ -413,16 +500,24 @@ export class AgentTrustGateway {
     // Claim the approval atomically. Losing this race means another approver (or
     // another gateway process) already took it, so this call must not execute.
     //
-    // Crash window: if the process dies after `execute` performs the protected
-    // action but before `COMPLETED` is written below, the record stays in
-    // `EXECUTING` and nothing moves it out — there is no timeout or reconciler.
-    // Closing that properly needs a durable idempotency key or outbox shared with
-    // the protected system, not a change here. Documented in docs/trust-gateway.md.
-    const claimed = this.store.transitionApproval(approvalId, "PENDING_APPROVAL", { decision: "EXECUTING", decision_at: nowIso(), approver_id: approverId });
+    // `execution_started_at` is written in the same durable transition, before the
+    // handler is entered. That is what makes the crash window recoverable: a
+    // record in EXECUTING with a start time is a call that was begun and never
+    // accounted for, and `reconcile` can find it. Without the timestamp the same
+    // record is indistinguishable from one that never reached the handler.
+    const startedAt = nowIso();
+    const claimed = this.store.transitionApproval(approvalId, "PENDING_APPROVAL", {
+      decision: "EXECUTING",
+      decision_at: startedAt,
+      approver_id: approverId,
+      execution_started_at: startedAt,
+      attempts: 1,
+      idempotency_key: approval.envelope.id
+    });
     if (!claimed) return { request_id: approval.request_id, status: "denied", decision: "DENY", reason: "Approval has already been decided", approval_id: approvalId };
 
     try {
-      const result = await this.execute(claimed.envelope, revalidated.identity, claimed.action, revalidated.input);
+      const result = await this.execute(claimed.envelope, revalidated.identity, claimed.action, revalidated.input, claimed.attempts || 1);
       this.store.updateApproval({ ...claimed, decision: "COMPLETED", result });
       this.audit({ request_id: claimed.request_id, agent_id: claimed.agent_id, principal_id: claimed.principal_id, action: claimed.action, authentication_result: "passed", trust_result: "trusted", policy_decision: "ALLOW", final_outcome: "completed", reason: "Approved by operator and executed", approval_id: approvalId, approver_id: approverId });
       return { request_id: claimed.request_id, status: "completed", decision: "ALLOW", reason: "Approved and executed", approval_id: approvalId, result };
@@ -439,6 +534,110 @@ export class AgentTrustGateway {
     if (!claimed) return { request_id: approval.request_id, status: "denied", decision: "DENY", reason: "Approval has already been decided", approval_id: approvalId };
     this.audit({ request_id: claimed.request_id, agent_id: claimed.agent_id, principal_id: claimed.principal_id, action: claimed.action, authentication_result: "passed", trust_result: "trusted", policy_decision: "DENY", final_outcome: "rejected", reason: "Rejected by operator", approval_id: approvalId, approver_id: approverId });
     return { request_id: claimed.request_id, status: "rejected", decision: "DENY", reason: "Rejected by operator", approval_id: approvalId };
+  }
+
+  /**
+   * Moves executions that were begun and never accounted for into `IN_DOUBT`.
+   *
+   * This does not discover whether the protected action took effect — it cannot,
+   * and neither can anything else on this side of the call. What it does is stop
+   * the ambiguity from being invisible: an `EXECUTING` record that outlives the
+   * timeout is either a crash or a call still running, and both deserve to be
+   * surfaced rather than sit forever in a state that reads like progress.
+   *
+   * Deliberately not automatic. A timer that retried would be asserting the
+   * action did not happen; a timer that completed would be asserting it did.
+   * Only an operator who has checked the protected system knows which, so this
+   * marks and reports, and `resolveInDoubt` records what they found.
+   *
+   * Safe to run on several gateway processes at once: each record is claimed
+   * with the same compare-and-swap the approval path uses, so a record is
+   * reported by exactly one caller.
+   */
+  reconcile(options: { staleAfterMs?: number; now?: () => number } = {}): ApprovalSummary[] {
+    const staleAfterMs = Math.max(0, options.staleAfterMs ?? DEFAULT_EXECUTION_TIMEOUT_MS);
+    const now = options.now ? options.now() : Date.now();
+    const cutoff = new Date(now - staleAfterMs).toISOString();
+    const found: ApprovalSummary[] = [];
+    for (const stale of this.store.listStaleExecuting(cutoff)) {
+      const claimed = this.store.transitionApproval(stale.approval_id, "EXECUTING", { decision: "IN_DOUBT" });
+      if (!claimed) continue; // another process got there first
+      this.audit({
+        request_id: claimed.request_id,
+        agent_id: claimed.agent_id,
+        principal_id: claimed.principal_id,
+        action: claimed.action,
+        authentication_result: "passed",
+        trust_result: "trusted",
+        policy_decision: "ALLOW",
+        final_outcome: "in_doubt",
+        reason: "Execution was begun and never recorded an outcome",
+        approval_id: claimed.approval_id,
+        approver_id: claimed.approver_id
+      });
+      this.log("trust_gateway_execution_in_doubt", {
+        approval_id: claimed.approval_id,
+        request_id: claimed.request_id,
+        action: claimed.action,
+        idempotency_key: claimed.idempotency_key,
+        execution_started_at: claimed.execution_started_at
+      });
+      found.push(summarize(claimed));
+    }
+    return found;
+  }
+
+  /** Approvals awaiting an operator's finding, oldest execution first. */
+  listInDoubt(): ApprovalSummary[] {
+    return this.store.listApprovals().filter((record) => record.decision === "IN_DOUBT").map(summarize);
+  }
+
+  /**
+   * Records what an operator found in the protected system. `executed` settles
+   * the record as COMPLETED; `not_executed` settles it as FAILED, which is the
+   * state that leaves the action available to be requested again.
+   *
+   * The gateway does not verify the finding — it cannot — so the audit event
+   * attributes it to the operator who made the call rather than presenting it as
+   * something the gateway observed.
+   */
+  resolveInDoubt(approvalId: string, resolution: "executed" | "not_executed", resolverId: string): GatewayResponse {
+    const approval = this.store.getApproval(approvalId);
+    if (!approval) return { request_id: null, status: "denied", decision: "DENY", reason: "Unknown approval id" };
+    if (approval.decision !== "IN_DOUBT") {
+      return { request_id: approval.request_id, status: "denied", decision: "DENY", reason: "Approval is not in doubt", approval_id: approvalId };
+    }
+    const resolvedAt = nowIso();
+    const claimed = this.store.transitionApproval(approvalId, "IN_DOUBT", {
+      decision: resolution === "executed" ? "COMPLETED" : "FAILED",
+      resolution,
+      resolved_by: resolverId,
+      resolved_at: resolvedAt
+    });
+    if (!claimed) return { request_id: approval.request_id, status: "denied", decision: "DENY", reason: "Approval is not in doubt", approval_id: approvalId };
+    const reason = resolution === "executed"
+      ? "Operator confirmed the protected action took effect"
+      : "Operator confirmed the protected action did not take effect";
+    this.audit({
+      request_id: claimed.request_id,
+      agent_id: claimed.agent_id,
+      principal_id: claimed.principal_id,
+      action: claimed.action,
+      authentication_result: "passed",
+      trust_result: "trusted",
+      policy_decision: "ALLOW",
+      final_outcome: "resolved",
+      reason,
+      approval_id: approvalId,
+      approver_id: resolverId
+    });
+    return {
+      request_id: claimed.request_id,
+      status: resolution === "executed" ? "completed" : "failed",
+      decision: "ALLOW",
+      reason,
+      approval_id: approvalId
+    };
   }
 }
 
@@ -573,6 +772,36 @@ export function createAgentTrustGatewayServer(gateway: AgentTrustGateway, option
         // The approver is the authenticated operator; any body-supplied id is ignored.
         const response = match[2] === "approve" ? await gateway.approve(match[1], operatorId) : gateway.reject(match[1], operatorId);
         return send(res, response.status === "denied" ? 409 : response.status === "failed" ? 502 : 200, response);
+      }
+
+      if (req.method === "GET" && url.pathname === "/gateway/in-doubt") {
+        if (!requireOperator(req, res)) return;
+        return send(res, 200, { approvals: gateway.listInDoubt() });
+      }
+
+      // Sweeping is an operator action rather than a background timer, because
+      // the result is a work queue for a person: every record it returns needs
+      // someone to look in the protected system and say what happened.
+      if (req.method === "POST" && url.pathname === "/gateway/reconcile") {
+        if (!requireOperator(req, res)) return;
+        const staleAfterMs = Number(url.searchParams.get("stale_after_ms"));
+        const found = gateway.reconcile(Number.isFinite(staleAfterMs) && staleAfterMs >= 0 ? { staleAfterMs } : {});
+        return send(res, 200, { in_doubt: found });
+      }
+
+      const resolveMatch = url.pathname.match(/^\/gateway\/approvals\/([^/]+)\/resolve$/);
+      if (req.method === "POST" && resolveMatch) {
+        const operatorId = requireOperator(req, res);
+        if (!operatorId) return;
+        const body = await readBody(req, maxBodyBytes);
+        const resolution = isObject(body) ? body.resolution : undefined;
+        // No default. Guessing here would put a finding in the audit trail that
+        // no operator actually made.
+        if (resolution !== "executed" && resolution !== "not_executed") {
+          return send(res, 400, { code: "invalid_resolution", message: 'resolution must be "executed" or "not_executed"' });
+        }
+        const response = gateway.resolveInDoubt(resolveMatch[1], resolution, operatorId);
+        return send(res, response.status === "denied" ? 409 : 200, response);
       }
     } catch (error) {
       const status = error instanceof HttpError ? error.statusCode : 400;
