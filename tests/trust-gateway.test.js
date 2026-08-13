@@ -207,9 +207,112 @@ async function main() {
   const completedEvent = audit.find((event) => event.final_outcome === "completed");
   assert.equal(completedEvent.approver_id, "operator-1", "the approver is recorded in the audit trail");
 
+  await testDurableExecution(trusted, trustedPublic);
   await testSqliteStore(trusted, trustedPublic);
   await testHttpSurface(trusted, trustedPublic);
   console.log("OK: trust gateway tests");
+}
+
+/**
+ * The crash window, and what the gateway can honestly say about it.
+ *
+ * A process that dies between performing the protected action and recording the
+ * outcome leaves a record that says EXECUTING forever. The point of these tests
+ * is not that the gateway recovers the truth — it cannot — but that the
+ * ambiguity becomes visible, carries a key the protected system can be asked
+ * about, and can be settled by a person on the record.
+ */
+async function testDurableExecution(trusted, trustedPublic) {
+  const store = new InMemoryTrustGatewayStore();
+  let seenContext = null;
+  let recordDuringExecution = null;
+  const gateway = new AgentTrustGateway({
+    config: config(), store, logger: silentLogger,
+    trustedKeys: `trusted-key=${trustedPublic}`,
+    handlers: {
+      "purchase.create": (input, context) => {
+        seenContext = context;
+        // Read our own approval record from inside the handler. This is the only
+        // moment that proves the durable write happened *before* the side effect
+        // rather than around it — after the call returns, both orderings look
+        // identical.
+        recordDuringExecution = store.listApprovals().find((r) => r.request_id === context.request_id) || null;
+        return { executed: true, amount: input.amount };
+      }
+    }
+  });
+
+  const pending = await gateway.receive(sign(unsigned("procurement-agent-1", 500, "durable-1"), trusted.privateKey, "trusted-key"));
+  assert.equal(pending.status, "pending_approval");
+  await gateway.approve(pending.approval_id, "operator-1");
+
+  assert.equal(seenContext.idempotency_key, "gateway-durable-1", "handler receives the envelope id as its idempotency key");
+  assert.equal(seenContext.request_id, seenContext.idempotency_key, "the key is the request id, not a second identifier");
+  assert.equal(seenContext.attempt, 1, "a first execution reports attempt 1");
+  assert.equal(recordDuringExecution.decision, "EXECUTING", "the record is durable before the side effect runs");
+  assert.ok(recordDuringExecution.execution_started_at, "a start time is written before the handler is entered");
+  assert.equal(recordDuringExecution.idempotency_key, "gateway-durable-1", "the key is persisted, not only passed");
+
+  // --- a crashed execution is exactly this record, left behind ---------------
+  const crashed = await gateway.receive(sign(unsigned("procurement-agent-1", 600, "durable-crash"), trusted.privateKey, "trusted-key"));
+  store.transitionApproval(crashed.approval_id, "PENDING_APPROVAL", {
+    decision: "EXECUTING",
+    decision_at: new Date(Date.now() - 3600_000).toISOString(),
+    approver_id: "operator-1",
+    execution_started_at: new Date(Date.now() - 3600_000).toISOString(),
+    attempts: 1,
+    idempotency_key: "gateway-durable-crash"
+  });
+
+  // A generous timeout must not sweep it yet: an execution can legitimately be slow.
+  assert.equal(gateway.reconcile({ staleAfterMs: 7200_000 }).length, 0, "a recent execution is not swept");
+  assert.equal(store.getApproval(crashed.approval_id).decision, "EXECUTING");
+
+  const found = gateway.reconcile({ staleAfterMs: 60_000 });
+  assert.equal(found.length, 1, "an execution older than the timeout is reported");
+  assert.equal(found[0].approval_id, crashed.approval_id);
+  assert.equal(found[0].idempotency_key, "gateway-durable-crash", "the report carries the key to ask downstream with");
+  assert.equal(store.getApproval(crashed.approval_id).decision, "IN_DOUBT");
+  assert.equal(found[0].envelope, undefined, "in-doubt reports are summaries and never carry the envelope");
+
+  const inDoubtEvent = store.listAudit(200).find((event) => event.final_outcome === "in_doubt");
+  assert.ok(inDoubtEvent, "going in doubt is audited");
+  assert.equal(inDoubtEvent.approval_id, crashed.approval_id);
+
+  // Sweeping again must not re-report it, or a queue of one incident grows forever.
+  assert.equal(gateway.reconcile({ staleAfterMs: 60_000 }).length, 0, "reconcile does not re-report a settled record");
+  assert.equal(gateway.listInDoubt().length, 1, "the record stays listed until an operator resolves it");
+
+  // --- an operator settles it ------------------------------------------------
+  const resolved = gateway.resolveInDoubt(crashed.approval_id, "executed", "operator-2");
+  assert.equal(resolved.status, "completed");
+  const settled = store.getApproval(crashed.approval_id);
+  assert.equal(settled.decision, "COMPLETED");
+  assert.equal(settled.resolution, "executed");
+  assert.equal(settled.resolved_by, "operator-2", "the finding is attributed to the operator who made it");
+  const resolvedEvent = store.listAudit(200).find((event) => event.final_outcome === "resolved");
+  assert.ok(resolvedEvent && resolvedEvent.approver_id === "operator-2", "the resolution is audited against its operator");
+  assert.equal(gateway.listInDoubt().length, 0);
+
+  // Resolving something that is not in doubt is refused rather than silently applied.
+  assert.equal(gateway.resolveInDoubt(crashed.approval_id, "executed", "operator-2").status, "denied");
+  assert.equal(gateway.resolveInDoubt("approval-does-not-exist", "executed", "operator-2").status, "denied");
+
+  // --- not_executed leaves the action available to be requested again --------
+  const second = await gateway.receive(sign(unsigned("procurement-agent-1", 700, "durable-crash-2"), trusted.privateKey, "trusted-key"));
+  store.transitionApproval(second.approval_id, "PENDING_APPROVAL", {
+    decision: "EXECUTING", execution_started_at: new Date(Date.now() - 3600_000).toISOString(), attempts: 1
+  });
+  gateway.reconcile({ staleAfterMs: 60_000 });
+  assert.equal(gateway.resolveInDoubt(second.approval_id, "not_executed", "operator-2").status, "failed");
+  assert.equal(store.getApproval(second.approval_id).decision, "FAILED");
+
+  // --- records predating the field are left alone ----------------------------
+  // Sweeping one would assert a start time the gateway never observed.
+  const legacy = await gateway.receive(sign(unsigned("procurement-agent-1", 800, "durable-legacy"), trusted.privateKey, "trusted-key"));
+  store.transitionApproval(legacy.approval_id, "PENDING_APPROVAL", { decision: "EXECUTING" });
+  assert.equal(gateway.reconcile({ staleAfterMs: 0 }).length, 0, "an EXECUTING record with no start time is never swept");
+  assert.equal(store.getApproval(legacy.approval_id).decision, "EXECUTING");
 }
 
 async function testSqliteStore(trusted, trustedPublic) {
@@ -242,6 +345,26 @@ async function testSqliteStore(trusted, trustedPublic) {
     assert.equal((await second.receive(replayable)).status, "denied", "sqlite replay protection is shared");
     assert.equal(executions, 2);
     assert.ok(first.store.listAudit(100).length > 0, "sqlite audit is readable");
+
+    // Reconciliation across processes. The SQLite sweep is a different query
+    // from the in-memory filter — a json_extract against stored records — so it
+    // is exercised rather than assumed to match.
+    const crashed = await first.receive(sign(unsigned("procurement-agent-1", 900, "sqlite-crash"), trusted.privateKey, "trusted-key"));
+    const longAgo = new Date(Date.now() - 3600_000).toISOString();
+    first.store.transitionApproval(crashed.approval_id, "PENDING_APPROVAL", {
+      decision: "EXECUTING", execution_started_at: longAgo, attempts: 1, idempotency_key: "gateway-sqlite-crash"
+    });
+    assert.equal(first.reconcile({ staleAfterMs: 7200_000 }).length, 0, "sqlite sweep respects the timeout");
+
+    // Two processes sweeping at once must report the record once between them,
+    // or one incident becomes two work items for whoever is on call.
+    const swept = [first.reconcile({ staleAfterMs: 60_000 }), second.reconcile({ staleAfterMs: 60_000 })];
+    assert.equal(swept[0].length + swept[1].length, 1, "concurrent sweeps report a record exactly once");
+    assert.equal(second.store.getApproval(crashed.approval_id).decision, "IN_DOUBT", "the state is shared across processes");
+
+    assert.equal(second.resolveInDoubt(crashed.approval_id, "not_executed", "operator-2").status, "failed");
+    assert.equal(first.store.getApproval(crashed.approval_id).decision, "FAILED", "resolution is visible to the other process");
+    assert.equal(executions, 2, "reconciling and resolving never execute anything");
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -315,6 +438,45 @@ async function testHttpSurface(trusted, trustedPublic) {
 
     assert.equal((await call("GET", "/gateway/requests")).code, 404);
     assert.equal((await call("POST", "/gateway/requests", { body: "{not json" })).code, 400);
+
+    // --- reconciliation over HTTP -------------------------------------------
+    // These read and mutate execution state, so they fail closed like every
+    // other operator route rather than being readable anonymously.
+    assert.equal((await call("GET", "/gateway/in-doubt")).code, 401);
+    assert.equal((await call("POST", "/gateway/reconcile")).code, 401);
+    assert.equal((await call("POST", "/gateway/approvals/whatever/resolve", { body: { resolution: "executed" } })).code, 401);
+
+    const crashable = await call("POST", "/gateway/requests", { body: sign(unsigned("procurement-agent-1", 950, "http-crash"), trusted.privateKey, "trusted-key") });
+    assert.equal(crashable.body.status, "pending_approval");
+    const executionsBefore = executions;
+    gateway.store.transitionApproval(crashable.body.approval_id, "PENDING_APPROVAL", {
+      decision: "EXECUTING", execution_started_at: new Date(Date.now() - 3600_000).toISOString(), attempts: 1, idempotency_key: "gateway-http-crash"
+    });
+
+    const swept = await call("POST", "/gateway/reconcile?stale_after_ms=60000", { token: OPERATOR_TOKEN });
+    assert.equal(swept.code, 200);
+    assert.equal(swept.body.in_doubt.length, 1, "the sweep reports the stranded execution");
+    assert.equal(swept.body.in_doubt[0].envelope, undefined, "in-doubt responses never carry the stored envelope");
+
+    const inDoubtList = await call("GET", "/gateway/in-doubt", { token: OPERATOR_TOKEN });
+    assert.equal(inDoubtList.body.approvals.length, 1);
+    assert.equal(inDoubtList.body.approvals[0].idempotency_key, "gateway-http-crash");
+
+    // No default resolution: guessing would write a finding no operator made.
+    const guessed = await call("POST", `/gateway/approvals/${crashable.body.approval_id}/resolve`, { body: {}, token: OPERATOR_TOKEN });
+    assert.equal(guessed.code, 400, "a resolve with no finding is refused");
+    const bogus = await call("POST", `/gateway/approvals/${crashable.body.approval_id}/resolve`, { body: { resolution: "maybe" }, token: OPERATOR_TOKEN });
+    assert.equal(bogus.code, 400, "an unrecognised finding is refused");
+
+    const settled = await call("POST", `/gateway/approvals/${crashable.body.approval_id}/resolve`, { body: { resolution: "executed" }, token: OPERATOR_TOKEN });
+    assert.equal(settled.code, 200);
+    assert.equal(settled.body.status, "completed");
+    assert.equal((await call("GET", "/gateway/in-doubt", { token: OPERATOR_TOKEN })).body.approvals.length, 0);
+
+    // Resolving twice is a conflict, not a second resolution.
+    const again = await call("POST", `/gateway/approvals/${crashable.body.approval_id}/resolve`, { body: { resolution: "executed" }, token: OPERATOR_TOKEN });
+    assert.equal(again.code, 409);
+    assert.equal(executions, executionsBefore, "nothing on the reconciliation path executes a protected action");
 
     // An unconfigured deployment refuses operator access instead of opening it.
     const openServer = createAgentTrustGatewayServer(gateway, {});

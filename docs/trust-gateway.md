@@ -114,15 +114,50 @@ from separate gateway processes sharing one SQLite file) execute exactly once.
 Invalid approval IDs, already-decided approvals, and approvals of rejected
 requests are all refused.
 
-That guarantee is about concurrency, not crash recovery. The claim moves the
-approval to `EXECUTING`, the handler runs, and only then is `COMPLETED` written.
-A process that dies between those last two steps leaves the approval in
-`EXECUTING` permanently: no timeout, reconciler, or operator route transitions
-it out, and the record does not say whether the protected action took effect.
-Resolving one is a manual database operation today. Treat "exactly once" as
-scoped to competing approvers against a shared store — end-to-end exactly-once
-against a real external system requires a durable idempotency key or outbox
-agreed with that system, which this MVP does not implement.
+That guarantee is about concurrency. Crash recovery is handled separately and
+more weakly, because it cannot be handled strongly.
+
+The claim writes `EXECUTING` **and** `execution_started_at` in one durable
+transition before the handler is entered, so a record that was begun is
+distinguishable from one that never started. The handler runs, and only then is
+`COMPLETED` written. A process that dies between those last two steps still
+leaves the approval in `EXECUTING` — but that record is now findable.
+
+`reconcile()` moves executions older than a timeout (default 15 minutes) into
+`IN_DOUBT` and audits the transition. `POST /gateway/reconcile` does the same
+over HTTP, `GET /gateway/in-doubt` lists what is waiting, and
+`POST /gateway/approvals/<id>/resolve` with `{"resolution":"executed"}` or
+`{"resolution":"not_executed"}` records what an operator found in the protected
+system. There is no default resolution: the gateway will not write a finding
+nobody made.
+
+Reconciliation is deliberately not a background timer and never retries. A timer
+that retried would be asserting the action did not happen; one that completed
+would be asserting it did. Only someone who has looked at the protected system
+knows which, so the gateway marks, reports, and records the answer against the
+operator who gave it.
+
+Every handler receives an `idempotency_key` — the envelope id, stable across
+attempts — alongside `attempt`, which is above 1 only when a previous attempt
+entered the handler and its outcome was never recorded.
+
+**This is still not end-to-end exactly-once, and cannot be.** After a crash
+mid-call, nothing on this side of the boundary can know whether the protected
+system committed; that is the two-generals problem, not a gap in the
+implementation. What the gateway now guarantees is narrower and true: an
+execution is never silently double-run, an unaccounted-for one becomes explicit
+rather than sitting in a state that reads like progress, and the key needed to
+ask the protected system what happened is recorded and handed out. A protected
+system that stores the `idempotency_key` and refuses a repeat gets effective
+exactly-once with this gateway. One that ignores it does not, and the gateway
+cannot supply that on its behalf.
+
+The direct `ALLOW` path has a different profile and no reconciler. Its replay
+guard consumes the envelope id before execution, so a retry of the same envelope
+is denied and the path fails closed at at-most-once. A crash mid-handler there
+leaves an `authorized` audit event with no terminal event after it, which is the
+signal to look for; there is no approval record to reconcile because none is
+created.
 
 `GET /gateway/approvals` returns summaries only; the stored envelope stays
 server-side. Audit events are append-only and contain no envelope payloads or key
