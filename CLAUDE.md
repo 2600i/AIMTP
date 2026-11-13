@@ -34,7 +34,7 @@ Historic demo keys remain in git history by decision — see
 
 ## Deploying the demo
 
-`bash scripts/deploy.sh` on the Hetzner host deploys **only the Gateway demo**,
+`bash scripts/deploy.sh` on the OVH host deploys **only the Gateway demo**,
 from `docker-compose.demo.yml`. The default `docker-compose.yml` in this repo is
 a local development topology — relay plus redis, no API key, fail-closed — and
 must never be used to deploy.

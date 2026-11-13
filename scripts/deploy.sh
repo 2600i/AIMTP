@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 #
-# Deploy the Agent Trust Gateway demo on the Hetzner host.
+# Deploy the Agent Trust Gateway demo on the OVH host.
 #
-#   ssh hetzner
+#   ssh ovh
 #   cd /opt/2600i-aimtp && bash scripts/deploy.sh
 #
 # This deploys ONLY the gateway demo, from docker-compose.demo.yml. The default
