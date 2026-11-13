@@ -1,11 +1,11 @@
 ---
 name: deploy-demo
-description: Deploy the AIMTP Gateway demo to the Hetzner host with scripts/deploy.sh — topology, health checking, and known host incidents (RAM exhaustion, stale base images).
+description: Deploy the AIMTP Gateway demo to the OVH host with scripts/deploy.sh — topology, health checking, and known host incidents (RAM exhaustion, stale base images).
 ---
 
 # Deploying the demo
 
-`bash scripts/deploy.sh` on the Hetzner host deploys **only the Gateway demo**,
+`bash scripts/deploy.sh` on the OVH host deploys **only the Gateway demo**,
 from `docker-compose.demo.yml`. The default `docker-compose.yml` in this repo is
 a local development topology — relay plus redis, no API key, fail-closed — and
 must never be used to deploy.
