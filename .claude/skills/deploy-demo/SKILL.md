@@ -21,10 +21,9 @@ the recorded run. That is the honest fallback, and it should stay that way.
 
 Two things that have caused real incidents on this host:
 
-- **2GB of RAM, four containers.** A build alongside them has exhausted memory
-  and taken `sshd` down with it; the containers keep serving, so the sites look
-  fine while the box is unreachable. Swap is what makes that survivable, and the
-  script warns when there is none.
+- **Builds can exhaust memory.** On the old 2GB Hetzner box a build took
+  `sshd` down while the containers kept serving. The OVH host has 3.7GB RAM
+  and 2GB swap; the script warns if swap is ever missing.
 - **`docker compose up -d --build` does not refresh the base image.** It reuses
   whatever base layer is on disk, however old. The script passes `--pull` so
   OS-level CVEs in the runtime actually get picked up.
